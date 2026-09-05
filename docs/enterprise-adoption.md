@@ -6,7 +6,7 @@ layer.
 
 ## Repository evidence
 
-- A small `src/` package with no runtime dependencies in v0.
+- A small `src/` package with the official MCP SDK pinned in the runtime lock.
 - Locked development dependencies in `uv.lock`.
 - Ruff lint and format checks over product code and tests.
 - Pytest with a visible coverage floor.
@@ -25,6 +25,8 @@ layer.
 - Writes are transactional, immutable, provenance-bearing, and protected by an
   optimistic parent check.
 - Tenant and capability boundaries are enforced at the service boundary.
+- HTTP MCP calls require bearer authentication; tenant and actor identity come
+  from deployment configuration rather than client-controlled tool arguments.
 
 ## Integration evidence
 

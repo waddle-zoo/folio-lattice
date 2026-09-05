@@ -1,23 +1,39 @@
 import base64
 import json
+import os
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 
+from mcp import Client, StdioServerParameters
+
+
+def free_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
 
 class HttpE2ETests(unittest.TestCase):
-    def test_http_mcp_round_trip(self):
+    def test_authenticated_http_and_black_box_hyperset_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            port = 18765
+            port = free_port()
+            token = "test-token-with-enough-entropy"
+            base_url = f"http://127.0.0.1:{port}"
             environment = {
+                **os.environ,
                 "FOLIO_DB_PATH": str(root / "folio.db"),
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                **__import__("os").environ,
+                "FOLIO_TENANT_ID": "hyperset-test",
+                "FOLIO_ACTOR": "hyperset",
+                "FOLIO_API_TOKEN": token,
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
             }
             process = subprocess.Popen(
@@ -37,56 +53,45 @@ class HttpE2ETests(unittest.TestCase):
                 stderr=subprocess.PIPE,
             )
             try:
-                for _ in range(50):
+                for _ in range(100):
                     try:
-                        urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.2)
-                        break
+                        with urllib.request.urlopen(f"{base_url}/health", timeout=0.2) as response:
+                            health = json.loads(response.read())
+                        if health["ready"]:
+                            break
                     except Exception:
                         time.sleep(0.05)
                 else:
                     self.fail(process.stderr.read().decode())
 
-                def call(request):
-                    payload = json.dumps(request).encode()
-                    request_obj = urllib.request.Request(
-                        f"http://127.0.0.1:{port}/mcp",
-                        data=payload,
-                        headers={"Content-Type": "application/json"},
+                with self.assertRaises(urllib.error.HTTPError) as missing:
+                    urllib.request.urlopen(
+                        urllib.request.Request(f"{base_url}/mcp", method="GET"), timeout=2
                     )
-                    with urllib.request.urlopen(request_obj, timeout=2) as response:
-                        return json.loads(response.read())
+                self.assertEqual(missing.exception.code, 401)
+                with self.assertRaises(urllib.error.HTTPError) as wrong:
+                    urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{base_url}/mcp",
+                            method="GET",
+                            headers={"Authorization": "Bearer wrong-token"},
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(wrong.exception.code, 401)
 
-                created = call(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "artifact_create",
-                            "arguments": {
-                                "tenant_id": "acme",
-                                "name": "e2e.txt",
-                                "media_type": "text/plain",
-                                "content_base64": base64.b64encode(b"e2e graph content").decode(),
-                            },
-                        },
-                    }
+                result = subprocess.run(
+                    [sys.executable, "tests/hyperset_consumer.py"],
+                    cwd=Path(__file__).parents[1],
+                    env={**environment, "FOLIO_BASE_URL": base_url},
+                    text=True,
+                    capture_output=True,
+                    timeout=30,
+                    check=True,
                 )
-                artifact_id = created["result"]["structuredContent"]["artifact"]["id"]
-                searched = call(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "artifact_search",
-                            "arguments": {"tenant_id": "acme", "query": "graph"},
-                        },
-                    }
-                )
-                self.assertEqual(
-                    searched["result"]["structuredContent"][0]["artifact_id"], artifact_id
-                )
+                consumer = json.loads(result.stdout)
+                self.assertEqual(consumer["tenant_id"], "hyperset-test")
+                self.assertEqual(len(consumer["blob_hash"]), 64)
             finally:
                 process.terminate()
                 process.wait(timeout=5)
@@ -95,61 +100,35 @@ class HttpE2ETests(unittest.TestCase):
                 if process.stderr:
                     process.stderr.close()
 
-    def test_stdio_mcp_round_trip(self):
+
+class StdioE2ETests(unittest.IsolatedAsyncioTestCase):
+    async def test_stdio_mcp_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            environment = {
-                "FOLIO_DB_PATH": str(root / "folio.db"),
-                "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                **__import__("os").environ,
-                "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
-            }
-            process = subprocess.Popen(
-                [sys.executable, "-m", "folio_lattice.server", "--transport", "stdio"],
-                env=environment,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+            parameters = StdioServerParameters(
+                command=sys.executable,
+                args=["-m", "folio_lattice.server", "--transport", "stdio"],
+                env={
+                    **os.environ,
+                    "FOLIO_DB_PATH": str(root / "folio.db"),
+                    "FOLIO_BLOB_ROOT": str(root / "blobs"),
+                    "FOLIO_TENANT_ID": "stdio-test",
+                    "FOLIO_ACTOR": "stdio-client",
+                    "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+                },
             )
-            try:
-
-                def call(request):
-                    assert process.stdin and process.stdout
-                    process.stdin.write(json.dumps(request) + "\n")
-                    process.stdin.flush()
-                    return json.loads(process.stdout.readline())
-
-                initialized = call(
-                    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
-                )
-                self.assertEqual(initialized["result"]["serverInfo"]["name"], "folio-lattice")
-                created = call(
+            async with Client(parameters, raise_exceptions=True) as client:
+                created = await client.call_tool(
+                    "artifact_create",
                     {
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "artifact_create",
-                            "arguments": {
-                                "tenant_id": "acme",
-                                "name": "stdio.txt",
-                                "media_type": "text/plain",
-                                "content_base64": base64.b64encode(b"stdio graph content").decode(),
-                            },
-                        },
-                    }
+                        "name": "stdio.txt",
+                        "media_type": "text/plain",
+                        "content_base64": base64.b64encode(b"stdio graph content").decode(),
+                    },
                 )
-                self.assertIn("version", created["result"]["structuredContent"])
-            finally:
-                process.terminate()
-                process.wait(timeout=5)
-                if process.stdin:
-                    process.stdin.close()
-                if process.stdout:
-                    process.stdout.close()
-                if process.stderr:
-                    process.stderr.close()
+                self.assertFalse(created.is_error)
+                assert created.structured_content is not None
+                self.assertEqual(created.structured_content["artifact"]["tenant_id"], "stdio-test")
 
 
 if __name__ == "__main__":

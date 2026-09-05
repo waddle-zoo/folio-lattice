@@ -5,7 +5,6 @@ import hashlib
 import json
 import mimetypes
 import os
-import re
 import sqlite3
 import uuid
 from collections import deque
@@ -28,6 +27,14 @@ TEXT_MEDIA_TYPES = {
     "text/xml",
 }
 
+DEFAULT_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+MAX_NAME_LENGTH = 255
+MAX_MEDIA_TYPE_LENGTH = 255
+MAX_REASON_LENGTH = 2_000
+MAX_CONTEXT_BYTES = 32 * 1024
+MAX_QUERY_LENGTH = 500
+MAX_EDGE_TYPE_LENGTH = 100
+
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
@@ -44,9 +51,18 @@ class FolioError(Exception):
 class FolioLattice:
     """Small transactional artifact and graph service for v0."""
 
-    def __init__(self, db_path: str | Path, blob_root: str | Path):
+    def __init__(
+        self,
+        db_path: str | Path,
+        blob_root: str | Path,
+        *,
+        max_artifact_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
+    ):
         self.db_path = Path(db_path)
         self.blob_root = Path(blob_root)
+        if max_artifact_bytes < 1:
+            raise ValueError("max_artifact_bytes must be positive")
+        self.max_artifact_bytes = max_artifact_bytes
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.blob_root.mkdir(parents=True, exist_ok=True)
         self.initialize()
@@ -71,6 +87,7 @@ class FolioLattice:
                     tenant_id TEXT NOT NULL REFERENCES tenants(id),
                     name TEXT NOT NULL,
                     media_type TEXT NOT NULL,
+                    current_version_id TEXT REFERENCES versions(id),
                     created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS versions (
@@ -123,8 +140,26 @@ class FolioLattice:
                     ON edges(tenant_id, target_artifact_id, edge_type);
                 """
             )
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(artifacts)")}
+            if "current_version_id" not in columns:
+                db.execute(
+                    "ALTER TABLE artifacts ADD COLUMN current_version_id TEXT REFERENCES versions(id)"
+                )
+                db.execute(
+                    """
+                    UPDATE artifacts
+                    SET current_version_id = (
+                        SELECT id FROM versions
+                        WHERE versions.artifact_id = artifacts.id
+                          AND versions.tenant_id = artifacts.tenant_id
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                    )
+                    """
+                )
 
     def _ensure_tenant(self, db: sqlite3.Connection, tenant_id: str) -> None:
+        self._validate_text("tenant_id", tenant_id, MAX_NAME_LENGTH)
         db.execute(
             "INSERT OR IGNORE INTO tenants(id, created_at) VALUES (?, ?)",
             (tenant_id, utc_now()),
@@ -142,6 +177,40 @@ class FolioLattice:
             temporary.write_bytes(data)
             os.replace(temporary, destination)
         return blob_hash
+
+    @staticmethod
+    def _validate_text(field: str, value: str, maximum: int) -> str:
+        if not value or not value.strip():
+            raise FolioError(f"{field} must not be empty")
+        if len(value) > maximum:
+            raise FolioError(f"{field} exceeds {maximum} characters")
+        return value
+
+    @staticmethod
+    def _json(value: dict[str, Any], field: str) -> str:
+        try:
+            encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise FolioError(f"{field} must be JSON serializable") from exc
+        if len(encoded.encode("utf-8")) > MAX_CONTEXT_BYTES:
+            raise FolioError(f"{field} exceeds {MAX_CONTEXT_BYTES} bytes")
+        return encoded
+
+    def _validate_version_input(
+        self,
+        *,
+        data: bytes,
+        media_type: str,
+        actor: str,
+        reason: str,
+        source_context: dict[str, Any],
+    ) -> str:
+        if len(data) > self.max_artifact_bytes:
+            raise FolioError(f"artifact exceeds {self.max_artifact_bytes} bytes")
+        self._validate_text("media_type", media_type, MAX_MEDIA_TYPE_LENGTH)
+        self._validate_text("actor", actor, MAX_NAME_LENGTH)
+        self._validate_text("reason", reason, MAX_REASON_LENGTH)
+        return self._json(source_context, "source_context")
 
     @staticmethod
     def _text_for(data: bytes, media_type: str) -> str | None:
@@ -169,47 +238,47 @@ class FolioLattice:
         source_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         artifact_id = new_id("art")
+        self._validate_text("name", name, MAX_NAME_LENGTH)
         resolved_type = media_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
+        source_context_json = self._validate_version_input(
+            data=data,
+            media_type=resolved_type,
+            actor=actor,
+            reason=reason,
+            source_context=source_context or {},
+        )
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             self._ensure_tenant(db, tenant_id)
             db.execute(
                 "INSERT INTO artifacts(id, tenant_id, name, media_type, created_at) VALUES (?, ?, ?, ?, ?)",
                 (artifact_id, tenant_id, name, resolved_type, utc_now()),
             )
-        try:
-            version = self.write_version(
+            version_id = self._insert_version(
+                db,
                 tenant_id=tenant_id,
                 artifact_id=artifact_id,
                 data=data,
                 media_type=resolved_type,
                 actor=actor,
                 reason=reason,
-                source_context=source_context or {},
+                source_context_json=source_context_json,
                 parent_version_id=None,
             )
-        except Exception:
-            with self.connect() as db:
-                db.execute(
-                    "DELETE FROM artifacts WHERE id = ? AND tenant_id = ?", (artifact_id, tenant_id)
-                )
-            raise
-        return {"artifact": self.get_artifact(tenant_id, artifact_id), "version": version}
+        return {
+            "artifact": self.get_artifact(tenant_id, artifact_id),
+            "version": self.version_metadata(tenant_id, version_id),
+        }
 
     def get_artifact(self, tenant_id: str, artifact_id: str) -> dict[str, Any]:
         with self.connect() as db:
             artifact = db.execute(
-                "SELECT id, tenant_id, name, media_type, created_at FROM artifacts WHERE id = ? AND tenant_id = ?",
+                "SELECT id, tenant_id, name, media_type, current_version_id, created_at FROM artifacts WHERE id = ? AND tenant_id = ?",
                 (artifact_id, tenant_id),
             ).fetchone()
             if artifact is None:
                 raise FolioError("artifact not found")
-            latest = db.execute(
-                "SELECT id, created_at FROM versions WHERE artifact_id = ? AND tenant_id = ? ORDER BY created_at DESC LIMIT 1",
-                (artifact_id, tenant_id),
-            ).fetchone()
-        result = dict(artifact)
-        result["current_version_id"] = latest["id"] if latest else None
-        return result
+        return dict(artifact)
 
     def write_version(
         self,
@@ -223,71 +292,109 @@ class FolioLattice:
         source_context: dict[str, Any],
         parent_version_id: str | None,
     ) -> dict[str, Any]:
+        source_context_json = self._validate_version_input(
+            data=data,
+            media_type=media_type,
+            actor=actor,
+            reason=reason,
+            source_context=source_context,
+        )
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            version_id = self._insert_version(
+                db,
+                tenant_id=tenant_id,
+                artifact_id=artifact_id,
+                data=data,
+                media_type=media_type,
+                actor=actor,
+                reason=reason,
+                source_context_json=source_context_json,
+                parent_version_id=parent_version_id,
+            )
+        return self.version_metadata(tenant_id, version_id)
+
+    def _insert_version(
+        self,
+        db: sqlite3.Connection,
+        *,
+        tenant_id: str,
+        artifact_id: str,
+        data: bytes,
+        media_type: str,
+        actor: str,
+        reason: str,
+        source_context_json: str,
+        parent_version_id: str | None,
+    ) -> str:
         blob_hash = hashlib.sha256(data).hexdigest()
         version_id = new_id("ver")
         created_at = utc_now()
         text = self._text_for(data, media_type)
-        with self.connect() as db:
-            artifact = db.execute(
-                "SELECT id FROM artifacts WHERE id = ? AND tenant_id = ?", (artifact_id, tenant_id)
-            ).fetchone()
-            if artifact is None:
-                raise FolioError("artifact not found")
-            current = db.execute(
-                "SELECT id FROM versions WHERE artifact_id = ? AND tenant_id = ? ORDER BY created_at DESC LIMIT 1",
-                (artifact_id, tenant_id),
-            ).fetchone()
-            expected_parent = current["id"] if current else None
-            if parent_version_id != expected_parent:
-                raise FolioError(f"parent version mismatch; expected {expected_parent}")
-            self._store_blob(data, blob_hash)
-            db.execute(
-                """
-                INSERT INTO versions(
-                    id, tenant_id, artifact_id, parent_version_id, blob_hash,
-                    media_type, byte_size, actor, reason, source_context, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    version_id,
-                    tenant_id,
-                    artifact_id,
-                    parent_version_id,
-                    blob_hash,
-                    media_type,
-                    len(data),
-                    actor,
-                    reason,
-                    json.dumps(source_context, sort_keys=True),
-                    created_at,
-                ),
-            )
-            if text is not None:
-                for ordinal, start, end, content in self._chunks(text):
-                    chunk_id = new_id("chk")
-                    db.execute(
-                        """
-                        INSERT INTO chunks(
-                            id, tenant_id, artifact_id, version_id, ordinal,
-                            start_offset, end_offset, content
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            chunk_id,
-                            tenant_id,
-                            artifact_id,
-                            version_id,
-                            ordinal,
-                            start,
-                            end,
-                            content,
-                        ),
-                    )
-                    db.execute(
-                        "INSERT INTO chunk_fts(chunk_id, tenant_id, artifact_id, version_id, content) VALUES (?, ?, ?, ?, ?)",
-                        (chunk_id, tenant_id, artifact_id, version_id, content),
-                    )
-        return self.version_metadata(tenant_id, version_id)
+        artifact = db.execute(
+            "SELECT current_version_id FROM artifacts WHERE id = ? AND tenant_id = ?",
+            (artifact_id, tenant_id),
+        ).fetchone()
+        if artifact is None:
+            raise FolioError("artifact not found")
+        expected_parent = artifact["current_version_id"]
+        if parent_version_id != expected_parent:
+            raise FolioError(f"parent version mismatch; expected {expected_parent}")
+        self._store_blob(data, blob_hash)
+        db.execute(
+            """
+            INSERT INTO versions(
+                id, tenant_id, artifact_id, parent_version_id, blob_hash,
+                media_type, byte_size, actor, reason, source_context, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                version_id,
+                tenant_id,
+                artifact_id,
+                parent_version_id,
+                blob_hash,
+                media_type,
+                len(data),
+                actor,
+                reason,
+                source_context_json,
+                created_at,
+            ),
+        )
+        if text is not None:
+            for ordinal, start, end, content in self._chunks(text):
+                chunk_id = new_id("chk")
+                db.execute(
+                    """
+                    INSERT INTO chunks(
+                        id, tenant_id, artifact_id, version_id, ordinal,
+                        start_offset, end_offset, content
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        chunk_id,
+                        tenant_id,
+                        artifact_id,
+                        version_id,
+                        ordinal,
+                        start,
+                        end,
+                        content,
+                    ),
+                )
+                db.execute(
+                    "INSERT INTO chunk_fts(chunk_id, tenant_id, artifact_id, version_id, content) VALUES (?, ?, ?, ?, ?)",
+                    (chunk_id, tenant_id, artifact_id, version_id, content),
+                )
+        db.execute(
+            """
+            UPDATE artifacts SET current_version_id = ?, media_type = ?
+            WHERE id = ? AND tenant_id = ?
+            """,
+            (version_id, media_type, artifact_id, tenant_id),
+        )
+        return version_id
 
     def version_metadata(self, tenant_id: str, version_id: str) -> dict[str, Any]:
         with self.connect() as db:
@@ -338,30 +445,37 @@ class FolioLattice:
             ).fetchone()
         if row is None:
             raise FolioError("chunk not found")
-        return dict(row)
+        result = dict(row)
+        result["offset_unit"] = "unicode_code_points"
+        return result
 
     def search(self, tenant_id: str, query: str, limit: int = 20) -> list[dict[str, Any]]:
         if not query.strip():
             return []
-        with self.connect() as db:
-            rows = db.execute(
-                """
-                SELECT chunk_id, artifact_id, version_id, snippet(chunk_fts, 4, '[', ']', '…', 18) AS snippet,
-                       bm25(chunk_fts) AS score
-                FROM chunk_fts
-                WHERE tenant_id = ? AND chunk_fts MATCH ?
-                ORDER BY score
-                LIMIT ?
-                """,
-                (tenant_id, query, max(1, min(limit, 100))),
-            ).fetchall()
+        if len(query) > MAX_QUERY_LENGTH:
+            raise FolioError(f"query exceeds {MAX_QUERY_LENGTH} characters")
+        try:
+            with self.connect() as db:
+                rows = db.execute(
+                    """
+                    SELECT chunk_id, artifact_id, version_id, snippet(chunk_fts, 4, '[', ']', '…', 18) AS snippet,
+                           bm25(chunk_fts) AS score
+                    FROM chunk_fts
+                    WHERE tenant_id = ? AND chunk_fts MATCH ?
+                    ORDER BY score
+                    LIMIT ?
+                    """,
+                    (tenant_id, query, max(1, min(limit, 100))),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            raise FolioError("invalid search query") from exc
         return [dict(row) for row in rows]
 
     def grep(self, tenant_id: str, pattern: str, limit: int = 100) -> list[dict[str, Any]]:
-        try:
-            matcher = re.compile(pattern)
-        except re.error as exc:
-            raise FolioError(f"invalid grep pattern: {exc}") from exc
+        if not pattern:
+            return []
+        if len(pattern) > MAX_QUERY_LENGTH:
+            raise FolioError(f"pattern exceeds {MAX_QUERY_LENGTH} characters")
         with self.connect() as db:
             rows = db.execute(
                 "SELECT id, artifact_id, version_id, ordinal, start_offset, end_offset, content FROM chunks WHERE tenant_id = ? ORDER BY artifact_id, version_id, ordinal",
@@ -369,10 +483,12 @@ class FolioLattice:
             ).fetchall()
         matches: list[dict[str, Any]] = []
         for row in rows:
-            found = matcher.search(row["content"])
-            if found:
+            offset = row["content"].find(pattern)
+            if offset >= 0:
                 item = dict(row)
-                item["match"] = found.group(0)
+                item["match"] = pattern
+                item["match_offset"] = offset
+                item["offset_unit"] = "unicode_code_points"
                 matches.append(item)
                 if len(matches) >= max(1, min(limit, 500)):
                     break
@@ -388,7 +504,10 @@ class FolioLattice:
     ) -> dict[str, Any]:
         if source_artifact_id == target_artifact_id:
             raise FolioError("self-links are not allowed")
+        self._validate_text("edge_type", edge_type, MAX_EDGE_TYPE_LENGTH)
+        metadata_json = self._json(metadata or {}, "metadata")
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             for artifact_id in (source_artifact_id, target_artifact_id):
                 if (
                     db.execute(
@@ -398,30 +517,48 @@ class FolioLattice:
                     is None
                 ):
                     raise FolioError("artifact not found")
-            edge_id = new_id("edg")
-            db.execute(
+            existing = db.execute(
                 """
-                INSERT INTO edges(id, tenant_id, source_artifact_id, target_artifact_id, edge_type, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(tenant_id, source_artifact_id, target_artifact_id, edge_type) DO UPDATE SET metadata_json = excluded.metadata_json
-                """,
-                (
-                    edge_id,
-                    tenant_id,
-                    source_artifact_id,
-                    target_artifact_id,
-                    edge_type,
-                    json.dumps(metadata or {}, sort_keys=True),
-                    utc_now(),
-                ),
-            )
-            row = db.execute(
-                """
-                SELECT id, source_artifact_id, target_artifact_id, edge_type, metadata_json, created_at
-                FROM edges WHERE tenant_id = ? AND source_artifact_id = ? AND target_artifact_id = ? AND edge_type = ?
+                SELECT id, source_artifact_id, target_artifact_id, edge_type,
+                       metadata_json, created_at
+                FROM edges
+                WHERE tenant_id = ? AND source_artifact_id = ?
+                  AND target_artifact_id = ? AND edge_type = ?
                 """,
                 (tenant_id, source_artifact_id, target_artifact_id, edge_type),
             ).fetchone()
+            if existing is not None:
+                if existing["metadata_json"] != metadata_json:
+                    raise FolioError("edge already exists with different immutable metadata")
+                row = existing
+            else:
+                edge_id = new_id("edg")
+                db.execute(
+                    """
+                    INSERT INTO edges(
+                        id, tenant_id, source_artifact_id, target_artifact_id,
+                        edge_type, metadata_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        edge_id,
+                        tenant_id,
+                        source_artifact_id,
+                        target_artifact_id,
+                        edge_type,
+                        metadata_json,
+                        utc_now(),
+                    ),
+                )
+                row = db.execute(
+                    """
+                    SELECT id, source_artifact_id, target_artifact_id, edge_type,
+                           metadata_json, created_at
+                    FROM edges WHERE id = ? AND tenant_id = ?
+                    """,
+                    (edge_id, tenant_id),
+                ).fetchone()
+        assert row is not None
         result = dict(row)
         result["metadata"] = json.loads(result.pop("metadata_json"))
         return result
@@ -475,3 +612,13 @@ class FolioLattice:
             item["source_context"] = json.loads(item["source_context"])
             result.append(item)
         return result
+
+    def health(self) -> dict[str, Any]:
+        """Check persistent state without exposing tenant data."""
+        try:
+            with self.connect() as db:
+                db.execute("SELECT 1").fetchone()
+            ready = os.access(self.blob_root, os.W_OK)
+        except sqlite3.Error:
+            ready = False
+        return {"status": "ok" if ready else "not_ready", "ready": ready}

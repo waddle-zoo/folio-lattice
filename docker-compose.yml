@@ -6,13 +6,25 @@ services:
     environment:
       FOLIO_DB_PATH: /data/folio.db
       FOLIO_BLOB_ROOT: /data/blobs
+      FOLIO_TENANT_ID: ${FOLIO_TENANT_ID:-hyperset-v0}
+      FOLIO_ACTOR: ${FOLIO_ACTOR:-hyperset}
+      FOLIO_API_TOKEN: ${FOLIO_API_TOKEN:-folio-local-development-token}
     volumes:
       - folio_data:/data
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 2s
       timeout: 2s
       retries: 15
+      start_period: 3s
 
 volumes:
   folio_data:

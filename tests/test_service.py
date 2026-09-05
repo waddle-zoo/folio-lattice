@@ -2,6 +2,7 @@ import base64
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from folio_lattice.service import FolioError, FolioLattice
 
@@ -51,7 +52,7 @@ class ServiceTests(unittest.TestCase):
             self.service.read_artifact("acme", artifact_id)["text"], "alpha graph target revised"
         )
         self.assertTrue(self.service.search("acme", "revised"))
-        self.assertTrue(self.service.grep("acme", r"graph\s+target"))
+        self.assertTrue(self.service.grep("acme", "graph target"))
         self.service.link("acme", artifact_id, second["artifact"]["id"], "references")
         traversal = self.service.traverse("acme", artifact_id, max_depth=1)
         self.assertEqual(traversal[0]["target_artifact_id"], second["artifact"]["id"])
@@ -73,6 +74,33 @@ class ServiceTests(unittest.TestCase):
             )
         self.assertEqual(len(self.service.versions("acme", first["artifact"]["id"])), 1)
 
+    def test_create_is_atomic_and_inputs_are_bounded(self):
+        with patch.object(self.service, "_insert_version", side_effect=FolioError("failed")):
+            with self.assertRaisesRegex(FolioError, "failed"):
+                self.service.create_artifact(tenant_id="acme", name="partial.txt", data=b"partial")
+        with self.service.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0], 0)
+
+        root = Path(self.temp.name)
+        bounded = FolioLattice(root / "bounded.db", root / "bounded-blobs", max_artifact_bytes=2)
+        with self.assertRaisesRegex(FolioError, "artifact exceeds"):
+            bounded.create_artifact(tenant_id="acme", name="large.txt", data=b"123")
+
+    def test_edges_are_idempotent_and_immutable(self):
+        source = self.service.create_artifact(tenant_id="acme", name="a", data=b"a")
+        target = self.service.create_artifact(tenant_id="acme", name="b", data=b"b")
+        arguments = (
+            "acme",
+            source["artifact"]["id"],
+            target["artifact"]["id"],
+            "supports",
+        )
+        first = self.service.link(*arguments, {"claim": "one"})
+        duplicate = self.service.link(*arguments, {"claim": "one"})
+        self.assertEqual(first["id"], duplicate["id"])
+        with self.assertRaisesRegex(FolioError, "immutable metadata"):
+            self.service.link(*arguments, {"claim": "two"})
+
     def test_binary_artifact_round_trips(self):
         data = b"\x00\x01\xff"
         created = self.service.create_artifact(
@@ -93,8 +121,7 @@ class ServiceTests(unittest.TestCase):
             self.service.version_metadata("acme", "ver_missing")
         with self.assertRaisesRegex(FolioError, "chunk not found"):
             self.service.read_chunk("acme", "chk_missing")
-        with self.assertRaisesRegex(FolioError, "invalid grep pattern"):
-            self.service.grep("acme", "[")
+        self.assertEqual(self.service.grep("acme", "["), [])
         with self.assertRaisesRegex(FolioError, "self-links"):
             self.service.link("acme", artifact_id, artifact_id, "related")
         with self.assertRaisesRegex(FolioError, "max_depth"):

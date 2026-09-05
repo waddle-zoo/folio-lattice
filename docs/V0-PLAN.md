@@ -1,6 +1,7 @@
 # Folio Lattice v0 implementation plan
 
-Status: implementation in progress; full end-to-end ship gate is still open
+Status: Phase 6 complete; full end-to-end ship gate remains open on the
+dedicated renderer and browser-adversarial work in Phase 4
 
 The v0 target is a small, testable vertical slice. It proves the durable graph
 and artifact lifecycle before adding a polished UI, public sharing, semantic
@@ -110,6 +111,18 @@ Phase acceptance:
 Phase 6 does not close the full milestone sandbox gate. The existing CSP and
 capability code remains policy scaffolding until the dedicated-origin renderer
 and real-browser hostile suite in Phase 4 are implemented.
+
+Implementation evidence, 2026-09-05:
+
+- `make check`: 13 tests passed with 88.55% branch-aware coverage;
+- `make docker-build`: official-SDK image built successfully;
+- Docker MCP smoke: the public Hyperset fixture completed every contract
+  operation, Compose restarted the service, and the same version identifier,
+  SHA-256, and bytes were retrieved afterward;
+- the image ran as UID `folio`, with a read-only root filesystem, all Linux
+  capabilities dropped, and a healthy writable data volume; and
+- a compatibility probe using Hyperset's pinned `mcp==1.28.1` client negotiated
+  with the SDK 2.1.1 server, listed tools, and created an artifact.
 
 ## Ship gate
 

@@ -1,133 +1,57 @@
-"""Exercise the public MCP contract against an already-running Docker service."""
+"""Exercise the public MCP contract and persistence against Docker Compose."""
 
 from __future__ import annotations
 
-import base64
+import asyncio
 import json
 import os
-from urllib.request import Request, urlopen
+import subprocess
+import time
+from typing import Any
+from urllib.request import urlopen
+
+import httpx2
+from hyperset_consumer import exercise
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 
 
-def call(base_url: str, request_id: int, method: str, params: dict) -> dict:
-    payload = json.dumps(
-        {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
-    ).encode("utf-8")
-    request = Request(
-        f"{base_url}/mcp",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urlopen(request, timeout=5) as response:
-        return json.loads(response.read())
+async def read_artifact(base_url: str, token: str, artifact_id: str) -> dict[str, Any]:
+    async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}) as http:
+        transport = streamable_http_client(f"{base_url}/mcp", http_client=http)
+        async with Client(transport, raise_exceptions=True) as client:
+            response = await client.call_tool("artifact_read", {"artifact_id": artifact_id})
+            assert not response.is_error, response
+            assert response.structured_content is not None
+            return response.structured_content
 
 
-def tool(base_url: str, request_id: int, name: str, arguments: dict) -> dict:
-    response = call(
-        base_url,
-        request_id,
-        "tools/call",
-        {"name": name, "arguments": arguments},
-    )
-    assert "error" not in response, response
-    return response["result"]["structuredContent"]
+def wait_ready(base_url: str) -> None:
+    for _ in range(60):
+        try:
+            with urlopen(f"{base_url}/health", timeout=1) as response:
+                if json.loads(response.read())["ready"]:
+                    return
+        except Exception:
+            pass
+        time.sleep(0.25)
+    raise RuntimeError("Folio Docker service did not become ready")
 
 
 def main() -> None:
     base_url = os.environ.get("FOLIO_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-    with urlopen(f"{base_url}/health", timeout=5) as response:
-        assert json.loads(response.read()) == {"status": "ok"}
+    token = os.environ.get("FOLIO_API_TOKEN", "folio-local-development-token")
+    wait_ready(base_url)
+    created = asyncio.run(exercise(base_url, token))
 
-    initialized = call(base_url, 1, "initialize", {"capabilities": {}})
-    assert initialized["result"]["serverInfo"]["name"] == "folio-lattice"
+    subprocess.run(["docker", "compose", "restart", "folio"], check=True, timeout=30)
+    wait_ready(base_url)
 
-    source = tool(
-        base_url,
-        2,
-        "artifact_create",
-        {
-            "tenant_id": "docker-smoke",
-            "name": "source.md",
-            "media_type": "text/markdown",
-            "content_base64": base64.b64encode(b"source graph content").decode("ascii"),
-            "actor": "ci",
-            "reason": "docker smoke test",
-        },
-    )
-    target = tool(
-        base_url,
-        3,
-        "artifact_create",
-        {
-            "tenant_id": "docker-smoke",
-            "name": "target.md",
-            "media_type": "text/markdown",
-            "content_base64": base64.b64encode(b"target knowledge").decode("ascii"),
-            "actor": "ci",
-            "reason": "docker smoke test",
-        },
-    )
-    source_id = source["artifact"]["id"]
-    target_id = target["artifact"]["id"]
-    first_version_id = source["version"]["id"]
-
-    updated = tool(
-        base_url,
-        4,
-        "artifact_write",
-        {
-            "tenant_id": "docker-smoke",
-            "artifact_id": source_id,
-            "parent_version_id": first_version_id,
-            "content_base64": base64.b64encode(b"updated graph content").decode("ascii"),
-            "actor": "ci",
-            "reason": "docker smoke update",
-        },
-    )
-    assert updated["parent_version_id"] == first_version_id
-    assert (
-        tool(
-            base_url,
-            5,
-            "artifact_read",
-            {"tenant_id": "docker-smoke", "artifact_id": source_id},
-        )["text"]
-        == "updated graph content"
-    )
-    assert tool(
-        base_url,
-        6,
-        "artifact_search",
-        {"tenant_id": "docker-smoke", "query": "updated"},
-    )
-    tool(
-        base_url,
-        7,
-        "graph_link",
-        {
-            "tenant_id": "docker-smoke",
-            "source_artifact_id": source_id,
-            "target_artifact_id": target_id,
-            "edge_type": "references",
-        },
-    )
-    traversal = tool(
-        base_url,
-        8,
-        "graph_traverse",
-        {"tenant_id": "docker-smoke", "start_artifact_id": source_id},
-    )
-    assert traversal[0]["target_artifact_id"] == target_id
-    assert (
-        len(
-            tool(
-                base_url,
-                9,
-                "artifact_versions",
-                {"tenant_id": "docker-smoke", "artifact_id": source_id},
-            )
-        )
-        == 2
-    )
+    persisted = asyncio.run(read_artifact(base_url, token, created["artifact_id"]))
+    assert persisted["version"]["id"] == created["version_id"]
+    assert persisted["version"]["blob_hash"] == created["blob_hash"]
+    assert persisted["text"] == "Hyperset revised evidence source graph"
+    print(json.dumps({"status": "ok", "persistence": "verified"}, sort_keys=True))
 
 
 if __name__ == "__main__":

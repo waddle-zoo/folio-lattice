@@ -2,146 +2,123 @@ import base64
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
-from folio_lattice.mcp_protocol import McpProtocol
+from mcp import Client
+
+from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.service import FolioLattice
 
 
-class McpTests(unittest.TestCase):
-    def setUp(self):
+class McpTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
-        self.protocol = McpProtocol(FolioLattice(root / "folio.db", root / "blobs"))
+        self.service = FolioLattice(root / "folio.db", root / "blobs")
+        self.server = build_mcp_server(self.service, tenant_id="acme", actor="hyperset")
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def call(self, name, arguments, request_id=1):
-        response = self.protocol.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": "tools/call",
-                "params": {"name": name, "arguments": arguments},
-            }
-        )
-        self.assertNotIn("error", response)
-        return response["result"]["structuredContent"]
+    async def call(self, client: Client, name: str, arguments: dict[str, Any]) -> Any:
+        response = await client.call_tool(name, arguments)
+        self.assertFalse(response.is_error, response)
+        structured = response.structured_content
+        assert structured is not None
+        return structured.get("result", structured)
 
-    def test_initialize_list_and_provider_neutral_tool_flow(self):
-        initialized = self.protocol.handle(
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
-        )
-        self.assertEqual(initialized["result"]["serverInfo"]["name"], "folio-lattice")
-        tools = self.protocol.handle(
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
-        )
-        self.assertIn("artifact_search", {tool["name"] for tool in tools["result"]["tools"]})
-        created = self.call(
-            "artifact_create",
-            {
-                "tenant_id": "acme",
-                "name": "note.md",
-                "media_type": "text/markdown",
-                "content_base64": base64.b64encode(b"hello graph").decode(),
-                "actor": "client",
-                "reason": "test",
-            },
-        )
-        self.assertIn("version", created)
-        read = self.call(
-            "artifact_read", {"tenant_id": "acme", "artifact_id": created["artifact"]["id"]}
-        )
-        self.assertEqual(read["text"], "hello graph")
+    async def test_official_protocol_schema_and_provider_neutral_flow(self) -> None:
+        async with Client(self.server, raise_exceptions=True) as client:
+            listed = await client.list_tools()
+            names = {tool.name for tool in listed.tools}
+            self.assertIn("artifact_search", names)
+            for tool in listed.tools:
+                properties = tool.input_schema.get("properties", {})
+                self.assertNotIn("tenant_id", properties)
+                self.assertNotIn("actor", properties)
 
-    def test_transport_notifications_resources_and_errors(self):
-        self.assertIsNone(
-            self.protocol.handle(
-                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+            created = await self.call(
+                client,
+                "artifact_create",
+                {
+                    "name": "note.md",
+                    "media_type": "text/markdown",
+                    "content_base64": base64.b64encode(b"hello graph").decode(),
+                    "reason": "test",
+                },
             )
-        )
-        resources = self.protocol.handle(
-            {"jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}}
-        )
-        self.assertEqual(resources["result"]["resources"], [])
-
-        unknown_method = self.protocol.handle(
-            {"jsonrpc": "2.0", "id": 4, "method": "not-a-method", "params": {}}
-        )
-        self.assertEqual(unknown_method["error"]["code"], -32601)
-
-        unknown_tool = self.protocol.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 5,
-                "method": "tools/call",
-                "params": {"name": "not-a-tool", "arguments": {}},
-            }
-        )
-        self.assertEqual(unknown_tool["error"]["code"], -32602)
-
-        malformed = self.protocol.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 6,
-                "method": "tools/call",
-                "params": {"name": "artifact_create", "arguments": {}},
-            }
-        )
-        self.assertEqual(malformed["error"]["code"], -32602)
-
-    def test_provider_neutral_write_search_graph_and_versions(self):
-        first = self.call(
-            "artifact_create",
-            {
-                "tenant_id": "acme",
-                "name": "source.md",
-                "content_base64": base64.b64encode(b"source graph").decode(),
-            },
-        )
-        second = self.call(
-            "artifact_create",
-            {
-                "tenant_id": "acme",
-                "name": "target.md",
-                "content_base64": base64.b64encode(b"target node").decode(),
-            },
-        )
-        artifact_id = first["artifact"]["id"]
-        target_id = second["artifact"]["id"]
-        version_id = first["version"]["id"]
-        updated = self.call(
-            "artifact_write",
-            {
-                "tenant_id": "acme",
-                "artifact_id": artifact_id,
-                "parent_version_id": version_id,
-                "content_base64": base64.b64encode(b"updated graph").decode(),
-            },
-        )
-        self.assertEqual(updated["parent_version_id"], version_id)
-        self.assertTrue(self.call("artifact_search", {"tenant_id": "acme", "query": "updated"}))
-        self.assertTrue(self.call("artifact_grep", {"tenant_id": "acme", "pattern": r"updated"}))
-        edge = self.call(
-            "graph_link",
-            {
-                "tenant_id": "acme",
-                "source_artifact_id": artifact_id,
-                "target_artifact_id": target_id,
-                "edge_type": "references",
-            },
-        )
-        self.assertEqual(edge["target_artifact_id"], target_id)
-        self.assertTrue(
-            self.call(
-                "graph_traverse",
-                {"tenant_id": "acme", "start_artifact_id": artifact_id},
+            self.assertEqual(created["artifact"]["tenant_id"], "acme")
+            self.assertEqual(created["version"]["actor"], "hyperset")
+            read = await self.call(
+                client, "artifact_read", {"artifact_id": created["artifact"]["id"]}
             )
-        )
-        self.assertEqual(
-            len(self.call("artifact_versions", {"tenant_id": "acme", "artifact_id": artifact_id})),
-            2,
-        )
+            self.assertEqual(read["text"], "hello graph")
+
+    async def test_write_search_graph_versions_and_fail_closed_tenant(self) -> None:
+        async with Client(self.server, raise_exceptions=True) as client:
+            first = await self.call(
+                client,
+                "artifact_create",
+                {
+                    "name": "source.md",
+                    "content_base64": base64.b64encode(b"source graph").decode(),
+                },
+            )
+            second = await self.call(
+                client,
+                "artifact_create",
+                {
+                    "name": "target.md",
+                    "content_base64": base64.b64encode(b"target node").decode(),
+                },
+            )
+            artifact_id = first["artifact"]["id"]
+            target_id = second["artifact"]["id"]
+            updated = await self.call(
+                client,
+                "artifact_write",
+                {
+                    "artifact_id": artifact_id,
+                    "parent_version_id": first["version"]["id"],
+                    "content_base64": base64.b64encode(b"updated graph").decode(),
+                },
+            )
+            self.assertEqual(updated["parent_version_id"], first["version"]["id"])
+            self.assertTrue(await self.call(client, "artifact_search", {"query": "updated"}))
+            self.assertTrue(await self.call(client, "artifact_grep", {"pattern": "updated"}))
+            edge = await self.call(
+                client,
+                "graph_link",
+                {
+                    "source_artifact_id": artifact_id,
+                    "target_artifact_id": target_id,
+                    "edge_type": "references",
+                },
+            )
+            self.assertEqual(edge["target_artifact_id"], target_id)
+            self.assertTrue(
+                await self.call(client, "graph_traverse", {"start_artifact_id": artifact_id})
+            )
+            self.assertEqual(
+                len(await self.call(client, "artifact_versions", {"artifact_id": artifact_id})),
+                2,
+            )
+
+        other_server = build_mcp_server(self.service, tenant_id="other", actor="other-client")
+        async with Client(other_server) as other_client:
+            response = await other_client.call_tool("artifact_read", {"artifact_id": artifact_id})
+            self.assertTrue(response.is_error)
+            self.assertIn("artifact not found", response.content[0].text)
+
+    async def test_invalid_base64_and_schema_fail_cleanly(self) -> None:
+        async with Client(self.server) as client:
+            invalid = await client.call_tool(
+                "artifact_create", {"name": "bad.txt", "content_base64": "%%%"}
+            )
+            self.assertTrue(invalid.is_error)
+            self.assertIn("valid base64", invalid.content[0].text)
+            missing = await client.call_tool("artifact_create", {})
+            self.assertTrue(missing.is_error)
 
 
 if __name__ == "__main__":

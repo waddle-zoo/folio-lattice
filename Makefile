@@ -31,7 +31,7 @@ docker-up:
 	docker compose up -d
 
 docker-test:
-	python tests/test_docker_e2e.py
+	uv run python tests/test_docker_e2e.py
 
 docker-down:
 	docker compose down

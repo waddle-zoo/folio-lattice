@@ -15,17 +15,22 @@ The current research checkpoint and implementation sequence are in
 
 ## Enterprise adoption posture
 
-Folio Lattice keeps the runtime dependency-free and the development toolchain
-reproducible. The repository uses a `src/` package layout, a locked `uv`
-development environment, Ruff linting and formatting, pytest with coverage,
-pre-commit hooks, GitHub Actions, Dependabot, and a Docker smoke test. Start
-with:
+Folio Lattice uses the official, version-pinned MCP Python SDK and keeps the
+development toolchain reproducible. The repository uses a `src/` package
+layout, a locked `uv` environment, Ruff linting and formatting, pytest with
+coverage, pre-commit hooks, GitHub Actions, Dependabot, and a Docker smoke test.
+Start with:
 
 ```bash
 make install
 make check
 make docker-build
 ```
+
+HTTP deployments require `FOLIO_API_TOKEN` and derive `FOLIO_TENANT_ID` and
+`FOLIO_ACTOR` from deployment configuration. Clients cannot override either
+identity through tool arguments. Docker Compose provides local-only defaults;
+replace them outside local development.
 
 The [contribution guide](CONTRIBUTING.md), [security policy](SECURITY.md), and
 [enterprise adoption notes](docs/enterprise-adoption.md) describe the evidence
@@ -40,3 +45,6 @@ Folio's database, import private implementation modules, or receive a special
 authorization path. This keeps Folio Lattice useful to Claude Code, Codex,
 Cursor, and other clients while giving the Hyperset knowledge flywheel a
 durable artifact and graph substrate.
+
+The executable fixture at `tests/hyperset_consumer.py` proves that seam using
+only the public MCP SDK and HTTP endpoint.
