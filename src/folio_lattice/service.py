@@ -9,10 +9,10 @@ import re
 import sqlite3
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 TEXT_MEDIA_TYPES = {
     "application/javascript",
@@ -30,7 +30,7 @@ TEXT_MEDIA_TYPES = {
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def new_id(prefix: str) -> str:
@@ -189,7 +189,9 @@ class FolioLattice:
             )
         except Exception:
             with self.connect() as db:
-                db.execute("DELETE FROM artifacts WHERE id = ? AND tenant_id = ?", (artifact_id, tenant_id))
+                db.execute(
+                    "DELETE FROM artifacts WHERE id = ? AND tenant_id = ?", (artifact_id, tenant_id)
+                )
             raise
         return {"artifact": self.get_artifact(tenant_id, artifact_id), "version": version}
 
@@ -270,7 +272,16 @@ class FolioLattice:
                             start_offset, end_offset, content
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (chunk_id, tenant_id, artifact_id, version_id, ordinal, start, end, content),
+                        (
+                            chunk_id,
+                            tenant_id,
+                            artifact_id,
+                            version_id,
+                            ordinal,
+                            start,
+                            end,
+                            content,
+                        ),
                     )
                     db.execute(
                         "INSERT INTO chunk_fts(chunk_id, tenant_id, artifact_id, version_id, content) VALUES (?, ?, ?, ?, ?)",
@@ -379,9 +390,13 @@ class FolioLattice:
             raise FolioError("self-links are not allowed")
         with self.connect() as db:
             for artifact_id in (source_artifact_id, target_artifact_id):
-                if db.execute(
-                    "SELECT 1 FROM artifacts WHERE id = ? AND tenant_id = ?", (artifact_id, tenant_id)
-                ).fetchone() is None:
+                if (
+                    db.execute(
+                        "SELECT 1 FROM artifacts WHERE id = ? AND tenant_id = ?",
+                        (artifact_id, tenant_id),
+                    ).fetchone()
+                    is None
+                ):
                     raise FolioError("artifact not found")
             edge_id = new_id("edg")
             db.execute(
@@ -390,7 +405,15 @@ class FolioLattice:
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tenant_id, source_artifact_id, target_artifact_id, edge_type) DO UPDATE SET metadata_json = excluded.metadata_json
                 """,
-                (edge_id, tenant_id, source_artifact_id, target_artifact_id, edge_type, json.dumps(metadata or {}, sort_keys=True), utc_now()),
+                (
+                    edge_id,
+                    tenant_id,
+                    source_artifact_id,
+                    target_artifact_id,
+                    edge_type,
+                    json.dumps(metadata or {}, sort_keys=True),
+                    utc_now(),
+                ),
             )
             row = db.execute(
                 """
@@ -403,7 +426,9 @@ class FolioLattice:
         result["metadata"] = json.loads(result.pop("metadata_json"))
         return result
 
-    def traverse(self, tenant_id: str, start_artifact_id: str, max_depth: int = 2, limit: int = 100) -> list[dict[str, Any]]:
+    def traverse(
+        self, tenant_id: str, start_artifact_id: str, max_depth: int = 2, limit: int = 100
+    ) -> list[dict[str, Any]]:
         if max_depth < 0 or max_depth > 10:
             raise FolioError("max_depth must be between 0 and 10")
         limit = max(1, min(limit, 500))

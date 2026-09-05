@@ -71,7 +71,12 @@ def run_stdio() -> None:
                 sys.stdout.write(json.dumps(response, sort_keys=True) + "\n")
                 sys.stdout.flush()
         except (ValueError, json.JSONDecodeError) as exc:
-            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(exc)}}) + "\n")
+            sys.stdout.write(
+                json.dumps(
+                    {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(exc)}}
+                )
+                + "\n"
+            )
             sys.stdout.flush()
 
 

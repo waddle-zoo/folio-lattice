@@ -6,8 +6,62 @@ build-backend = "setuptools.build_meta"
 name = "folio-lattice"
 version = "0.1.0"
 description = "Provider-neutral artifacts and knowledge graphs"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
 
+[dependency-groups]
+dev = [
+    "mypy>=1.15,<2",
+    "pytest>=9.1,<10",
+    "pytest-cov>=7,<8",
+    "ruff>=0.16,<0.17",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# The checked-in Gas Town skills are project operations tooling copied from
+# Hyperset. They retain their own upstream conventions; product code and tests
+# remain the authoritative lint surface below.
+extend-exclude = [".agents"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra"]
+markers = [
+    "unit: fast isolated tests",
+    "integration: tests crossing a process or transport boundary",
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/folio_lattice"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.coverage.run]
+branch = true
+source = ["folio_lattice"]
+# The HTTP and stdio entrypoint are exercised as subprocess boundaries by
+# tests/test_e2e.py. Keep that evidence in the integration suite rather than
+# reporting misleading zero in-process coverage for server.py.
+omit = ["*/server.py"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]

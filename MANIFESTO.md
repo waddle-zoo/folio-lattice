@@ -27,6 +27,16 @@ The graph and artifact lifecycle are the product. Any early web interface exists
 to inspect, test, and administer that lifecycle; it is not the primary authoring
 experience.
 
+## First integration boundary
+
+[Hyperset](https://github.com/waddle-zoo/hyperset) is the first planned Folio
+Lattice consumer and the first knowledge-flywheel integration. Hyperset may use
+Folio Lattice's public MCP and HTTP contracts to store, connect, retrieve, and
+version knowledge artifacts. It must not become a privileged dependency: no
+shared database, private module imports, or Hyperset-specific bypasses belong in
+the Folio Lattice core. The same contract must remain available to other
+enterprise systems and agent clients.
+
 ## The first milestone
 
 The first milestone is a reproducible Docker-based local deployment containing:

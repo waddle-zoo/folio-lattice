@@ -16,6 +16,7 @@ contract; these records define how the implementation will honor it. The
 | [0005](0005-docker-first-deployment.md) | Accepted | Docker-first development and enterprise deployment seams |
 | [0006](0006-provider-neutral-clients.md) | Accepted | Provider-neutral client contracts |
 | [0007](0007-private-tenancy-and-sharing.md) | Accepted | Private tenancy now, sharing in v2 |
+| [0008](0008-hyperset-first-consumer.md) | Accepted | Hyperset is the first consumer through public contracts |
 
 ## Conventions
 

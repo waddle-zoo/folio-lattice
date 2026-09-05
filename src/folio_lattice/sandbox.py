@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 SANDBOX_CONTENT_SECURITY_POLICY = "; ".join(
     [
         "default-src 'none'",
@@ -41,7 +40,9 @@ class CapabilityBoundary:
     """Allow only operations explicitly attached to a sandbox instance."""
 
     def __init__(self, attachments: list[McpAttachment] | None = None):
-        default = McpAttachment("folio-lattice", frozenset({"artifact_read", "artifact_search", "graph_traverse"}))
+        default = McpAttachment(
+            "folio-lattice", frozenset({"artifact_read", "artifact_search", "graph_traverse"})
+        )
         self.attachments = {item.name: item for item in [default, *(attachments or [])]}
 
     def authorize(self, mcp_name: str, operation: str) -> bool:

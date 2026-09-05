@@ -23,6 +23,8 @@ Folio Lattice is a platform-agnostic, company-hosted system for safe artifacts a
 - Do not add broad external network access to generated artifacts.
 - Do not add user credential handling until the core graph and artifact lifecycle is stable.
 - Keep the initial Gas Town setup simple: Mayor plus one persistent Codex crew member; no polecats.
+- Treat Hyperset as the first external consumer of the public MCP/HTTP contract;
+  do not create shared-database or private-module coupling.
 
 Before changing the product boundary, update the relevant ADR and ask for a decision when the change affects security, persistence, provider neutrality, or privacy.
 
@@ -35,3 +37,5 @@ Before changing the product boundary, update the relevant ADR and ask for a deci
 - Define end-to-end acceptance checks before calling a milestone complete.
 - Run focused tests during development and a full end-to-end validation pass before presenting anything as ready to ship.
 - A passing unit test is not enough for graph writes, versioning, MCP behavior, sandbox policy, or Docker deployment boundaries.
+- Run `make check` before handing off Python changes. Changes to the service
+  boundary also require `make docker-build` and the Docker-to-MCP smoke path.
