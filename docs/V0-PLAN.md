@@ -1,6 +1,6 @@
 # Folio Lattice v0 implementation plan
 
-Status: ready for implementation after research checkpoint
+Status: implementation in progress; full end-to-end ship gate is still open
 
 The v0 target is a small, testable vertical slice. It proves the durable graph
 and artifact lifecycle before adding a polished UI, public sharing, semantic

@@ -1,0 +1,11 @@
+.git
+.agents
+.codex
+.venv
+__pycache__
+*.py[cod]
+.data
+.pytest_cache
+
+# Local Gas Town metadata is not part of the service image.
+.beads

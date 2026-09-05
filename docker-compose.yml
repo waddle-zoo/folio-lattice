@@ -1,0 +1,18 @@
+services:
+  folio:
+    build: .
+    ports:
+      - "${FOLIO_HOST_PORT:-8000}:8000"
+    environment:
+      FOLIO_DB_PATH: /data/folio.db
+      FOLIO_BLOB_ROOT: /data/blobs
+    volumes:
+      - folio_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  folio_data:
