@@ -72,6 +72,45 @@ Run the matrix from a fresh checkout with Docker and a clean artifact volume.
 | Privacy seam | Tenant/owner fields and authorization checks exist at the service boundary even with a development principal. |
 | Repeatability | The complete suite passes twice from fresh containers and a cleared artifact volume. |
 
+## Phase 6: enterprise and first-consumer hardening
+
+Research: [enterprise and Hyperset contract review](research/2026-09-05-enterprise-hyperset-contract.md).
+
+This phase closes the gap between the working v0 core and a supportable public
+service boundary. Complete these in order:
+
+1. Replace the hand-written MCP subset with the official MCP Python SDK and one
+   shared operation implementation exposed over stdio and Streamable HTTP.
+2. Validate startup configuration. HTTP derives tenant and actor from a
+   configured bearer-authenticated service principal; stdio derives the same
+   values from its process environment. Remove tenant and actor overrides from
+   public tool arguments.
+3. Make artifact creation and first-version metadata one transaction, track the
+   current version explicitly, bound request/tool inputs, and reject graph-edge
+   metadata rewrites that would erase history.
+4. Add a Hyperset-shaped black-box consumer fixture. It may depend on the public
+   MCP SDK and network endpoint only: no `folio_lattice` import, SQLite access,
+   blob-volume mount, or special operation.
+5. Prove authenticated MCP behavior, immutable writes, search, grep, bounded
+   chunks, graph traversal, cross-tenant denial, and restart persistence through
+   Docker.
+
+Phase acceptance:
+
+| Area | Required evidence |
+| --- | --- |
+| Protocol | Official SDK client lists and calls typed tools over real Streamable HTTP. |
+| Identity | Missing/wrong HTTP bearer tokens fail; tool arguments cannot select tenant or actor. |
+| Persistence | Create and first version commit together; restart preserves exact version bytes and provenance. |
+| Graph | Duplicate identical link is idempotent; conflicting metadata cannot overwrite an edge. |
+| Consumer | Hyperset fixture completes create, write, link, search, traversal, and read using public MCP/HTTP only. |
+| Isolation | A second configured tenant/process cannot resolve the first tenant's identifiers. |
+| Gates | `make check`, `make docker-build`, and `make docker-test` pass from the Mayor clone. |
+
+Phase 6 does not close the full milestone sandbox gate. The existing CSP and
+capability code remains policy scaffolding until the dedicated-origin renderer
+and real-browser hostile suite in Phase 4 are implemented.
+
 ## Ship gate
 
 Nothing is called ready to ship until the implementation has a focused test
