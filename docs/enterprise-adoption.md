@@ -25,8 +25,8 @@ layer.
 - Writes are transactional, immutable, provenance-bearing, and protected by an
   optimistic parent check.
 - Tenant and capability boundaries are enforced at the service boundary.
-- HTTP MCP calls require bearer authentication; tenant and actor identity come
-  from deployment configuration rather than client-controlled tool arguments.
+- Namespace and actor defaults come from process configuration rather than
+  client-controlled tool arguments. Product authentication is not part of v0.
 
 ## Integration evidence
 

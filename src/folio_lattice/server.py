@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hmac
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -22,7 +21,6 @@ class Settings:
     blob_root: str
     tenant_id: str
     actor: str
-    api_token: str | None
     max_artifact_bytes: int
     max_request_bytes: int
 
@@ -37,7 +35,6 @@ class Settings:
             blob_root=os.environ.get("FOLIO_BLOB_ROOT", ".data/blobs"),
             tenant_id=tenant_id,
             actor=actor,
-            api_token=os.environ.get("FOLIO_API_TOKEN"),
             max_artifact_bytes=_positive_env(
                 "FOLIO_MAX_ARTIFACT_BYTES", DEFAULT_MAX_ARTIFACT_BYTES
             ),
@@ -52,13 +49,12 @@ def _positive_env(name: str, default: int) -> int:
     return value
 
 
-class BearerAuthApp:
-    """Expose public health while authenticating every MCP request."""
+class FolioHttpApp:
+    """Add a small readiness route to the SDK's MCP application."""
 
-    def __init__(self, app: ASGIApp, service: FolioLattice, token: str):
+    def __init__(self, app: ASGIApp, service: FolioLattice):
         self.app = app
         self.service = service
-        self.token = token
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -72,23 +68,7 @@ class BearerAuthApp:
             status = 200 if health["ready"] else 503
             await JSONResponse(health, status_code=status)(scope, receive, send)
             return
-        authorization = _header(scope, b"authorization")
-        expected = f"Bearer {self.token}".encode()
-        if authorization is None or not hmac.compare_digest(authorization, expected):
-            await JSONResponse(
-                {"error": "unauthorized"},
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
-            )(scope, receive, send)
-            return
         await self.app(scope, receive, send)
-
-
-def _header(scope: Scope, name: bytes) -> bytes | None:
-    for key, value in scope.get("headers", []):
-        if key.lower() == name:
-            return value
-    return None
 
 
 def build_runtime(settings: Settings) -> tuple[FolioLattice, Any]:
@@ -106,15 +86,13 @@ def build_runtime(settings: Settings) -> tuple[FolioLattice, Any]:
 
 def run_http(host: str, port: int) -> None:
     settings = Settings.from_env()
-    if not settings.api_token:
-        raise ValueError("FOLIO_API_TOKEN is required for HTTP transport")
     service, mcp = build_runtime(settings)
     app = mcp.streamable_http_app(
         json_response=True,
         max_request_body_size=settings.max_request_bytes,
         host=host,
     )
-    uvicorn.run(BearerAuthApp(app, service, settings.api_token), host=host, port=port)
+    uvicorn.run(FolioHttpApp(app, service), host=host, port=port)
 
 
 def run_stdio() -> None:

@@ -27,10 +27,10 @@ make check
 make docker-build
 ```
 
-HTTP deployments require `FOLIO_API_TOKEN` and derive `FOLIO_TENANT_ID` and
-`FOLIO_ACTOR` from deployment configuration. Clients cannot override either
-identity through tool arguments. Docker Compose provides local-only defaults;
-replace them outside local development.
+HTTP and stdio derive `FOLIO_TENANT_ID` and `FOLIO_ACTOR` from process
+configuration. Clients cannot override either value through tool arguments.
+The Docker deployment is a local development loop bound to loopback; product
+credentials and sharing policy are deliberately deferred.
 
 The [contribution guide](CONTRIBUTING.md), [security policy](SECURITY.md), and
 [enterprise adoption notes](docs/enterprise-adoption.md) describe the evidence

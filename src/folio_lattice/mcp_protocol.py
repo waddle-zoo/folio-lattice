@@ -35,7 +35,7 @@ def build_mcp_server(
     tenant_id: str,
     actor: str,
 ) -> MCPServer:
-    """Bind one authenticated principal to the public Folio MCP surface."""
+    """Bind one configured namespace and actor to the public MCP surface."""
     server = MCPServer(
         "folio-lattice",
         version="0.1.0",

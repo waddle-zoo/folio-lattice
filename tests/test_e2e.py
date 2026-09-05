@@ -7,7 +7,6 @@ import sys
 import tempfile
 import time
 import unittest
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -21,11 +20,10 @@ def free_port() -> int:
 
 
 class HttpE2ETests(unittest.TestCase):
-    def test_authenticated_http_and_black_box_hyperset_consumer(self) -> None:
+    def test_http_and_black_box_hyperset_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             port = free_port()
-            token = "test-token-with-enough-entropy"
             base_url = f"http://127.0.0.1:{port}"
             environment = {
                 **os.environ,
@@ -33,7 +31,6 @@ class HttpE2ETests(unittest.TestCase):
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
                 "FOLIO_TENANT_ID": "hyperset-test",
                 "FOLIO_ACTOR": "hyperset",
-                "FOLIO_API_TOKEN": token,
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
             }
             process = subprocess.Popen(
@@ -63,22 +60,6 @@ class HttpE2ETests(unittest.TestCase):
                         time.sleep(0.05)
                 else:
                     self.fail(process.stderr.read().decode())
-
-                with self.assertRaises(urllib.error.HTTPError) as missing:
-                    urllib.request.urlopen(
-                        urllib.request.Request(f"{base_url}/mcp", method="GET"), timeout=2
-                    )
-                self.assertEqual(missing.exception.code, 401)
-                with self.assertRaises(urllib.error.HTTPError) as wrong:
-                    urllib.request.urlopen(
-                        urllib.request.Request(
-                            f"{base_url}/mcp",
-                            method="GET",
-                            headers={"Authorization": "Bearer wrong-token"},
-                        ),
-                        timeout=2,
-                    )
-                self.assertEqual(wrong.exception.code, 401)
 
                 result = subprocess.run(
                     [sys.executable, "tests/hyperset_consumer.py"],

@@ -70,7 +70,7 @@ Run the matrix from a fresh checkout with Docker and a clean artifact volume.
 | MCP | A provider-neutral client can create, search, traverse, read, and write through the same contract. |
 | Sandbox | HTML/CSS/JS renders, but direct external egress, host-origin reads, cookie access, and top-level escape attempts fail. |
 | Capabilities | An attached MCP capability works through the bridge; an unattached capability is rejected and logged. |
-| Privacy seam | Tenant/owner fields and authorization checks exist at the service boundary even with a development principal. |
+| Namespace seam | Namespace fields and fail-closed lookups exist at the service boundary without claiming a v0 authorization system. |
 | Repeatability | The complete suite passes twice from fresh containers and a cleared artifact volume. |
 
 ## Phase 6: public contract and first-consumer proof

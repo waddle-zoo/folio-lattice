@@ -18,8 +18,8 @@ The current implementation is not a production security certification; the
 full isolated renderer and hosted authorization surfaces remain explicit ship
 gates.
 
-The v0 HTTP endpoint requires a deployment-provided bearer token and binds one
-configured tenant and actor to the process. The Docker Compose token is a local
-development default, not a production secret. OAuth/OIDC, token rotation,
-multi-principal policy, TLS termination, audit export, and rate limiting remain
-deployment or post-v0 work.
+The v0 HTTP endpoint is an unauthenticated local-development interface. Docker
+Compose binds it to loopback and assigns one configured namespace and actor to
+the process. Do not expose it to an untrusted network. Product credentials,
+sharing policy, TLS termination, audit export, and rate limiting remain deferred
+until the core artifact and graph loop is stable.

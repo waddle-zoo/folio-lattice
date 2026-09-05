@@ -2,13 +2,12 @@ services:
   folio:
     build: .
     ports:
-      - "${FOLIO_HOST_PORT:-8000}:8000"
+      - "127.0.0.1:${FOLIO_HOST_PORT:-8000}:8000"
     environment:
       FOLIO_DB_PATH: /data/folio.db
       FOLIO_BLOB_ROOT: /data/blobs
       FOLIO_TENANT_ID: ${FOLIO_TENANT_ID:-hyperset-v0}
       FOLIO_ACTOR: ${FOLIO_ACTOR:-hyperset}
-      FOLIO_API_TOKEN: ${FOLIO_API_TOKEN:-folio-local-development-token}
     volumes:
       - folio_data:/data
     init: true

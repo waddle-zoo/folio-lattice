@@ -10,20 +10,16 @@ import time
 from typing import Any
 from urllib.request import urlopen
 
-import httpx2
 from hyperset_consumer import exercise
 from mcp import Client
-from mcp.client.streamable_http import streamable_http_client
 
 
-async def read_artifact(base_url: str, token: str, artifact_id: str) -> dict[str, Any]:
-    async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}) as http:
-        transport = streamable_http_client(f"{base_url}/mcp", http_client=http)
-        async with Client(transport, raise_exceptions=True) as client:
-            response = await client.call_tool("artifact_read", {"artifact_id": artifact_id})
-            assert not response.is_error, response
-            assert response.structured_content is not None
-            return response.structured_content
+async def read_artifact(base_url: str, artifact_id: str) -> dict[str, Any]:
+    async with Client(f"{base_url}/mcp", raise_exceptions=True) as client:
+        response = await client.call_tool("artifact_read", {"artifact_id": artifact_id})
+        assert not response.is_error, response
+        assert response.structured_content is not None
+        return response.structured_content
 
 
 def wait_ready(base_url: str) -> None:
@@ -40,14 +36,13 @@ def wait_ready(base_url: str) -> None:
 
 def main() -> None:
     base_url = os.environ.get("FOLIO_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-    token = os.environ.get("FOLIO_API_TOKEN", "folio-local-development-token")
     wait_ready(base_url)
-    created = asyncio.run(exercise(base_url, token))
+    created = asyncio.run(exercise(base_url))
 
     subprocess.run(["docker", "compose", "restart", "folio"], check=True, timeout=30)
     wait_ready(base_url)
 
-    persisted = asyncio.run(read_artifact(base_url, token, created["artifact_id"]))
+    persisted = asyncio.run(read_artifact(base_url, created["artifact_id"]))
     assert persisted["version"]["id"] == created["version_id"]
     assert persisted["version"]["blob_hash"] == created["blob_hash"]
     assert persisted["text"] == "Hyperset revised evidence source graph"
