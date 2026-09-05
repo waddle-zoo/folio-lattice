@@ -1,6 +1,9 @@
 # Folio Lattice product brief
 
-This is the initial human-authored brief for the Mayor to turn into the canonical manifesto and architecture decision records.
+This is the initial human-authored brief. It is retained as source context, but it
+is not the product contract. The canonical product boundary is defined by
+[the manifesto](../MANIFESTO.md) and the accepted decisions in
+[the ADR index](adr/README.md).
 
 ## Product thesis
 

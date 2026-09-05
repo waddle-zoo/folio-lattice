@@ -6,4 +6,6 @@ The initial product is MCP-first: agents and tools can search, grep, read, chunk
 
 The system is developed with Docker, designed to be self-hostable, and intended to evolve into an enterprise product that is private by default. Sharing with selected teammates or broader audiences is a later feature, not an excuse to weaken the core security model.
 
-See [the product brief](docs/PRODUCT-BRIEF.md), [the manifesto](MANIFESTO.md), and [the ADR index](docs/adr/README.md).
+The [manifesto](MANIFESTO.md) and [ADR index](docs/adr/README.md) are the
+canonical product documentation. The original [product brief](docs/PRODUCT-BRIEF.md)
+is retained as source context.
