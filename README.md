@@ -9,3 +9,6 @@ The system is developed with Docker, designed to be self-hostable, and intended 
 The [manifesto](MANIFESTO.md) and [ADR index](docs/adr/README.md) are the
 canonical product documentation. The original [product brief](docs/PRODUCT-BRIEF.md)
 is retained as source context.
+
+The current research checkpoint and implementation sequence are in
+[docs/research](docs/research/) and [docs/V0-PLAN.md](docs/V0-PLAN.md).
