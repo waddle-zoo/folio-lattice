@@ -27,6 +27,26 @@ make check
 make docker-build
 ```
 
+## Local inspection and rendering
+
+Start both loopback-bound processes with:
+
+```bash
+make docker-up
+```
+
+Open `http://127.0.0.1:8000`, paste an artifact identifier created through MCP,
+and inspect its current text, versions, outgoing graph, and isolated preview.
+Text saves create immutable versions with an optimistic parent check. The
+renderer listens separately on `http://127.0.0.1:8001`; it is an iframe target,
+not a public authoring API.
+
+`FOLIO_RENDER_ORIGIN` tells the control process where browsers reach the
+renderer. `FOLIO_CONTROL_ORIGIN` tells the renderer which exact origin may frame
+artifacts. Render responses enforce an opaque sandbox and deny direct network
+connections. Keep both defaults on loopback: v0 still has no product auth or
+sharing layer.
+
 HTTP and stdio derive `FOLIO_TENANT_ID` and `FOLIO_ACTOR` from process
 configuration. Clients cannot override either value through tool arguments.
 The Docker deployment is a local development loop bound to loopback; product

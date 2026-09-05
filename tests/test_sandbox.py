@@ -8,6 +8,8 @@ class SandboxTests(unittest.TestCase):
         headers = sandbox_headers()
         self.assertIn("connect-src 'none'", headers["Content-Security-Policy"])
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+        self.assertIn("sandbox allow-scripts", headers["Content-Security-Policy"])
+        self.assertNotIn("allow-same-origin", headers["Content-Security-Policy"])
         self.assertEqual(headers["Referrer-Policy"], "no-referrer")
 
     def test_only_attached_operations_are_allowed(self):

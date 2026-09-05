@@ -57,21 +57,31 @@ class FolioLattice:
         blob_root: str | Path,
         *,
         max_artifact_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
+        read_only: bool = False,
     ):
         self.db_path = Path(db_path)
         self.blob_root = Path(blob_root)
+        self.read_only = read_only
         if max_artifact_bytes < 1:
             raise ValueError("max_artifact_bytes must be positive")
         self.max_artifact_bytes = max_artifact_bytes
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.blob_root.mkdir(parents=True, exist_ok=True)
-        self.initialize()
+        if read_only:
+            if not self.db_path.is_file() or not self.blob_root.is_dir():
+                raise FileNotFoundError("artifact state is not initialized")
+        else:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.blob_root.mkdir(parents=True, exist_ok=True)
+            self.initialize()
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path)
+        if self.read_only:
+            connection = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+        else:
+            connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
+        if not self.read_only:
+            connection.execute("PRAGMA journal_mode = WAL")
         return connection
 
     def initialize(self) -> None:
@@ -618,7 +628,8 @@ class FolioLattice:
         try:
             with self.connect() as db:
                 db.execute("SELECT 1").fetchone()
-            ready = os.access(self.blob_root, os.W_OK)
+            access = os.R_OK if self.read_only else os.W_OK
+            ready = os.access(self.blob_root, access)
         except sqlite3.Error:
             ready = False
         return {"status": "ok" if ready else "not_ready", "ready": ready}

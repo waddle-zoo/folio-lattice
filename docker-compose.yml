@@ -8,6 +8,7 @@ services:
       FOLIO_BLOB_ROOT: /data/blobs
       FOLIO_TENANT_ID: ${FOLIO_TENANT_ID:-hyperset-v0}
       FOLIO_ACTOR: ${FOLIO_ACTOR:-hyperset}
+      FOLIO_RENDER_ORIGIN: http://127.0.0.1:${FOLIO_RENDER_HOST_PORT:-8001}
     volumes:
       - folio_data:/data
     init: true
@@ -20,6 +21,37 @@ services:
       - no-new-privileges:true
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
+
+  renderer:
+    build: .
+    command: ["python", "-m", "folio_lattice.server", "--transport", "renderer", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "127.0.0.1:${FOLIO_RENDER_HOST_PORT:-8001}:8001"
+    environment:
+      FOLIO_DB_PATH: /data/folio.db
+      FOLIO_BLOB_ROOT: /data/blobs
+      FOLIO_TENANT_ID: ${FOLIO_TENANT_ID:-hyperset-v0}
+      FOLIO_ACTOR: ${FOLIO_ACTOR:-hyperset}
+      FOLIO_CONTROL_ORIGIN: http://127.0.0.1:${FOLIO_HOST_PORT:-8000}
+    volumes:
+      - folio_data:/data:ro
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      folio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')"]
       interval: 2s
       timeout: 2s
       retries: 15

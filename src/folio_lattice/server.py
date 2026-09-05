@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import argparse
 import os
+import string
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .inspection import InspectionApp
 from .mcp_protocol import build_mcp_server
+from .renderer import RendererApp
 from .service import DEFAULT_MAX_ARTIFACT_BYTES, FolioLattice
 
 DEFAULT_MAX_REQUEST_BYTES = 13 * 1024 * 1024
@@ -23,6 +27,8 @@ class Settings:
     actor: str
     max_artifact_bytes: int
     max_request_bytes: int
+    control_origin: str
+    render_origin: str
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -39,6 +45,8 @@ class Settings:
                 "FOLIO_MAX_ARTIFACT_BYTES", DEFAULT_MAX_ARTIFACT_BYTES
             ),
             max_request_bytes=_positive_env("FOLIO_MAX_REQUEST_BYTES", DEFAULT_MAX_REQUEST_BYTES),
+            control_origin=_origin_env("FOLIO_CONTROL_ORIGIN", "http://127.0.0.1:8000"),
+            render_origin=_origin_env("FOLIO_RENDER_ORIGIN", "http://127.0.0.1:8001"),
         )
 
 
@@ -49,12 +57,37 @@ def _positive_env(name: str, default: int) -> int:
     return value
 
 
-class FolioHttpApp:
-    """Add a small readiness route to the SDK's MCP application."""
+def _origin_env(name: str, default: str) -> str:
+    value = os.environ.get(name, default).rstrip("/")
+    parsed = urlsplit(value)
+    host = parsed.hostname or ""
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or any(character not in string.ascii_letters + string.digits + ".:-" for character in host)
+    ):
+        raise ValueError(f"{name} must be an HTTP origin without a path")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an HTTP origin without a path") from exc
+    bracketed_host = f"[{host}]" if ":" in host else host
+    return f"{parsed.scheme}://{bracketed_host}{f':{port}' if port is not None else ''}"
 
-    def __init__(self, app: ASGIApp, service: FolioLattice):
+
+class FolioHttpApp:
+    """Add readiness and inspection routes to the SDK's MCP application."""
+
+    def __init__(self, app: ASGIApp, service: FolioLattice, inspection: InspectionApp):
         self.app = app
         self.service = service
+        self.inspection = inspection
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -67,6 +100,15 @@ class FolioHttpApp:
             health = self.service.health()
             status = 200 if health["ready"] else 503
             await JSONResponse(health, status_code=status)(scope, receive, send)
+            return
+        path = scope["path"]
+        if (
+            path == "/"
+            or path.startswith("/inspect/")
+            or path.startswith("/api/artifacts/")
+            or path in {"/ui.css", "/ui.js"}
+        ):
+            await self.inspection(scope, receive, send)
             return
         await self.app(scope, receive, send)
 
@@ -92,7 +134,30 @@ def run_http(host: str, port: int) -> None:
         max_request_body_size=settings.max_request_bytes,
         host=host,
     )
-    uvicorn.run(FolioHttpApp(app, service), host=host, port=port)
+    inspection = InspectionApp(
+        service,
+        tenant_id=settings.tenant_id,
+        actor=settings.actor,
+        render_origin=settings.render_origin,
+        max_request_bytes=settings.max_request_bytes,
+    )
+    uvicorn.run(FolioHttpApp(app, service, inspection), host=host, port=port)
+
+
+def run_renderer(host: str, port: int) -> None:
+    settings = Settings.from_env()
+    service = FolioLattice(
+        settings.db_path,
+        settings.blob_root,
+        max_artifact_bytes=settings.max_artifact_bytes,
+        read_only=True,
+    )
+    app = RendererApp(
+        service,
+        tenant_id=settings.tenant_id,
+        control_origin=settings.control_origin,
+    )
+    uvicorn.run(app, host=host, port=port)
 
 
 def run_stdio() -> None:
@@ -102,12 +167,14 @@ def run_stdio() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--transport", choices=("http", "stdio"), default="http")
+    parser.add_argument("--transport", choices=("http", "stdio", "renderer"), default="http")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     if args.transport == "stdio":
         run_stdio()
+    elif args.transport == "renderer":
+        run_renderer(args.host, args.port)
     else:
         run_http(args.host, args.port)
 

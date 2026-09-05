@@ -15,5 +15,5 @@ ENV FOLIO_DB_PATH=/data/folio.db \
     FOLIO_TENANT_ID=hyperset-v0 \
     FOLIO_ACTOR=hyperset \
     PYTHONUNBUFFERED=1
-EXPOSE 8000
+EXPOSE 8000 8001
 CMD ["python", "-m", "folio_lattice.server", "--transport", "http", "--host", "0.0.0.0", "--port", "8000"]

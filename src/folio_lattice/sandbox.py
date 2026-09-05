@@ -2,28 +2,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SANDBOX_CONTENT_SECURITY_POLICY = "; ".join(
-    [
-        "default-src 'none'",
-        "base-uri 'none'",
-        "connect-src 'none'",
-        "font-src 'none'",
-        "form-action 'none'",
-        "frame-ancestors 'none'",
-        "img-src 'self' data: blob:",
-        "object-src 'none'",
-        "script-src 'self'",
-        "style-src 'self'",
-    ]
-)
 
-
-def sandbox_headers() -> dict[str, str]:
-    """Headers for a dedicated-origin static artifact response."""
+def sandbox_headers(frame_ancestor: str = "'none'") -> dict[str, str]:
+    """Headers for an opaque-origin web artifact embedded by one control origin."""
+    policy = "; ".join(
+        [
+            "default-src 'none'",
+            "base-uri 'none'",
+            "connect-src 'none'",
+            "font-src 'none'",
+            "form-action 'none'",
+            f"frame-ancestors {frame_ancestor}",
+            "frame-src 'none'",
+            "img-src data: blob:",
+            "media-src 'none'",
+            "object-src 'none'",
+            "sandbox allow-scripts",
+            "script-src 'self' 'unsafe-inline'",
+            "style-src 'self' 'unsafe-inline'",
+            "worker-src 'none'",
+        ]
+    )
     return {
-        "Content-Security-Policy": SANDBOX_CONTENT_SECURITY_POLICY,
+        "Content-Security-Policy": policy,
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Cross-Origin-Resource-Policy": "same-origin",
+        "Cross-Origin-Resource-Policy": "cross-origin",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "no-store",

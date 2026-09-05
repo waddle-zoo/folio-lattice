@@ -17,10 +17,10 @@ test:
 	uv run pytest --cov=folio_lattice --cov-report=term-missing --cov-fail-under=80
 
 test-unit:
-	uv run pytest -q tests/test_mcp.py tests/test_sandbox.py tests/test_service.py
+	uv run pytest -q tests/test_mcp.py tests/test_sandbox.py tests/test_service.py tests/test_web.py
 
 test-e2e:
-	uv run pytest -q tests/test_e2e.py
+	uv run pytest -q tests/test_e2e.py tests/test_browser_e2e.py
 
 check: lint typecheck test
 

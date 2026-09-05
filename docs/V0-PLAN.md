@@ -1,7 +1,7 @@
 # Folio Lattice v0 implementation plan
 
-Status: Phase 6 complete; full end-to-end ship gate remains open on the
-dedicated renderer and browser-adversarial work in Phase 4
+Status: Phase 7 complete; full end-to-end ship gate remains open on the
+mediated attached-MCP bridge in Phase 4
 
 The v0 target is a small, testable vertical slice. It proves the durable graph
 and artifact lifecycle before adding a polished UI, public sharing, semantic
@@ -136,6 +136,39 @@ read chunk, search, grep, link, traverse, and version history. Provenance is
 part of artifact writes rather than a separate subsystem. No consumer-specific
 adapter, REST mirror, sharing model, vector service, or authorization framework
 belongs in this phase.
+
+## Phase 7: thin inspection UI and isolated renderer
+
+Research: [thin inspection UI and renderer](research/2026-09-05-thin-ui-renderer.md).
+Decision: [ADR 0009](adr/0009-thin-inspection-ui-and-isolated-renderer.md).
+
+This phase adds the smallest browser loop over the existing state model:
+
+1. A static page opens one artifact identifier and displays current text,
+   immutable version metadata, and outgoing graph traversal.
+2. Text edits call one private JSON operation with the current version as the
+   optimistic parent. Each successful edit creates a normal immutable version.
+3. A second process and origin opens the same state read-only and renders HTML,
+   JavaScript, or CSS.
+4. Both iframe and response CSP sandboxing allow scripts without same-origin,
+   connection, form, popup, storage, or navigation privileges.
+5. HTTP, real-browser, and Docker checks exercise the complete slice.
+
+Implementation evidence, 2026-09-05:
+
+- `make check`: 20 tests passed with 90.09% branch-aware coverage;
+- headless Chrome ran stored HTML and standalone JavaScript/CSS artifacts while
+  hostile network, storage, popup, form, navigation, and host-DOM attempts
+  failed;
+- `make docker-build` built the shared control/renderer image; and
+- a fresh-volume Docker run completed the MCP graph loop, inspection read,
+  restart-persistence check, and renderer check with `/data` read-only in the
+  renderer container.
+
+The public MCP surface remains unchanged. The UI routes are inspection mechanics,
+not a general REST contract. Artifact listing, creation UI, graph editing,
+sharing, credentials, auth frameworks, vector search, attached-MCP bridging, and
+a frontend framework remain outside this phase.
 
 ## Ship gate
 

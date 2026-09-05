@@ -17,6 +17,7 @@ contract; these records define how the implementation will honor it. The
 | [0006](0006-provider-neutral-clients.md) | Accepted | Provider-neutral client contracts |
 | [0007](0007-private-tenancy-and-sharing.md) | Accepted | Private tenancy now, sharing in v2 |
 | [0008](0008-hyperset-first-consumer.md) | Accepted | Hyperset is the first consumer through public contracts |
+| [0009](0009-thin-inspection-ui-and-isolated-renderer.md) | Accepted | Thin inspection UI and isolated renderer |
 
 ## Conventions
 
