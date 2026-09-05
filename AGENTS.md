@@ -25,3 +25,13 @@ Folio Lattice is a platform-agnostic, company-hosted system for safe artifacts a
 - Keep the initial Gas Town setup simple: Mayor plus one persistent Codex crew member; no polecats.
 
 Before changing the product boundary, update the relevant ADR and ask for a decision when the change affects security, persistence, provider neutrality, or privacy.
+
+## Working method
+
+- Use `.agents/skills/caveman/SKILL.md` for terse, technically precise progress updates.
+- Use `.agents/skills/ponytail/SKILL.md` for minimum-correct implementation choices and to avoid speculative abstractions.
+- Use the companion skills under `.agents/skills/` when their task applies, especially `caveman-review` and `caveman-commit`.
+- Research and plan before implementation. Record meaningful decisions in ADRs.
+- Define end-to-end acceptance checks before calling a milestone complete.
+- Run focused tests during development and a full end-to-end validation pass before presenting anything as ready to ship.
+- A passing unit test is not enough for graph writes, versioning, MCP behavior, sandbox policy, or Docker deployment boundaries.

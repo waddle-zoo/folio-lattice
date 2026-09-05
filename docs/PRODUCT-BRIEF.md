@@ -31,3 +31,7 @@ Folio Lattice should be the company-hosted, platform-agnostic substrate that sit
 ## Desired first milestone
 
 A Docker-based local deployment with an MCP server that can create and version artifacts, search and grep document content, retrieve full documents or chunks, traverse graph relationships, and write new versions. It should also be able to host a safe static HTML/CSS/JS artifact with an explicit, testable policy boundary.
+
+## Delivery discipline
+
+The Mayor should begin each phase with research and a written implementation plan. Implementation should follow the plan, with decisions captured in ADRs when the plan changes product scope, persistence, security, or deployment behavior. Before anything is described as ready to ship, run an end-to-end validation from Docker startup through MCP reads, graph traversal, writes, version creation, artifact retrieval, and sandbox policy enforcement.
