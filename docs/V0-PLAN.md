@@ -73,35 +73,33 @@ Run the matrix from a fresh checkout with Docker and a clean artifact volume.
 | Privacy seam | Tenant/owner fields and authorization checks exist at the service boundary even with a development principal. |
 | Repeatability | The complete suite passes twice from fresh containers and a cleared artifact volume. |
 
-## Phase 6: enterprise and first-consumer hardening
+## Phase 6: public contract and first-consumer proof
 
 Research: [enterprise and Hyperset contract review](research/2026-09-05-enterprise-hyperset-contract.md).
 
-This phase closes the gap between the working v0 core and a supportable public
+This phase closes the gap between the working v0 core and a compact public
 service boundary. Complete these in order:
 
 1. Replace the hand-written MCP subset with the official MCP Python SDK and one
    shared operation implementation exposed over stdio and Streamable HTTP.
-2. Validate startup configuration. HTTP derives tenant and actor from a
-   configured bearer-authenticated service principal; stdio derives the same
-   values from its process environment. Remove tenant and actor overrides from
-   public tool arguments.
+2. Derive the development namespace and provenance actor from process
+   configuration. Remove tenant and actor overrides from public tool arguments,
+   without treating this v0 default as an authorization system.
 3. Make artifact creation and first-version metadata one transaction, track the
    current version explicitly, bound request/tool inputs, and reject graph-edge
    metadata rewrites that would erase history.
 4. Add a Hyperset-shaped black-box consumer fixture. It may depend on the public
    MCP SDK and network endpoint only: no `folio_lattice` import, SQLite access,
    blob-volume mount, or special operation.
-5. Prove authenticated MCP behavior, immutable writes, search, grep, bounded
-   chunks, graph traversal, cross-tenant denial, and restart persistence through
-   Docker.
+5. Prove immutable writes, search, grep, bounded chunks, graph traversal,
+   namespace isolation, and restart persistence through Docker.
 
 Phase acceptance:
 
 | Area | Required evidence |
 | --- | --- |
 | Protocol | Official SDK client lists and calls typed tools over real Streamable HTTP. |
-| Identity | Missing/wrong HTTP bearer tokens fail; tool arguments cannot select tenant or actor. |
+| Identity | Tool arguments cannot select the configured namespace or provenance actor. |
 | Persistence | Create and first version commit together; restart preserves exact version bytes and provenance. |
 | Graph | Duplicate identical link is idempotent; conflicting metadata cannot overwrite an edge. |
 | Consumer | Hyperset fixture completes create, write, link, search, traversal, and read using public MCP/HTTP only. |
@@ -124,6 +122,21 @@ Implementation evidence, 2026-09-05:
 - a compatibility probe using Hyperset's pinned `mcp==1.28.1` client negotiated
   with the SDK 2.1.1 server, listed tools, and created an artifact.
 
+### Scope correction
+
+The official MCP SDK stays because it replaces the bespoke protocol parser,
+generates the schemas for the core primitives, and provides both required
+transports. V0 does not add an application credential system around it. The
+temporary bearer wrapper is removed; local Docker binds to loopback, and
+production authentication remains a deployment concern until the artifact and
+graph loop earns a product-level credential design.
+
+The public surface remains nine composable operations: create, write, read,
+read chunk, search, grep, link, traverse, and version history. Provenance is
+part of artifact writes rather than a separate subsystem. No consumer-specific
+adapter, REST mirror, sharing model, vector service, or authorization framework
+belongs in this phase.
+
 ## Ship gate
 
 Nothing is called ready to ship until the implementation has a focused test
@@ -133,6 +146,7 @@ are recorded in the commit or release notes.
 
 ## Deferred
 
-User-specific MCP credentials, a full authoring UI, public or selective sharing,
-semantic/vector retrieval, a separate graph database, marketplaces, and broad
-multi-agent orchestration remain after this vertical slice.
+Credentials, public or selective sharing, semantic/vector retrieval, a separate
+graph database, marketplaces, and broad multi-agent orchestration remain after
+this vertical slice. The next product layer is a thin UI over these same
+artifact, graph, and renderer contracts—not a second application model.

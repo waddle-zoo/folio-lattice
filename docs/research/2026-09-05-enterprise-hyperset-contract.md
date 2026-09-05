@@ -2,6 +2,11 @@
 
 Date: 2026-09-05
 
+Scope note: the later V0 scope correction in
+[`docs/V0-PLAN.md`](../V0-PLAN.md) retains the official MCP SDK and public
+consumer seam but defers the proposed application bearer credential. This file
+records the research checkpoint rather than the current implementation scope.
+
 ## Question
 
 What is the smallest hardening slice that makes Folio Lattice credible as an
