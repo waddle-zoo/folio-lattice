@@ -4,7 +4,7 @@
 
 - Date: 2026-09-05
 - Baseline: `d30a837`
-- Candidate implementation commit: recorded by the follow-up evidence commit
+- Candidate implementation commit: `9f5d23a`
 - Claim: bounded local public-contract UI and renderer security slice
 - Enterprise-ready: **no**
 
