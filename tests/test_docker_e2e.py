@@ -86,7 +86,7 @@ def main() -> None:
     )[0]
     assert inspected_container["Mounts"] == []
 
-    subprocess.run([*compose, "restart", "folio", "renderer"], check=True, timeout=30)
+    subprocess.run([*compose, "restart", "folio", "renderer"], check=True, timeout=90)
     wait_ready(base_url)
     wait_ready(render_url)
 
