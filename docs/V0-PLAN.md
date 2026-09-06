@@ -1,7 +1,7 @@
 # Folio Lattice v0 implementation plan
 
-Status: Phase 7 complete; full end-to-end ship gate remains open on the
-mediated attached-MCP bridge in Phase 4
+Status: Phase 8 validated as a bounded local slice; the hosted-enterprise gate
+remains explicitly blocked on authentication and operational controls
 
 The v0 target is a small, testable vertical slice. It proves the durable graph
 and artifact lifecycle before adding a polished UI, public sharing, semantic
@@ -170,12 +170,57 @@ not a general REST contract. Artifact listing, creation UI, graph editing,
 sharing, credentials, auth frameworks, vector search, attached-MCP bridging, and
 a frontend framework remain outside this phase.
 
+## Phase 8: public-contract UI and bounded attached MCP
+
+Research: [public-contract UI and attached-MCP security](research/2026-09-05-public-contract-ui-security.md).
+Decision: [ADR 0010](adr/0010-public-contract-ui-bridge-and-hosted-gate.md).
+UX evidence: [inspection UI test plan](UX-TEST-PLAN.md).
+Security evidence: [regression matrix](SECURITY-TEST-MATRIX.md).
+
+This phase corrects the private-access limitation in Phase 7 without turning
+the inspector into a UI platform:
+
+1. Route all UI and renderer artifact access through an official client and the
+   nine-tool Streamable HTTP MCP contract. Remove renderer storage mounts.
+2. Add only the read metadata/chunk descriptors needed to inspect and invoke
+   existing public operations.
+3. Cover create/upload, optimistic write, full/chunk read, FTS search, literal
+   grep, graph link/navigation/outgoing traversal, immutable versions, and
+   HTML/JavaScript/CSS preview in one accessible static page.
+4. Connect sandboxed artifact messages to one exact-source, exact-origin,
+   schema/size/time-bounded bridge. Attach only Folio read, search, and outgoing
+   traversal by default; deny and audit every other operation.
+5. Mark local mode as unauthenticated and refuse hosted-mode startup until a
+   verified authentication adapter supplies tenant and actor context.
+6. Exercise public MCP, UI, browser, cross-tenant, adversarial, restart, and
+   fresh-volume Docker paths twice where practical. Record exact results and
+   blockers in [release evidence](RELEASE-EVIDENCE.md).
+
+Phase 8 does not add credentials, auth, sharing, remote attachments, vector
+search, regex, incoming traversal, or a general frontend framework. Passing the
+phase proves a bounded local vertical slice, not enterprise readiness.
+
+Implementation evidence, 2026-09-05:
+
+- two final `make check` runs passed Ruff, formatting, mypy, 26 tests, real
+  Chrome UI/adversarial coverage, and 83.99% branch-aware coverage;
+- two container builds passed; isolated fresh-volume Compose runs on ports
+  18010/18011 passed the public MCP/UI/bridge/renderer and restart flow;
+- the final renderer image read only through MCP, had no storage mount, and
+  retained CSP/sandbox headers on successful and rejected artifact routes; and
+- exact commands, environment, observed false start, and remaining blockers are
+  recorded in [release evidence](RELEASE-EVIDENCE.md).
+
 ## Ship gate
 
 Nothing is called ready to ship until the implementation has a focused test
 suite, the complete matrix above passes twice from fresh Docker state, the final
 diff has been reviewed for scope and security, and the exact commands/results
 are recorded in the commit or release notes.
+
+“Ready to ship” here means the documented local milestone only. A hosted or
+enterprise-ready claim additionally requires the blockers in
+`docs/RELEASE-EVIDENCE.md` to be resolved by later bounded decisions and tests.
 
 ## Deferred
 

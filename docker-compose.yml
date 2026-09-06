@@ -8,6 +8,8 @@ services:
       FOLIO_BLOB_ROOT: /data/blobs
       FOLIO_TENANT_ID: ${FOLIO_TENANT_ID:-hyperset-v0}
       FOLIO_ACTOR: ${FOLIO_ACTOR:-hyperset}
+      FOLIO_DEPLOYMENT_MODE: local
+      FOLIO_CONTROL_ORIGIN: http://127.0.0.1:${FOLIO_HOST_PORT:-8000}
       FOLIO_RENDER_ORIGIN: http://127.0.0.1:${FOLIO_RENDER_HOST_PORT:-8001}
     volumes:
       - folio_data:/data
@@ -32,13 +34,9 @@ services:
     ports:
       - "127.0.0.1:${FOLIO_RENDER_HOST_PORT:-8001}:8001"
     environment:
-      FOLIO_DB_PATH: /data/folio.db
-      FOLIO_BLOB_ROOT: /data/blobs
-      FOLIO_TENANT_ID: ${FOLIO_TENANT_ID:-hyperset-v0}
-      FOLIO_ACTOR: ${FOLIO_ACTOR:-hyperset}
+      FOLIO_DEPLOYMENT_MODE: local
+      FOLIO_MCP_URL: http://folio:8000/mcp
       FOLIO_CONTROL_ORIGIN: http://127.0.0.1:${FOLIO_HOST_PORT:-8000}
-    volumes:
-      - folio_data:/data:ro
     init: true
     read_only: true
     tmpfs:

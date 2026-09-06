@@ -21,6 +21,7 @@ Install the locked development environment and run the same checks used by CI:
 make install
 make check
 make test-e2e
+make browser-test
 make docker-build
 make docker-up
 make docker-test

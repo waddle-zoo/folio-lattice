@@ -6,8 +6,8 @@ from urllib.parse import parse_qs, quote
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.types import Receive, Scope, Send
 
+from .public_mcp import PublicMcpError, ToolCaller
 from .sandbox import sandbox_headers
-from .service import FolioError, FolioLattice
 
 RENDERABLE_MEDIA_TYPES = {
     "application/javascript",
@@ -40,13 +40,10 @@ def _wrapper(artifact_id: str, version_id: str, media_type: str) -> str:
 
 
 class RendererApp:
-    """Read-only, origin-isolated renderer for stored web artifacts."""
+    """Origin-isolated renderer that reads only through public MCP."""
 
-    def __init__(self, service: FolioLattice, *, tenant_id: str, control_origin: str):
-        if not service.read_only:
-            raise ValueError("renderer requires a read-only FolioLattice")
-        self.service = service
-        self.tenant_id = tenant_id
+    def __init__(self, caller: ToolCaller, *, control_origin: str):
+        self.caller = caller
         self.headers = sandbox_headers(control_origin)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -63,21 +60,20 @@ class RendererApp:
             return
         path = scope["path"]
         if path == "/health":
-            health = self.service.health()
-            await JSONResponse(health, status_code=200 if health["ready"] else 503)(
-                scope, receive, send
-            )
+            ready = await self.caller.ready()
+            health = {"status": "ok" if ready else "not_ready", "ready": ready}
+            await JSONResponse(health, status_code=200 if ready else 503)(scope, receive, send)
             return
         if scope["method"] != "GET":
-            await JSONResponse({"error": "method not allowed"}, status_code=405)(
-                scope, receive, send
-            )
+            await JSONResponse(
+                {"error": "method not allowed"}, status_code=405, headers=self.headers
+            )(scope, receive, send)
             return
         try:
             if path.startswith("/render/"):
                 artifact_id = path.removeprefix("/render/")
                 if not artifact_id or "/" in artifact_id:
-                    raise FolioError("artifact not found")
+                    raise PublicMcpError("artifact not found")
                 query = parse_qs(scope["query_string"].decode())
                 version_id = query.get("version_id", [None])[0]
                 await self._render(scope, receive, send, artifact_id, version_id)
@@ -85,10 +81,10 @@ class RendererApp:
             if path.startswith("/content/"):
                 parts = path.split("/")
                 if len(parts) != 4 or not parts[2] or not parts[3]:
-                    raise FolioError("artifact not found")
+                    raise PublicMcpError("artifact not found")
                 await self._content(scope, receive, send, parts[2], parts[3])
                 return
-        except FolioError as exc:
+        except PublicMcpError as exc:
             status = 404 if str(exc).endswith("not found") else 400
             await JSONResponse({"error": str(exc)}, status_code=status, headers=self.headers)(
                 scope, receive, send
@@ -106,7 +102,10 @@ class RendererApp:
         artifact_id: str,
         version_id: str | None,
     ) -> None:
-        read = self.service.read_artifact(self.tenant_id, artifact_id, version_id)
+        arguments = {"artifact_id": artifact_id}
+        if version_id is not None:
+            arguments["version_id"] = version_id
+        read = await self.caller.call("artifact_read", arguments)
         resolved_version = read["version"]
         media_type = _base_media_type(resolved_version["media_type"])
         if media_type not in RENDERABLE_MEDIA_TYPES:
@@ -133,10 +132,12 @@ class RendererApp:
         artifact_id: str,
         version_id: str,
     ) -> None:
-        read = self.service.read_artifact(self.tenant_id, artifact_id, version_id)
+        read = await self.caller.call(
+            "artifact_read", {"artifact_id": artifact_id, "version_id": version_id}
+        )
         media_type = _base_media_type(read["version"]["media_type"])
         if media_type not in {"application/javascript", "text/css", "text/javascript"}:
-            raise FolioError("artifact content is not a render resource")
+            raise PublicMcpError("artifact content is not a render resource")
         await Response(content=read["text"].encode(), media_type=media_type, headers=self.headers)(
             scope, receive, send
         )

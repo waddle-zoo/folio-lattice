@@ -432,17 +432,38 @@ class FolioLattice:
     def read_artifact(
         self, tenant_id: str, artifact_id: str, version_id: str | None = None
     ) -> dict[str, Any]:
+        artifact = self.get_artifact(tenant_id, artifact_id)
         if version_id is None:
-            version_id = self.get_artifact(tenant_id, artifact_id)["current_version_id"]
+            version_id = artifact["current_version_id"]
         metadata = self.version_metadata(tenant_id, version_id)
         if metadata["artifact_id"] != artifact_id:
             raise FolioError("version does not belong to artifact")
         data = self._version_bytes(tenant_id, version_id)
-        result = {"version": metadata, "content_base64": base64.b64encode(data).decode("ascii")}
+        result = {
+            "artifact": artifact,
+            "version": metadata,
+            "chunks": self.chunk_descriptors(tenant_id, artifact_id, version_id),
+            "content_base64": base64.b64encode(data).decode("ascii"),
+        }
         text = self._text_for(data, metadata["media_type"])
         if text is not None:
             result["text"] = text
         return result
+
+    def chunk_descriptors(
+        self, tenant_id: str, artifact_id: str, version_id: str
+    ) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT id, artifact_id, version_id, ordinal, start_offset, end_offset
+                FROM chunks
+                WHERE tenant_id = ? AND artifact_id = ? AND version_id = ?
+                ORDER BY ordinal
+                """,
+                (tenant_id, artifact_id, version_id),
+            ).fetchall()
+        return [{**dict(row), "offset_unit": "unicode_code_points"} for row in rows]
 
     def read_chunk(self, tenant_id: str, chunk_id: str) -> dict[str, Any]:
         with self.connect() as db:

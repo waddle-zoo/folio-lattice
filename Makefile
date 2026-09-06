@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test test-unit test-e2e check docker-build docker-up docker-test docker-down
+.PHONY: install format lint typecheck test test-unit test-e2e browser-test check docker-build docker-up docker-test docker-down
 
 install:
 	uv sync --dev
@@ -21,6 +21,9 @@ test-unit:
 
 test-e2e:
 	uv run pytest -q tests/test_e2e.py tests/test_browser_e2e.py
+
+browser-test:
+	uv run pytest -q tests/test_browser_e2e.py
 
 check: lint typecheck test
 

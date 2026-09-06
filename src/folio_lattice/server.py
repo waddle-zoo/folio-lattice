@@ -11,8 +11,10 @@ import uvicorn
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .bridge import AttachedMcpBridge
 from .inspection import InspectionApp
 from .mcp_protocol import build_mcp_server
+from .public_mcp import HttpMcpClient
 from .renderer import RendererApp
 from .service import DEFAULT_MAX_ARTIFACT_BYTES, FolioLattice
 
@@ -29,9 +31,17 @@ class Settings:
     max_request_bytes: int
     control_origin: str
     render_origin: str
+    mcp_url: str | None
+    deployment_mode: str
+    bridge_timeout_seconds: float
 
     @classmethod
     def from_env(cls) -> Settings:
+        deployment_mode = os.environ.get("FOLIO_DEPLOYMENT_MODE", "local").strip().lower()
+        if deployment_mode not in {"local", "hosted"}:
+            raise ValueError("FOLIO_DEPLOYMENT_MODE must be local or hosted")
+        if deployment_mode == "hosted":
+            raise ValueError("hosted mode requires an authentication adapter; none is implemented")
         tenant_id = os.environ.get("FOLIO_TENANT_ID", "dev")
         actor = os.environ.get("FOLIO_ACTOR", "folio-client")
         if not tenant_id.strip() or not actor.strip():
@@ -47,12 +57,22 @@ class Settings:
             max_request_bytes=_positive_env("FOLIO_MAX_REQUEST_BYTES", DEFAULT_MAX_REQUEST_BYTES),
             control_origin=_origin_env("FOLIO_CONTROL_ORIGIN", "http://127.0.0.1:8000"),
             render_origin=_origin_env("FOLIO_RENDER_ORIGIN", "http://127.0.0.1:8001"),
+            mcp_url=_optional_mcp_url_env("FOLIO_MCP_URL"),
+            deployment_mode=deployment_mode,
+            bridge_timeout_seconds=_positive_float_env("FOLIO_BRIDGE_TIMEOUT_SECONDS", 5),
         )
 
 
 def _positive_env(name: str, default: int) -> int:
     value = int(os.environ.get(name, str(default)))
     if value < 1:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    value = float(os.environ.get(name, str(default)))
+    if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
 
@@ -81,13 +101,43 @@ def _origin_env(name: str, default: str) -> str:
     return f"{parsed.scheme}://{bracketed_host}{f':{port}' if port is not None else ''}"
 
 
+def _optional_mcp_url_env(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != "/mcp"
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"{name} must be an HTTP URL ending in /mcp without credentials")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an HTTP URL ending in /mcp without credentials") from exc
+    return value
+
+
 class FolioHttpApp:
     """Add readiness and inspection routes to the SDK's MCP application."""
 
-    def __init__(self, app: ASGIApp, service: FolioLattice, inspection: InspectionApp):
+    def __init__(
+        self,
+        app: ASGIApp,
+        service: FolioLattice,
+        inspection: InspectionApp,
+        *,
+        deployment_mode: str,
+    ):
         self.app = app
         self.service = service
         self.inspection = inspection
+        self.deployment_mode = deployment_mode
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -98,6 +148,12 @@ class FolioHttpApp:
             return
         if scope["path"] == "/health":
             health = self.service.health()
+            health.update(
+                {
+                    "deployment_mode": self.deployment_mode,
+                    "authentication": "none-local-development",
+                }
+            )
             status = 200 if health["ready"] else 503
             await JSONResponse(health, status_code=status)(scope, receive, send)
             return
@@ -105,8 +161,7 @@ class FolioHttpApp:
         if (
             path == "/"
             or path.startswith("/inspect/")
-            or path.startswith("/api/artifacts/")
-            or path in {"/ui.css", "/ui.js"}
+            or path in {"/api/mcp", "/api/bridge", "/ui.css", "/ui.js"}
         ):
             await self.inspection(scope, receive, send)
             return
@@ -134,27 +189,38 @@ def run_http(host: str, port: int) -> None:
         max_request_body_size=settings.max_request_bytes,
         host=host,
     )
+    connect_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    caller = HttpMcpClient(
+        settings.mcp_url or f"http://{connect_host}:{port}/mcp",
+        max_result_bytes=settings.max_request_bytes,
+    )
     inspection = InspectionApp(
-        service,
-        tenant_id=settings.tenant_id,
-        actor=settings.actor,
+        caller,
+        control_origin=settings.control_origin,
         render_origin=settings.render_origin,
         max_request_bytes=settings.max_request_bytes,
+        bridge=AttachedMcpBridge(caller, timeout_seconds=settings.bridge_timeout_seconds),
     )
-    uvicorn.run(FolioHttpApp(app, service, inspection), host=host, port=port)
+    uvicorn.run(
+        FolioHttpApp(
+            app,
+            service,
+            inspection,
+            deployment_mode=settings.deployment_mode,
+        ),
+        host=host,
+        port=port,
+    )
 
 
 def run_renderer(host: str, port: int) -> None:
     settings = Settings.from_env()
-    service = FolioLattice(
-        settings.db_path,
-        settings.blob_root,
-        max_artifact_bytes=settings.max_artifact_bytes,
-        read_only=True,
+    caller = HttpMcpClient(
+        settings.mcp_url or "http://127.0.0.1:8000/mcp",
+        max_result_bytes=settings.max_request_bytes,
     )
     app = RendererApp(
-        service,
-        tenant_id=settings.tenant_id,
+        caller,
         control_origin=settings.control_origin,
     )
     uvicorn.run(app, host=host, port=port)

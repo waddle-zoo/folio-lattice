@@ -35,11 +35,13 @@ Start both loopback-bound processes with:
 make docker-up
 ```
 
-Open `http://127.0.0.1:8000`, paste an artifact identifier created through MCP,
-and inspect its current text, versions, outgoing graph, and isolated preview.
-Text saves create immutable versions with an optimistic parent check. The
-renderer listens separately on `http://127.0.0.1:8001`; it is an iframe target,
-not a public authoring API.
+Open `http://127.0.0.1:8000` to create or upload an artifact, search or literally
+grep indexed content, read complete versions and chunks, create and navigate
+outgoing graph links, inspect history, edit text with an optimistic parent, and
+open isolated HTML/JavaScript/CSS previews. The page and renderer reach state
+through the same public MCP tools as external clients. The renderer listens
+separately on `http://127.0.0.1:8001`; it is an iframe target, not a public
+authoring API, and it receives no database or blob mount.
 
 `FOLIO_RENDER_ORIGIN` tells the control process where browsers reach the
 renderer. `FOLIO_CONTROL_ORIGIN` tells the renderer which exact origin may frame
@@ -47,10 +49,22 @@ artifacts. Render responses enforce an opaque sandbox and deny direct network
 connections. Keep both defaults on loopback: v0 still has no product auth or
 sharing layer.
 
+Sandboxed artifacts may request only the default attached Folio read, indexed
+search, and outgoing-traversal tools. The control page and server independently
+validate the message source/origin, schema, attachment, tool, size, and timeout;
+decisions are audit logged without arguments or content. This is not a generic
+MCP proxy and carries no artifact credential.
+
 HTTP and stdio derive `FOLIO_TENANT_ID` and `FOLIO_ACTOR` from process
 configuration. Clients cannot override either value through tool arguments.
 The Docker deployment is a local development loop bound to loopback; product
 credentials and sharing policy are deliberately deferred.
+
+`FOLIO_DEPLOYMENT_MODE=hosted` intentionally refuses startup because no
+authentication adapter exists. The local banner and health response say that
+the service is unauthenticated local development. See
+[`docs/RELEASE-EVIDENCE.md`](docs/RELEASE-EVIDENCE.md) before making any
+readiness claim.
 
 The [contribution guide](CONTRIBUTING.md), [security policy](SECURITY.md), and
 [enterprise adoption notes](docs/enterprise-adoption.md) describe the evidence

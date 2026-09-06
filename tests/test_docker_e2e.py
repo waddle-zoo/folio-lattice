@@ -9,7 +9,8 @@ import os
 import subprocess
 import time
 from typing import Any
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from hyperset_consumer import exercise
 from mcp import Client
@@ -40,6 +41,17 @@ async def create_html(base_url: str) -> dict[str, Any]:
         return response.structured_content
 
 
+def post_json(url: str, payload: dict[str, Any], origin: str) -> Any:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "Origin": origin},
+        method="POST",
+    )
+    with urlopen(request, timeout=10) as response:
+        return json.loads(response.read())
+
+
 def wait_ready(base_url: str) -> None:
     for _ in range(60):
         try:
@@ -60,7 +72,21 @@ def main() -> None:
     created = asyncio.run(exercise(base_url))
     html = asyncio.run(create_html(base_url))
 
-    subprocess.run(["docker", "compose", "restart", "folio", "renderer"], check=True, timeout=30)
+    compose = ["docker", "compose"]
+    project = os.environ.get("FOLIO_COMPOSE_PROJECT")
+    if project:
+        compose.extend(["-p", project])
+    renderer_id = subprocess.run(
+        [*compose, "ps", "-q", "renderer"], check=True, text=True, capture_output=True
+    ).stdout.strip()
+    inspected_container = json.loads(
+        subprocess.run(
+            ["docker", "inspect", renderer_id], check=True, text=True, capture_output=True
+        ).stdout
+    )[0]
+    assert inspected_container["Mounts"] == []
+
+    subprocess.run([*compose, "restart", "folio", "renderer"], check=True, timeout=30)
     wait_ready(base_url)
     wait_ready(render_url)
 
@@ -68,10 +94,34 @@ def main() -> None:
     assert persisted["version"]["id"] == created["version_id"]
     assert persisted["version"]["blob_hash"] == created["blob_hash"]
     assert persisted["text"] == "Hyperset revised evidence source graph"
-    with urlopen(f"{base_url}/api/artifacts/{created['artifact_id']}") as response:
-        inspected = json.loads(response.read())
-    assert inspected["read"]["version"]["id"] == created["version_id"]
-    assert inspected["graph"]
+    inspected = post_json(
+        f"{base_url}/api/mcp",
+        {"tool": "artifact_read", "arguments": {"artifact_id": created["artifact_id"]}},
+        base_url,
+    )
+    assert inspected["version"]["id"] == created["version_id"]
+    assert inspected["chunks"]
+    graph = post_json(
+        f"{base_url}/api/mcp",
+        {
+            "tool": "graph_traverse",
+            "arguments": {"start_artifact_id": created["artifact_id"]},
+        },
+        base_url,
+    )
+    assert graph
+    bridged = post_json(
+        f"{base_url}/api/bridge",
+        {
+            "request_id": "docker-bridge",
+            "artifact_id": created["artifact_id"],
+            "attachment": "folio-lattice",
+            "tool": "artifact_search",
+            "arguments": {"query": "Hyperset"},
+        },
+        base_url,
+    )
+    assert bridged["result"]
 
     html_id = html["artifact"]["id"]
     with urlopen(f"{render_url}/render/{html_id}") as response:
@@ -80,9 +130,21 @@ def main() -> None:
     assert "Docker renderer" in rendered
     assert "sandbox allow-scripts" in policy
     assert "connect-src 'none'" in policy
+    try:
+        urlopen(Request(f"{render_url}/render/{html_id}", data=b"", method="POST"))
+        raise AssertionError("renderer accepted POST")
+    except HTTPError as error:
+        assert error.code == 405
+        assert "sandbox allow-scripts" in error.headers["Content-Security-Policy"]
     print(
         json.dumps(
-            {"status": "ok", "persistence": "verified", "renderer": "verified"},
+            {
+                "status": "ok",
+                "persistence": "verified",
+                "public_ui_gateway": "verified",
+                "attached_bridge": "verified",
+                "renderer": "verified_without_storage_mount",
+            },
             sort_keys=True,
         )
     )

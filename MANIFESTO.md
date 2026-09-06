@@ -97,6 +97,16 @@ have room for explicit grants, but selective teammate sharing and public sharing
 are v2 product capabilities. An early prototype that is reachable without full
 authorization is development scaffolding, never the intended security posture.
 
+### Claims follow public-path evidence
+
+Readiness is behavior proved through the interfaces people and agents actually
+use. UI, renderer, consumer, isolation, and persistence claims require
+end-to-end evidence through public MCP and browser contracts; private service or
+database access is not a substitute. Security controls need adversarial deny
+tests as well as successful examples. A local prototype without verified
+identity must fail closed in hosted mode and must not be described as
+enterprise-ready, even when its storage and sandbox boundaries are sound.
+
 ## Boundaries for the first phase
 
 The first phase deliberately excludes:

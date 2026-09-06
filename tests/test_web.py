@@ -1,15 +1,96 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import io
 import json
+import logging
 import os
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+from mcp import Client
+
+from folio_lattice.bridge import AttachedMcpBridge, validate_bridge_request
 from folio_lattice.inspection import InspectionApp
+from folio_lattice.mcp_protocol import build_mcp_server
+from folio_lattice.public_mcp import HttpMcpClient, PublicMcpError
 from folio_lattice.renderer import RendererApp
-from folio_lattice.server import _origin_env
+from folio_lattice.server import Settings, _optional_mcp_url_env, _origin_env
 from folio_lattice.service import FolioLattice
+
+CONTROL_ORIGIN = "http://127.0.0.1:8000"
+RENDER_ORIGIN = "http://127.0.0.1:8001"
+
+
+class LocalMcpCaller:
+    def __init__(self, server: Any):
+        self.server = server
+
+    async def call(self, tool: str, arguments: Mapping[str, Any]) -> Any:
+        async with Client(self.server) as client:
+            response = await client.call_tool(tool, dict(arguments))
+        if response.is_error:
+            raise PublicMcpError(response.content[0].text)
+        value = response.structured_content
+        assert value is not None
+        return value.get("result", value)
+
+    async def ready(self) -> bool:
+        return True
+
+
+class FixedCaller:
+    def __init__(self, value: Any, *, delay: float = 0):
+        self.value = value
+        self.delay = delay
+
+    async def call(self, tool: str, arguments: Mapping[str, Any]) -> Any:
+        await asyncio.sleep(self.delay)
+        return self.value
+
+    async def ready(self) -> bool:
+        return True
+
+
+class FakeSdkClient:
+    def __init__(
+        self,
+        result: Any = None,
+        *,
+        tools: list[str] | None = None,
+        delay: float = 0,
+        failure: Exception | None = None,
+    ):
+        self.result = result
+        self.tools = tools or []
+        self.delay = delay
+        self.failure = failure
+
+    async def __aenter__(self) -> FakeSdkClient:
+        if self.failure is not None and self.delay == 0:
+            raise self.failure
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def call_tool(self, *args: object, **kwargs: object) -> Any:
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.failure is not None:
+            raise self.failure
+        return self.result
+
+    async def list_tools(self) -> Any:
+        if self.failure is not None:
+            raise self.failure
+        return SimpleNamespace(tools=[SimpleNamespace(name=name) for name in self.tools])
 
 
 async def call(
@@ -19,6 +100,7 @@ async def call(
     *,
     body: bytes = b"",
     content_type: str | None = None,
+    origin: str | None = None,
     query: str = "",
 ) -> tuple[int, dict[str, str], bytes]:
     request = {"type": "http.request", "body": body, "more_body": False}
@@ -30,7 +112,11 @@ async def call(
     async def send(message: dict[str, Any]) -> None:
         sent.append(message)
 
-    headers = [] if content_type is None else [(b"content-type", content_type.encode())]
+    headers = []
+    if content_type is not None:
+        headers.append((b"content-type", content_type.encode()))
+    if origin is not None:
+        headers.append((b"origin", origin.encode()))
     scope = {
         "type": "http",
         "asgi": {"version": "3.0"},
@@ -53,19 +139,20 @@ async def call(
     return start["status"], response_headers, response_body
 
 
+def request(tool: str, arguments: dict[str, Any]) -> bytes:
+    return json.dumps({"tool": tool, "arguments": arguments}).encode()
+
+
 class WebAppTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         self.service = FolioLattice(root / "folio.db", root / "blobs")
         self.html = self.service.create_artifact(
-            tenant_id="web",
-            name="page.html",
-            data=b"<h1>Page</h1>",
-            media_type="text/html",
+            tenant_id="web", name="page.html", data=b"<h1>Page</h1>", media_type="text/html"
         )
         self.target = self.service.create_artifact(
-            tenant_id="web", name="target.txt", data=b"target"
+            tenant_id="web", name="target.txt", data=b"target marker", media_type="text/plain"
         )
         self.css = self.service.create_artifact(
             tenant_id="web", name="style.css", data=b"body{color:red}", media_type="text/css"
@@ -77,121 +164,262 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             media_type="application/javascript",
         )
         self.binary = self.service.create_artifact(
-            tenant_id="web",
-            name="blob.bin",
-            data=b"\x00",
-            media_type="application/octet-stream",
+            tenant_id="web", name="blob.bin", data=b"\x00", media_type="application/octet-stream"
         )
         self.service.link(
             "web", self.html["artifact"]["id"], self.target["artifact"]["id"], "references"
         )
+        server = build_mcp_server(self.service, tenant_id="web", actor="web-user")
+        self.caller = LocalMcpCaller(server)
         self.inspection = InspectionApp(
-            self.service,
-            tenant_id="web",
-            actor="web-user",
-            render_origin="http://127.0.0.1:8001",
+            self.caller,
+            control_origin=CONTROL_ORIGIN,
+            render_origin=RENDER_ORIGIN,
             max_request_bytes=1000,
         )
-        self.reader = FolioLattice(root / "folio.db", root / "blobs", read_only=True)
-        self.renderer = RendererApp(
-            self.reader, tenant_id="web", control_origin="http://127.0.0.1:8000"
-        )
+        self.renderer = RendererApp(self.caller, control_origin=CONTROL_ORIGIN)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    async def test_inspection_read_and_edit(self) -> None:
-        artifact_id = self.html["artifact"]["id"]
-        version_id = self.html["version"]["id"]
+    async def test_static_ui_is_bounded_accessible_and_strictly_sandboxed(self) -> None:
         for path, expected in (
-            ("/", b"Folio Lattice inspection"),
-            (f"/inspect/{artifact_id}", b'sandbox="allow-scripts"'),
-            ("/ui.css", b"color-scheme"),
-            ("/ui.js", b"loadArtifact"),
+            ("/", b"Unauthenticated local development"),
+            (f"/inspect/{self.html['artifact']['id']}", b'sandbox="allow-scripts"'),
+            ("/ui.css", b"focus-visible"),
+            ("/ui.js", b"event.origin !== 'null' || event.source !== frame.contentWindow"),
         ):
-            status, _, body = await call(self.inspection, "GET", path)
+            status, headers, body = await call(self.inspection, "GET", path)
             self.assertEqual(status, 200)
             self.assertIn(expected, body)
+            self.assertEqual(headers["cache-control"], "no-store")
+        _, headers, page = await call(self.inspection, "GET", "/")
+        self.assertIn(f"frame-src {RENDER_ORIGIN}", headers["content-security-policy"])
+        self.assertNotIn(b"allow-same-origin", page)
+        for marker in (b'role="status"', b'role="alert"', b'aria-busy="false"', b"Literal grep"):
+            self.assertIn(marker, page)
 
-        status, _, body = await call(self.inspection, "GET", f"/api/artifacts/{artifact_id}")
-        self.assertEqual(status, 200)
-        state = json.loads(body)
-        self.assertEqual(state["read"]["text"], "<h1>Page</h1>")
-        self.assertEqual(state["graph"][0]["target_artifact_id"], self.target["artifact"]["id"])
-
-        payload = json.dumps(
-            {
-                "text": "<h1>Edited</h1>",
-                "parent_version_id": version_id,
-                "media_type": "text/html",
-                "reason": "unit edit",
-            }
-        ).encode()
+    async def test_gateway_reads_writes_and_reports_stale_conflict(self) -> None:
+        artifact_id = self.html["artifact"]["id"]
+        version_id = self.html["version"]["id"]
         status, _, body = await call(
             self.inspection,
             "POST",
-            f"/api/artifacts/{artifact_id}/versions",
-            body=payload,
-            content_type="application/json; charset=utf-8",
+            "/api/mcp",
+            body=request("artifact_read", {"artifact_id": artifact_id}),
+            content_type="application/json",
+            origin=CONTROL_ORIGIN,
         )
-        self.assertEqual(status, 201)
-        written = json.loads(body)
-        self.assertEqual(written["parent_version_id"], version_id)
-        self.assertEqual(written["actor"], "web-user")
-        self.assertEqual(len(self.service.versions("web", artifact_id)), 2)
+        self.assertEqual(status, 200)
+        read = json.loads(body)
+        self.assertEqual(read["text"], "<h1>Page</h1>")
+        self.assertEqual(read["artifact"]["id"], artifact_id)
+        self.assertTrue(read["chunks"])
 
+        arguments = {
+            "artifact_id": artifact_id,
+            "parent_version_id": version_id,
+            "content_base64": base64.b64encode(b"<h1>Edited</h1>").decode(),
+            "media_type": "text/html",
+            "reason": "unit edit",
+            "source_context": {"interface": "inspection-ui"},
+        }
+        status, _, body = await call(
+            self.inspection,
+            "POST",
+            "/api/mcp",
+            body=request("artifact_write", arguments),
+            content_type="application/json; charset=utf-8",
+            origin=CONTROL_ORIGIN,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["actor"], "web-user")
         status, _, _ = await call(
             self.inspection,
             "POST",
-            f"/api/artifacts/{artifact_id}/versions",
-            body=payload,
+            "/api/mcp",
+            body=request("artifact_write", arguments),
             content_type="application/json",
+            origin=CONTROL_ORIGIN,
         )
         self.assertEqual(status, 409)
+        self.assertEqual(len(self.service.versions("web", artifact_id)), 2)
 
-    async def test_inspection_rejects_bad_requests(self) -> None:
+    async def test_gateway_and_bridge_fail_closed_and_audit_without_content(self) -> None:
         artifact_id = self.html["artifact"]["id"]
-        endpoint = f"/api/artifacts/{artifact_id}/versions"
-        cases = [
-            (b"{}", None, 400),
-            (b"not-json", "application/json", 400),
-            (b"[]", "application/json", 400),
-            (b"x" * 1001, "application/json", 413),
-        ]
-        for body, content_type, expected in cases:
+        for body, content_type, origin, expected in (
+            (b"{}", "application/json", CONTROL_ORIGIN, 400),
+            (b"not-json", "application/json", CONTROL_ORIGIN, 400),
+            (b"[]", "application/json", CONTROL_ORIGIN, 400),
+            (b"x" * 1001, "application/json", CONTROL_ORIGIN, 413),
+            (request("artifact_read", {"artifact_id": artifact_id}), None, CONTROL_ORIGIN, 400),
+            (request("artifact_read", {"artifact_id": artifact_id}), "application/json", None, 403),
+            (request("secret_tool", {}), "application/json", CONTROL_ORIGIN, 400),
+        ):
             status, _, _ = await call(
                 self.inspection,
                 "POST",
-                endpoint,
+                "/api/mcp",
                 body=body,
                 content_type=content_type,
+                origin=origin,
             )
             self.assertEqual(status, expected)
 
-        status, _, _ = await call(self.inspection, "GET", "/api/artifacts/art_missing")
-        self.assertEqual(status, 404)
-        status, _, _ = await call(self.inspection, "GET", "/missing")
-        self.assertEqual(status, 404)
-
-        binary_id = self.binary["artifact"]["id"]
-        binary_payload = json.dumps(
-            {
-                "text": "replacement",
-                "parent_version_id": self.binary["version"]["id"],
-                "media_type": "text/plain",
-                "reason": "must fail",
-            }
-        ).encode()
-        status, _, _ = await call(
-            self.inspection,
+        stream = io.StringIO()
+        logger = logging.Logger("bridge-test")
+        logger.addHandler(logging.StreamHandler(stream))
+        bridge = AttachedMcpBridge(self.caller, logger=logger)
+        app = InspectionApp(
+            self.caller,
+            control_origin=CONTROL_ORIGIN,
+            render_origin=RENDER_ORIGIN,
+            max_request_bytes=1000,
+            bridge=bridge,
+        )
+        allowed = {
+            "request_id": "req-1",
+            "artifact_id": artifact_id,
+            "attachment": "folio-lattice",
+            "tool": "artifact_search",
+            "arguments": {"query": "target marker", "limit": 10},
+        }
+        status, _, body = await call(
+            app,
             "POST",
-            f"/api/artifacts/{binary_id}/versions",
-            body=binary_payload,
+            "/api/bridge",
+            body=json.dumps(allowed).encode(),
             content_type="application/json",
+            origin=CONTROL_ORIGIN,
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["result"])
+
+        denied = {**allowed, "request_id": "req-2", "tool": "artifact_write", "arguments": {}}
+        status, _, _ = await call(
+            app,
+            "POST",
+            "/api/bridge",
+            body=json.dumps(denied).encode(),
+            content_type="application/json",
+            origin=CONTROL_ORIGIN,
+        )
+        self.assertEqual(status, 403)
+        log = stream.getvalue()
+        self.assertIn('"decision":"allow"', log)
+        self.assertIn('"decision":"deny"', log)
+        self.assertNotIn("target marker", log)
+
+        malformed = {**allowed, "tenant_id": "other"}
+        status, _, _ = await call(
+            app,
+            "POST",
+            "/api/bridge",
+            body=json.dumps(malformed).encode(),
+            content_type="application/json",
+            origin=CONTROL_ORIGIN,
         )
         self.assertEqual(status, 400)
+        status, _, _ = await call(
+            app,
+            "POST",
+            "/api/bridge",
+            body=json.dumps(allowed).encode(),
+            content_type="application/json",
+            origin="http://127.0.0.1.evil:8000",
+        )
+        self.assertEqual(status, 403)
 
-    async def test_renderer_serves_only_safe_web_types(self) -> None:
+    async def test_bridge_bounds_slow_and_oversized_results(self) -> None:
+        base = {
+            "request_id": "r",
+            "artifact_id": "art_x",
+            "attachment": "folio-lattice",
+            "tool": "artifact_search",
+            "arguments": {"query": "x"},
+        }
+        request_value = validate_bridge_request(base)
+        with self.assertRaisesRegex(PublicMcpError, "timed out"):
+            await AttachedMcpBridge(FixedCaller([], delay=0.05), timeout_seconds=0.001).call(
+                request_value
+            )
+        with self.assertRaisesRegex(PublicMcpError, "size limit"):
+            await AttachedMcpBridge(FixedCaller("x" * 100), max_result_bytes=10).call(request_value)
+        oversized = {**base, "arguments": {"query": "x" * (32 * 1024)}}
+        with self.assertRaisesRegex(Exception, "too large"):
+            validate_bridge_request(oversized)
+
+    async def test_http_mcp_adapter_bounds_errors_and_readiness(self) -> None:
+        successful = SimpleNamespace(
+            is_error=False,
+            content=[],
+            structured_content={"result": [{"id": "one"}]},
+        )
+        with patch("folio_lattice.public_mcp.Client", return_value=FakeSdkClient(successful)):
+            caller = HttpMcpClient("http://127.0.0.1:1/mcp")
+            self.assertEqual(
+                await caller.call("artifact_search", {"query": "one"}), [{"id": "one"}]
+            )
+
+        tool_error = SimpleNamespace(
+            is_error=True,
+            content=[SimpleNamespace(type="text", text="bounded tool failure")],
+            structured_content=None,
+        )
+        with patch("folio_lattice.public_mcp.Client", return_value=FakeSdkClient(tool_error)):
+            with self.assertRaisesRegex(PublicMcpError, "bounded tool failure"):
+                await caller.call("artifact_read", {"artifact_id": "art_x"})
+
+        no_result = SimpleNamespace(is_error=False, content=[], structured_content=None)
+        with patch("folio_lattice.public_mcp.Client", return_value=FakeSdkClient(no_result)):
+            with self.assertRaisesRegex(PublicMcpError, "no structured result"):
+                await caller.call("artifact_search", {"query": "one"})
+
+        invalid_result = SimpleNamespace(
+            is_error=False, content=[], structured_content={"bad": {1, 2}}
+        )
+        with patch("folio_lattice.public_mcp.Client", return_value=FakeSdkClient(invalid_result)):
+            with self.assertRaisesRegex(PublicMcpError, "invalid structured result"):
+                await caller.call("artifact_search", {"query": "one"})
+
+        large_result = SimpleNamespace(
+            is_error=False, content=[], structured_content={"value": "x" * 100}
+        )
+        with patch("folio_lattice.public_mcp.Client", return_value=FakeSdkClient(large_result)):
+            with self.assertRaisesRegex(PublicMcpError, "allowed size"):
+                await HttpMcpClient("http://127.0.0.1:1/mcp", max_result_bytes=10).call(
+                    "artifact_search", {"query": "one"}
+                )
+
+        with patch(
+            "folio_lattice.public_mcp.Client",
+            return_value=FakeSdkClient(successful, delay=0.05),
+        ):
+            with self.assertRaisesRegex(PublicMcpError, "timed out"):
+                await HttpMcpClient("http://127.0.0.1:1/mcp", timeout_seconds=0.001).call(
+                    "artifact_search", {"query": "one"}
+                )
+
+        with patch(
+            "folio_lattice.public_mcp.Client",
+            return_value=FakeSdkClient(failure=OSError("private detail")),
+        ):
+            with self.assertRaisesRegex(PublicMcpError, "unavailable") as unavailable:
+                await caller.call("artifact_search", {"query": "one"})
+            self.assertNotIn("private detail", str(unavailable.exception))
+            self.assertFalse(await caller.ready())
+
+        with patch(
+            "folio_lattice.public_mcp.Client",
+            return_value=FakeSdkClient(tools=["artifact_read"]),
+        ):
+            self.assertTrue(await caller.ready())
+        with self.assertRaisesRegex(PublicMcpError, "not part"):
+            await caller.call("unknown", {})
+        with self.assertRaisesRegex(ValueError, "positive"):
+            HttpMcpClient("http://127.0.0.1:1/mcp", timeout_seconds=0)
+
+    async def test_renderer_serves_only_safe_web_types_through_caller(self) -> None:
         html_id = self.html["artifact"]["id"]
         status, headers, body = await call(self.renderer, "GET", f"/render/{html_id}")
         self.assertEqual(status, 200)
@@ -214,28 +442,17 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         status, _, _ = await call(self.renderer, "GET", f"/render/{self.binary['artifact']['id']}")
         self.assertEqual(status, 415)
         status, _, _ = await call(
-            self.renderer,
-            "GET",
-            f"/content/{html_id}/{self.html['version']['id']}",
+            self.renderer, "GET", f"/content/{html_id}/{self.html['version']['id']}"
         )
         self.assertEqual(status, 400)
-
-    async def test_renderer_health_and_closed_routes(self) -> None:
-        with self.assertRaisesRegex(ValueError, "read-only"):
-            RendererApp(self.service, tenant_id="web", control_origin="http://127.0.0.1:8000")
         status, _, body = await call(self.renderer, "GET", "/health")
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)["ready"])
-        for method, path, expected in (
-            ("POST", "/render/x", 405),
-            ("GET", "/render/", 404),
-            ("GET", "/content/incomplete", 404),
-            ("GET", "/missing", 404),
-        ):
-            status, _, _ = await call(self.renderer, method, path)
-            self.assertEqual(status, expected)
+        status, headers, _ = await call(self.renderer, "POST", f"/render/{html_id}")
+        self.assertEqual(status, 405)
+        self.assertIn("sandbox allow-scripts", headers["content-security-policy"])
 
-    def test_origins_are_canonical_and_cannot_inject_policy(self) -> None:
+    def test_configuration_is_canonical_and_hosted_mode_fails_closed(self) -> None:
         with patch.dict(os.environ, {"TEST_ORIGIN": "https://Example.COM:8443/"}):
             self.assertEqual(
                 _origin_env("TEST_ORIGIN", "http://unused"), "https://example.com:8443"
@@ -251,6 +468,12 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(os.environ, {"TEST_ORIGIN": value}):
                 with self.assertRaisesRegex(ValueError, "HTTP origin"):
                     _origin_env("TEST_ORIGIN", "http://unused")
+        with patch.dict(os.environ, {"FOLIO_MCP_URL": "https://user@example.com/mcp"}):
+            with self.assertRaisesRegex(ValueError, "without credentials"):
+                _optional_mcp_url_env("FOLIO_MCP_URL")
+        with patch.dict(os.environ, {"FOLIO_DEPLOYMENT_MODE": "hosted"}):
+            with self.assertRaisesRegex(ValueError, "authentication adapter"):
+                Settings.from_env()
 
 
 if __name__ == "__main__":

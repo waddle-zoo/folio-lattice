@@ -18,6 +18,7 @@ contract; these records define how the implementation will honor it. The
 | [0007](0007-private-tenancy-and-sharing.md) | Accepted | Private tenancy now, sharing in v2 |
 | [0008](0008-hyperset-first-consumer.md) | Accepted | Hyperset is the first consumer through public contracts |
 | [0009](0009-thin-inspection-ui-and-isolated-renderer.md) | Accepted | Thin inspection UI and isolated renderer |
+| [0010](0010-public-contract-ui-bridge-and-hosted-gate.md) | Accepted | Public-contract UI, narrow artifact bridge, and hosted gate |
 
 ## Conventions
 
