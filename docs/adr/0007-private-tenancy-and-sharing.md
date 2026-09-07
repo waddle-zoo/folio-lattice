@@ -1,6 +1,6 @@
 # ADR 0007: Private tenancy now, sharing in v2
 
-- Status: Accepted
+- Status: Superseded by ADR 0012
 - Date: 2026-09-05
 
 ## Context
@@ -48,6 +48,8 @@ ADR.
 - Treating an early technically public prototype as the intended access model.
 
 ## Open questions
+
+The hosted sharing and revocation decision is recorded in [ADR 0012](0012-private-tenancy-acl-and-revocation.md).
 
 - What subject, group, role, and service-principal model should v2 grants use?
 - How should sharing a moving artifact differ from sharing a pinned version?

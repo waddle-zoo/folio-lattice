@@ -40,10 +40,11 @@ Folio Lattice stays small and generic:
 - Hyperset is the first black-box consumer, not a Folio dependency. It uses
   public MCP/HTTP only and receives no database, blob mount, private import, or
   special tool.
-- Private tenancy and verified hosted identity are readiness requirements.
-  Selective/public sharing, user-specific MCP credentials, marketplaces,
-  vector search, a separate graph database, and broad multi-agent orchestration
-  remain deferred unless a new ADR changes the boundary.
+- Private tenancy, verified hosted identity, and explicit same-tenant ACL
+  sharing/revocation/admin controls are readiness requirements under ADR 0012.
+  Anonymous/public or cross-tenant sharing, marketplaces, vector search, a
+  separate graph database, and broad multi-agent orchestration remain deferred
+  unless a new ADR changes the boundary.
 
 ## Traceability map
 
@@ -62,7 +63,7 @@ have passed their public acceptance and evidence checks.
 | FL-URJ-R07 | Claude Code, Codex, Cursor, Hyperset, and future clients use the same domain identifiers and semantics; no provider-specific privileged path exists. | Provider lock-in | E3.3, E5.1 |
 | FL-URJ-R08 | Web artifacts render from a separate origin with opaque sandboxing, restrictive CSP, no network egress, no host DOM/state access, and no XSS-capable path. | Credential/data exfiltration | E2.1, E2.2, E8.2 |
 | FL-URJ-R09 | Sandboxed artifacts can call only attached, allowlisted MCP capabilities through a narrow validated bridge; calls are bounded, auditable, and credential-free. | Confused deputy / escalation | E2.3, E8.2 |
-| FL-URJ-R10 | Tenant and actor context is explicit, fail-closed, private by default, and not caller-selectable; cross-tenant reads, search, and traversal reveal nothing. | Cross-tenant disclosure | E1.1, E1.4, E4.1, E4.2 |
+| FL-URJ-R10 | Tenant and actor context is explicit, fail-closed, private by default, and not caller-selectable; ACL grants, named same-tenant sharing, revocation, and tenant-admin controls cover every access path; cross-tenant reads, search, and traversal reveal nothing. | Cross-tenant disclosure | E1.1, E1.4, E4.1, E4.2, E4.3 |
 | FL-URJ-R11 | Hosted mode has verified authentication, principal-to-tenant/actor binding, authorization, revocation, and an explicit deployment posture. | False trust boundary | E4.1, E4.2 |
 | FL-URJ-R12 | Docker is the reproducible local path with durable volumes, repeatable migrations, health/readiness, safe configuration, and production deployment seams. | Non-repeatable deployment | E7.1, E7.3 |
 | FL-URJ-R13 | Runtime hardening, structured observability, audit records/export, rate limits, incident signals, and operational runbooks exist for hosted operation. | Undetectable failure / abuse | E7.1, E7.2 |
@@ -201,12 +202,12 @@ authorization.
 | --- | --- | --- | --- | --- | --- |
 | E4.1 | Deployment mode is explicit; local mode is visibly unauthenticated; hosted mode refuses startup without an authentication adapter. | E1.1; E3.2 | Security + Codex | Health/UI and subprocess/container checks show local posture; hosted startup fails before listening when identity is absent. | Startup tests; health payload; configuration runbook. |
 | E4.2 | Verified principal resolves to tenant and actor before MCP operation routing; authorization and revocation are enforced at the service boundary. | E4.1 | Security | Public MCP cannot select tenant/actor through arguments, headers, URLs, or bridge messages; revoked identity loses access. | Auth adapter contract; two-tenant e2e; revocation log. |
-| E4.3 | Private-by-default policy covers artifacts, versions, graph edges, indexes, provenance, attachments, audit, caches, and exports. | E4.2 | Security + Mayor | Cross-tenant reads/search/traversal and error/timing shortcuts reveal no data. | Privacy matrix; policy tests; ADR for grants/sharing if scope expands. |
+| E4.3 | Private-by-default ACL policy covers artifacts, versions, graph edges, indexes, provenance, attachments, audit, caches, and exports; named same-tenant sharing, revocation, and tenant-admin changes follow ADR 0012. | E4.2 | Security + Mayor | Grant/share/revoke/admin flows pass through public MCP/UI; cross-tenant reads/search/traversal and error/timing shortcuts reveal no data. | Privacy and ACL matrix; policy, revocation, and admin tests; redacted audit evidence. |
 
-Exit: a hosted trust boundary is real and tested. Selective/public sharing is
-not silently added; it requires a superseding ADR covering versions, graph
-reachability, derived data, attachment access, expiration, revocation, and
-auditability.
+Exit: a hosted trust boundary and ADR 0012's named same-tenant sharing controls
+are real and tested. Anonymous/public or cross-tenant sharing is not silently
+added; it requires a new ADR covering versions, graph reachability, derived
+data, attachment access, expiration, revocation, and auditability.
 
 ### E5 — Hyperset first-consumer proof
 
@@ -285,7 +286,7 @@ narrowed accordingly.
 | --- | --- | --- |
 | G0 Scope and ADR | Boundary, deferred work, owner, and change decisions are explicit; no unapproved expansion. | ADR index; reviewed plan; final diff. |
 | G1 Data correctness | Immutable versions, provenance, graph history, bounded reads/search, transaction safety, and failure atomicity pass through public MCP. | Public MCP/e2e tests; before/after state assertions. |
-| G2 Tenant privacy | Configured/verified context controls all lookups; cross-tenant reads/search/traversal/errors do not disclose data; private defaults hold. | Two-tenant process tests; policy matrix. |
+| G2 Tenant privacy and ACL | Configured/verified context controls all lookups; private defaults, named same-tenant grant/share/revoke/admin flows, and cross-tenant non-disclosure all pass. | Two-tenant process tests; ACL/policy/revocation/admin matrix. |
 | G3 MCP compatibility | Official SDK, typed schemas/results, stdio and Streamable HTTP, stable errors/limits, capability discovery, and provider-neutral conformance pass. | Schema snapshots; two-client logs; CI. |
 | G4 Sandbox | Dedicated origin, opaque sandbox, CSP, no direct egress, no host state/XSS path, and real-browser hostile deny tests pass. | Security matrix; Chrome/browser artifacts; headers. |
 | G5 Bridge | Exact frame source/origin and server origin checks, fixed allowlist, schema/size/time limits, no credentials, allow/deny audit all pass. | Bridge tests; redacted audit records. |

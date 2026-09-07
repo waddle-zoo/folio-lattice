@@ -32,21 +32,28 @@ is accepted.
 | [0008](../adr/0008-hyperset-first-consumer.md) | Hyperset uses public contracts only | E5, FL-URJ-R16, R19 |
 | [0009](../adr/0009-thin-inspection-ui-and-isolated-renderer.md) | Thin inspection UI and isolated renderer | E2, E6, FL-URJ-R08, R15 |
 | [0010](../adr/0010-public-contract-ui-bridge-and-hosted-gate.md) | Public-contract UI, narrow bridge, and hosted startup gate | E2, E4, E6, FL-URJ-R09–R15 |
+| [0011](../adr/0011-hosted-identity-and-principal-mapping.md) | Hosted identity and verified principal routing | E4, FL-URJ-R10–R11 |
+| [0012](../adr/0012-private-tenancy-acl-and-revocation.md) | Private tenancy, ACLs, named sharing, revocation, and admin controls | E4, FL-URJ-R10–R11 |
+| [0013](../adr/0013-external-mcp-registry-and-credential-brokerage.md) | External MCP registry, allowlists, and credential brokerage | E2, E7, FL-URJ-R09, R13 |
+| [0014](../adr/0014-egress-slack-and-tls-boundary.md) | Egress, Slack notification boundary, and TLS proxy | E7, FL-URJ-R12–R14 |
+| [0015](../adr/0015-abuse-controls-and-audit-lifecycle.md) | Resource/abuse bounds and content-minimizing audit lifecycle | E7, E8, FL-URJ-R13–R14, R18 |
+| [0016](../adr/0016-backup-migration-and-disaster-recovery.md) | Backup, migration, restore, and disaster recovery | E7, E8, FL-URJ-R12, R14, R18 |
+| [0017](../adr/0017-observability-supply-chain-and-assurance.md) | Observability, SBOM/provenance, adversarial assurance, and pentest | E8, FL-URJ-R17–R18 |
 
 ADRs 0008–0010 are listed here because the readiness plan must remain stable as
 the public-consumer, UI, and hosted-gate work lands. If a checkout predates one
 of them, the link becomes valid when that accepted record is merged; no local
 copy belongs under `docs/adrs/`.
 
-## Required future decision points
+## Remaining decision points
+
+ADRs 0011–0017 accept the hosted security control model while recording
+provider, target, ownership, and policy values that still block implementation
+or release. The following boundaries still require a new or superseding ADR.
 
 | Decision point | Before phase | Owner | Minimum decision content |
 | --- | --- | --- | --- |
-| Hosted identity and authentication adapter | E4.2 | Security + Mayor | Principal verification, tenant/actor binding, token/session handling, revocation, failure behavior, and deployment modes. |
-| Authorization, grants, and sharing | Any sharing scope | Security + Mayor | Private defaults; artifact/version/graph/index/preview/attachment reachability; expiration, revocation, audit, and cache behavior. Sharing remains deferred without this ADR. |
-| Retention, deletion, legal erasure, and backup/restore | E7.3 | Security + Refinery | In-scope copies, cryptographic key handling, RPO/RTO, purge evidence, and recovery authorization. |
 | Public MCP compatibility and deprecation | E3.1 or contract change | Codex + QA + Mayor | Supported protocol/SDK versions, schema evolution, error compatibility, capability negotiation, and removal policy. |
-| Hosted operations and security exceptions | E7.2 or exception | Security + Refinery | TLS, rate limits, audit export, observability, incident response, exception expiry, and residual risk. |
 | Product-boundary expansion | Any deferred feature | Mayor | Why the feature serves generic Folio users, threat/persistence/privacy impact, dependencies, and replacement of affected non-goals. |
 
 ## ADR completion checklist

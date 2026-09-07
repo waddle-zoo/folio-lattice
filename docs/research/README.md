@@ -9,4 +9,5 @@ in ADRs; this folder records the evidence and alternatives considered.
 - [enterprise and Hyperset contract research](2026-09-05-enterprise-hyperset-contract.md)
 - [thin inspection UI and renderer research](2026-09-05-thin-ui-renderer.md)
 - [public-contract UI and attached-MCP security research](2026-09-05-public-contract-ui-security.md)
+- [security baseline research](2026-09-07-security-baseline.md)
 - [v0 implementation plan](../V0-PLAN.md)
