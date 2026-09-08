@@ -24,16 +24,23 @@ UI_CSS = """
 :root { color-scheme: light dark; font: 15px/1.45 system-ui, sans-serif; }
 body { margin: 0; }
 header, main, .notice { max-width: 1120px; margin: auto; padding: 1rem; }
+.skip-link { position: absolute; left: -10000px; top: auto; }
+.skip-link:focus { left: 1rem; top: 1rem; z-index: 1; padding: .5rem; background: Canvas; color: CanvasText; }
 header { display: flex; gap: .8rem; align-items: end; border-bottom: 1px solid #8885; }
 header form { display: flex; gap: .4rem; align-items: end; flex: 1; }
 input, textarea, button { font: inherit; }
 input, textarea { box-sizing: border-box; padding: .5rem; max-width: 100%; }
 textarea { width: 100%; min-height: 12rem; font-family: ui-monospace, monospace; }
 button { cursor: pointer; padding: .5rem .7rem; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, iframe:focus-visible {
+button:focus-visible, input:focus-visible, textarea:focus-visible, iframe:focus-visible,
+a:focus-visible, summary:focus-visible {
   outline: 3px solid #579dff; outline-offset: 2px;
 }
 .notice { box-sizing: border-box; background: #7a410020; border: 1px solid #b66b32; }
+.auth-context { max-width: 1120px; margin: 0 auto; padding: .5rem 1rem; }
+.auth-context span + span { margin-left: 1rem; }
+.auth-recovery { box-sizing: border-box; max-width: 1120px; margin: 1rem auto; padding: 1rem; border: 2px solid #b66b32; }
+.auth-recovery a { display: inline-block; margin-top: .5rem; }
 .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
 .row { display: flex; gap: .5rem; align-items: end; flex-wrap: wrap; }
 .row > label { flex: 1 1 12rem; }
@@ -58,12 +65,72 @@ const byId = (id) => document.getElementById(id);
 const parts = location.pathname.split('/').filter(Boolean);
 const artifactId = parts[0] === 'inspect' ? decodeURIComponent(parts[1] || '') : '';
 const renderOrigin = document.body.dataset.renderOrigin;
+let wasAuthenticated = document.body.dataset.authState === 'authenticated';
+
+function safeReturnPath() {
+  const path = location.pathname;
+  return path === '/' || /^\/inspect\/[^/]+$/.test(path) ? path : '/';
+}
+function authLink(path = safeReturnPath()) {
+  return `/sign-in?return_to=${encodeURIComponent(path)}`;
+}
+function clearAuthRecovery() {
+  byId('auth-recovery').hidden = true;
+  byId('auth-action').hidden = true;
+}
+function hideProtectedView() {
+  byId('workspace').hidden = true;
+  byId('title').textContent = 'Artifact';
+  byId('artifact-details').replaceChildren();
+  byId('chunks').replaceChildren();
+  byId('versions').replaceChildren();
+  byId('graph').replaceChildren();
+  byId('chunk-content').textContent = '';
+  byId('results').replaceChildren();
+  byId('preview').removeAttribute('src');
+}
+function showAuthFailure() {
+  const message = wasAuthenticated
+    ? 'Your session expired. Sign in again.'
+    : 'Sign-in required. Sign in to continue.';
+  wasAuthenticated = false;
+  hideProtectedView();
+  byId('auth-context').hidden = true;
+  failure(message);
+  byId('auth-recovery-title').textContent = 'Authentication required';
+  byId('auth-recovery-message').textContent = message;
+  byId('auth-action').textContent = 'Sign in';
+  byId('auth-action').href = authLink();
+  byId('auth-action').hidden = false;
+  byId('auth-recovery').hidden = false;
+}
+function showForbiddenFailure() {
+  hideProtectedView();
+  failure('This document is not available to you.');
+  byId('auth-recovery-title').textContent = 'Access unavailable';
+  byId('auth-recovery-message').textContent = 'This document is not available to you.';
+  byId('auth-action').textContent = 'Return home';
+  byId('auth-action').href = '/';
+  byId('auth-action').hidden = false;
+  byId('auth-recovery').hidden = false;
+}
+function handleFailure(error) {
+  if (error.status === 401) { showAuthFailure(); return; }
+  if (error.status === 403) { showForbiddenFailure(); return; }
+  if (error.status === 409) {
+    failure('A newer version already exists. Refresh before saving again; your edit remains here.');
+    return;
+  }
+  failure(error.message);
+}
 
 function status(message) {
+  clearAuthRecovery();
   byId('error').hidden = true;
   byId('status').textContent = message;
 }
 function failure(message) {
+  clearAuthRecovery();
   byId('status').textContent = '';
   byId('error').textContent = message;
   byId('error').hidden = false;
@@ -78,6 +145,7 @@ async function call(tool, args, endpoint = '/api/mcp') {
   try {
     const response = await fetch(endpoint, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
       body: JSON.stringify(endpoint === '/api/bridge' ? args : {tool, arguments: args}),
     });
     const result = await response.json().catch(() => ({}));
@@ -134,7 +202,7 @@ function showRead(read) {
         const value = await call('artifact_read_chunk', {chunk_id: chunk.id});
         byId('chunk-content').textContent = value.content;
         status(`Read chunk ${chunk.ordinal + 1}; offsets are Unicode code points.`);
-      } catch (error) { failure(error.message); }
+      } catch (error) { handleFailure(error); }
     })); return li;
   }, 'No text chunks for this version.');
   const query = new URLSearchParams({version_id: version.id});
@@ -156,7 +224,7 @@ async function loadArtifact(versionId = null) {
   list('versions', versions, (version) => {
     const li = document.createElement('li');
     const label = `${version.created_at} — ${version.reason}${version.id === read.version.id ? ' (shown)' : ''}`;
-    li.append(button(label, () => loadArtifact(version.id).catch((error) => failure(error.message))));
+    li.append(button(label, () => loadArtifact(version.id).catch(handleFailure)));
     return li;
   }, 'No versions found.');
   list('graph', graph, (edge) => {
@@ -189,7 +257,7 @@ byId('create').addEventListener('submit', async (event) => {
       source_context: {interface: 'inspection-ui'},
     });
     location.assign(`/inspect/${encodeURIComponent(created.artifact.id)}`);
-  } catch (error) { failure(error.message); }
+  } catch (error) { handleFailure(error); }
 });
 async function discover(tool, field, inputId) {
   try {
@@ -201,7 +269,7 @@ async function discover(tool, field, inputId) {
       const span = document.createElement('span'); span.textContent = ` — ${excerpt.slice(0, 240)}`;
       li.append(span); return li;
     }, 'No results.'); status(`${results.length} result${results.length === 1 ? '' : 's'}.`);
-  } catch (error) { failure(error.message); }
+  } catch (error) { handleFailure(error); }
 }
 byId('search').addEventListener('submit', (event) => {
   event.preventDefault(); discover('artifact_search', 'query', 'search-query');
@@ -220,10 +288,7 @@ byId('edit').addEventListener('submit', async (event) => {
       source_context: {interface: 'inspection-ui'},
     });
     status(`Saved new version ${written.id}.`); await loadArtifact();
-  } catch (error) {
-    if (error.status === 409) failure('A newer version already exists. Refresh before saving again; your edit remains here.');
-    else failure(error.message);
-  }
+  } catch (error) { handleFailure(error); }
 });
 byId('link').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -233,7 +298,7 @@ byId('link').addEventListener('submit', async (event) => {
       target_artifact_id: byId('target-id').value, edge_type: byId('edge-type').value,
       metadata: {}});
     await loadArtifact(); status('Relationship created. Traversal follows outgoing edges only.');
-  } catch (error) { failure(error.message); }
+  } catch (error) { handleFailure(error); }
 });
 addEventListener('message', async (event) => {
   const frame = byId('preview');
@@ -250,24 +315,46 @@ addEventListener('message', async (event) => {
     source.postMessage({type: 'folio.mcp.response', id: value.id, ok: true, result: response.result}, '*');
     byId('bridge-status').textContent = `Allowed attached tool ${value.tool}.`;
   } catch (error) {
-    source.postMessage({type: 'folio.mcp.response', id: value.id, ok: false, error: error.message}, '*');
+    const message = error.status === 401
+      ? (wasAuthenticated ? 'Your session expired. Sign in again.' : 'Sign-in required. Sign in to continue.')
+      : error.status === 403 ? 'This document is not available to you.' : error.message;
+    if (error.status === 401) handleFailure(error);
+    source.postMessage({type: 'folio.mcp.response', id: value.id, ok: false, error: message}, '*');
     byId('bridge-status').textContent = `Denied or failed attached tool ${value.tool}.`;
   }
 });
 
-loadArtifact().catch((error) => failure(error.message));
+loadArtifact().catch(handleFailure);
 """.strip()
 
 
-def ui_html(render_origin: str) -> str:
+def ui_html(
+    render_origin: str,
+    *,
+    auth_state: str = "local",
+    organization: str | None = None,
+    actor: str | None = None,
+) -> str:
     origin = escape(render_origin, quote=True)
+    state = escape(auth_state, quote=True)
+    organization_value = escape(organization or "Unavailable", quote=True)
+    actor_value = escape(actor or "Unavailable", quote=True)
+    local_warning = (
+        '<p id="local-warning" class="notice" role="note"><strong>Unauthenticated local '
+        "development.</strong> Do not expose this service to an untrusted network.</p>"
+        if auth_state == "local"
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Folio Lattice inspection</title><link rel="stylesheet" href="/ui.css"></head>
-<body data-render-origin="{origin}">
-<p class="notice" role="note"><strong>Unauthenticated local development.</strong> Do not expose this service to an untrusted network.</p>
+<body data-render-origin="{origin}" data-auth-state="{state}">
+<a class="skip-link" href="#main">Skip to content</a>
+{local_warning}
+<p id="auth-context" class="auth-context" aria-label="Active account"><span id="organization-context">Organization: {organization_value}</span><span id="actor-context">Actor: {actor_value}</span></p>
 <header><strong>Folio Lattice</strong><form id="open"><label for="artifact-id">Open artifact identifier<input id="artifact-id" required maxlength="255"></label><button type="submit">Open</button></form></header>
-<main id="main" aria-busy="false"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" tabindex="-1" hidden></p>
+<main id="main" aria-busy="false"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p>
+<section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
 <details open><summary>Create or upload an artifact</summary><form id="create">
 <div class="row"><label>Name<input id="create-name" required maxlength="255"></label><label>Media type<input id="create-media" maxlength="255" placeholder="text/plain"></label></div>
 <label>File (optional)<input id="create-file" type="file"></label><label>Text content when no file is selected<textarea id="create-text"></textarea></label>
@@ -347,19 +434,33 @@ class InspectionApp:
         render_origin: str,
         max_request_bytes: int,
         bridge: AttachedMcpBridge | None = None,
+        auth_state: str = "local",
+        organization: str | None = None,
+        actor: str | None = None,
     ):
         self.caller = caller
         self.control_origin = control_origin
         self.render_origin = render_origin
         self.max_request_bytes = max_request_bytes
         self.bridge = bridge or AttachedMcpBridge(caller)
+        self.auth_state = auth_state
+        self.organization = organization
+        self.actor = actor
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         method = scope["method"]
         path = scope["path"]
         headers = control_headers(self.render_origin)
         if method == "GET" and (path == "/" or path.startswith("/inspect/")):
-            await HTMLResponse(ui_html(self.render_origin), headers=headers)(scope, receive, send)
+            await HTMLResponse(
+                ui_html(
+                    self.render_origin,
+                    auth_state=self.auth_state,
+                    organization=self.organization,
+                    actor=self.actor,
+                ),
+                headers=headers,
+            )(scope, receive, send)
             return
         if method == "GET" and path == "/ui.css":
             await Response(UI_CSS, media_type="text/css", headers=headers)(scope, receive, send)

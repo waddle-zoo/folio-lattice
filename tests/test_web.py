@@ -17,7 +17,7 @@ from unittest.mock import patch
 from mcp import Client
 
 from folio_lattice.bridge import AttachedMcpBridge, validate_bridge_request
-from folio_lattice.inspection import InspectionApp
+from folio_lattice.inspection import InspectionApp, ui_html
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.public_mcp import HttpMcpClient, PublicMcpError
 from folio_lattice.renderer import RendererApp
@@ -198,6 +198,21 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"allow-same-origin", page)
         for marker in (b'role="status"', b'role="alert"', b'aria-busy="false"', b"Literal grep"):
             self.assertIn(marker, page)
+
+    async def test_ui_renders_auth_context_without_local_warning_in_hosted_state(self) -> None:
+        page = ui_html(
+            RENDER_ORIGIN,
+            auth_state="authenticated",
+            organization="Acme & Sons",
+            actor='Ada "A" Lovelace',
+        )
+        self.assertIn('data-auth-state="authenticated"', page)
+        self.assertIn("Organization: Acme &amp; Sons", page)
+        self.assertIn("Actor: Ada &quot;A&quot; Lovelace", page)
+        self.assertNotIn("Unauthenticated local development", page)
+        self.assertIn('href="/sign-in?return_to=%2F"', page)
+        self.assertNotIn("tenant_id", page)
+        self.assertNotIn("access_token", page)
 
     async def test_gateway_reads_writes_and_reports_stale_conflict(self) -> None:
         artifact_id = self.html["artifact"]["id"]

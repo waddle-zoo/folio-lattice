@@ -200,6 +200,8 @@ def run_http(host: str, port: int) -> None:
         render_origin=settings.render_origin,
         max_request_bytes=settings.max_request_bytes,
         bridge=AttachedMcpBridge(caller, timeout_seconds=settings.bridge_timeout_seconds),
+        organization=settings.tenant_id,
+        actor=settings.actor,
     )
     uvicorn.run(
         FolioHttpApp(

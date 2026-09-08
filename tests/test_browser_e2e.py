@@ -20,6 +20,8 @@ from typing import Any
 from mcp import Client
 from websockets.sync.client import connect
 
+from folio_lattice.inspection import UI_CSS, UI_JS, ui_html
+
 
 def free_port() -> int:
     with socket.socket() as listener:
@@ -251,6 +253,232 @@ class DevTools:
             self.process.terminate()
         stdout, stderr = self.process.communicate(timeout=5)
         return (stdout + stderr).decode(errors="replace")
+
+
+class BrowserHostedAuthE2ETests(unittest.TestCase):
+    def test_auth_states_are_accessible_safe_and_preserve_input(self) -> None:
+        browser = browser_path()
+        if browser is None:
+            self.skipTest("set FOLIO_BROWSER to Chrome or Chromium for hosted auth UI evidence")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            port = free_port()
+            origin = f"http://127.0.0.1:{port}"
+            handler = self._handler(origin)
+            server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            chrome: DevTools | None = None
+            try:
+                handler.page_auth_state = "local"
+                handler.page_organization = "local-org"
+                handler.page_actor = "local-actor"
+                chrome = DevTools(browser, f"{origin}/?local=1", root / "chrome-auth")
+                chrome.wait(
+                    "document.querySelector('#status')?.textContent.includes('Create or upload')"
+                )
+                self.assertIn(
+                    "Unauthenticated local development", chrome.evaluate("document.body.innerText")
+                )
+                self.assertIn("Organization: local-org", chrome.evaluate("document.body.innerText"))
+
+                handler.page_auth_state = "unauthenticated"
+                handler.page_organization = None
+                handler.page_actor = None
+                handler.api_status = 401
+                chrome.command("Page.navigate", {"url": origin})
+                chrome.wait(
+                    "document.querySelector('#status')?.textContent.includes('Create or upload')"
+                )
+                chrome.evaluate(
+                    "document.querySelector('#search-query').value='private phrase'; document.querySelector('#search').requestSubmit()"
+                )
+                chrome.wait("!document.querySelector('#error').hidden")
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#error').textContent"),
+                    "Sign-in required. Sign in to continue.",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#status').textContent"), ""
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#error').getAttribute('role')"),
+                    "alert",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#status').getAttribute('role')"),
+                    "status",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#status').getAttribute('aria-live')"),
+                    "polite",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#error').getAttribute('aria-live')"),
+                    "assertive",
+                )
+                self.assertEqual(chrome.evaluate("document.activeElement.id"), "error")
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#search-query').value"),
+                    "private phrase",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#auth-action').getAttribute('href')"),
+                    "/sign-in?return_to=%2F",
+                )
+                chrome.evaluate(
+                    "document.querySelector('#create-name').value='draft.txt'; document.querySelector('#create-text').value='unsaved document'; document.querySelector('#create').requestSubmit()"
+                )
+                chrome.wait(
+                    "document.querySelector('#error').textContent === 'Sign-in required. Sign in to continue.'"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#create-name').value"), "draft.txt"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#create-text').value"),
+                    "unsaved document",
+                )
+                chrome.key("Tab", "Tab", 9)
+                self.assertEqual(chrome.evaluate("document.activeElement.id"), "auth-action")
+                chrome.key("Enter", "Enter", 13)
+                chrome.wait(
+                    "location.pathname === '/sign-in' && location.search === '?return_to=%2F'"
+                )
+
+                handler.page_auth_state = "authenticated"
+                handler.page_organization = "Acme Operations"
+                handler.page_actor = "Ada Lovelace"
+                chrome.command("Page.navigate", {"url": origin})
+                chrome.wait(
+                    "document.querySelector('#status')?.textContent.includes('Create or upload')"
+                )
+                self.assertNotIn(
+                    "Unauthenticated local development", chrome.evaluate("document.body.innerText")
+                )
+                self.assertIn(
+                    "Organization: Acme Operations", chrome.evaluate("document.body.innerText")
+                )
+                self.assertIn("Actor: Ada Lovelace", chrome.evaluate("document.body.innerText"))
+                handler.api_status = 401
+                chrome.evaluate(
+                    "document.querySelector('#grep-pattern').value='unsaved search'; document.querySelector('#grep').requestSubmit()"
+                )
+                chrome.wait(
+                    "document.querySelector('#error').textContent === 'Your session expired. Sign in again.'"
+                )
+                self.assertEqual(chrome.evaluate("document.activeElement.id"), "error")
+                self.assertTrue(chrome.evaluate("document.querySelector('#auth-context').hidden"))
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#grep-pattern').value"),
+                    "unsaved search",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#auth-action').textContent"), "Sign in"
+                )
+
+                handler.api_status = 401
+                chrome.command("Page.navigate", {"url": f"{origin}/inspect/opaque-reference"})
+                chrome.wait(
+                    "document.querySelector('#error').textContent === 'Your session expired. Sign in again.'"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#auth-action').getAttribute('href')"),
+                    "/sign-in?return_to=%2Finspect%2Fopaque-reference",
+                )
+                self.assertNotIn(
+                    "Acme", chrome.evaluate("document.querySelector('#auth-action').href")
+                )
+                self.assertNotIn(
+                    "private", chrome.evaluate("document.querySelector('#auth-action').href")
+                )
+
+                handler.api_status = 403
+                chrome.command("Page.reload")
+                chrome.wait(
+                    "document.querySelector('#error').textContent === 'This document is not available to you.'"
+                )
+                self.assertTrue(chrome.evaluate("document.querySelector('#workspace').hidden"))
+                self.assertNotIn(
+                    "private server detail", chrome.evaluate("document.body.innerText")
+                )
+                self.assertEqual(chrome.evaluate("location.pathname"), "/inspect/opaque-reference")
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#auth-action').textContent"),
+                    "Return home",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#auth-action').getAttribute('href')"),
+                    "/",
+                )
+                chrome.key("Tab", "Tab", 9)
+                self.assertEqual(chrome.evaluate("document.activeElement.id"), "auth-action")
+                chrome.key("Enter", "Enter", 13)
+                chrome.wait("location.pathname === '/' && location.search === ''")
+            finally:
+                if chrome is not None:
+                    chrome.close()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    @staticmethod
+    def _handler(origin: str) -> type[BaseHTTPRequestHandler]:
+        class Handler(BaseHTTPRequestHandler):
+            page_auth_state = "local"
+            page_organization: str | None = None
+            page_actor: str | None = None
+            api_status = 401
+
+            def do_GET(self) -> None:
+                path = self.path.split("?", 1)[0]
+                if path == "/sign-in":
+                    self._send(b"<!doctype html><p id='signed-in'>Sign-in seam</p>", "text/html")
+                    return
+                if path == "/ui.css":
+                    self._send(UI_CSS.encode(), "text/css")
+                    return
+                if path == "/ui.js":
+                    self._send(UI_JS.encode(), "application/javascript")
+                    return
+                if path == "/" or path.startswith("/inspect/"):
+                    self._send(
+                        ui_html(
+                            origin,
+                            auth_state=self.page_auth_state,
+                            organization=self.page_organization,
+                            actor=self.page_actor,
+                        ).encode(),
+                        "text/html",
+                    )
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def do_POST(self) -> None:
+                if self.path == "/api/mcp":
+                    body = json.dumps({"error": "private server detail"}).encode()
+                    self.send_response(self.api_status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def _send(self, body: bytes, media_type: str) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", media_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: object) -> None:
+                pass
+
+        return Handler
 
 
 class BrowserSandboxE2ETests(unittest.TestCase):
