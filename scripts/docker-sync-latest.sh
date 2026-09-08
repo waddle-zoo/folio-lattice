@@ -44,6 +44,20 @@ log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
 
+wait_for_health() {
+  local url="$1"
+  local attempts="${2:-30}"
+  local attempt
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if curl -fsS --max-time 5 "$url" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 sync_once() {
   cd "$repo_root" || return 1
 
@@ -89,11 +103,11 @@ sync_once() {
     return 1
   fi
 
-  if ! curl -fsS --max-time 10 "http://127.0.0.1:${control_port}/health" >/dev/null; then
+  if ! wait_for_health "http://127.0.0.1:${control_port}/health"; then
     log "control service health check failed; will retry"
     return 1
   fi
-  if ! curl -fsS --max-time 10 "http://127.0.0.1:${renderer_port}/health" >/dev/null; then
+  if ! wait_for_health "http://127.0.0.1:${renderer_port}/health"; then
     log "renderer health check failed; will retry"
     return 1
   fi
