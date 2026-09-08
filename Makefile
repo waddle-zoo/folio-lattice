@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test test-unit test-e2e hosted-e2e browser-test check docker-build docker-up docker-test docker-down
+.PHONY: install format lint typecheck test test-unit test-e2e hosted-e2e browser-test check docker-build docker-up docker-test docker-down docker-sync docker-sync-once
 
 install:
 	uv sync --dev
@@ -43,3 +43,9 @@ docker-test:
 
 docker-down:
 	docker compose down
+
+docker-sync:
+	./scripts/docker-sync-latest.sh
+
+docker-sync-once:
+	./scripts/docker-sync-latest.sh --once
