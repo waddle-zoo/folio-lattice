@@ -28,8 +28,7 @@ tracked redesign blocker, not evidence of a passing release.
 
 The Mayor ran the merged implementation on macOS with the locked Python 3.12
 environment and the host Chrome/Chromium browser. This is pre-commit evidence
-for the tree immediately following `00fef28`; a post-landing browser rerun is
-required against the published commit.
+for the tree immediately following `00fef28`.
 
 - `uv run pytest -q tests/test_web.py tests/test_service.py`: **16 passed**
   before the renderer regression was added; the final `make check` includes the
@@ -42,6 +41,10 @@ required against the published commit.
   rendering.
 - `make check`: **31 passed in 41.29s**, **84.23% coverage**, Ruff, format, and
   mypy all passed.
+- Post-landing gate at published `1614c1a`:
+  `uv run pytest -q tests/test_browser_e2e.py` **3 passed in 32.87s**. The
+  preceding `33e9f4e` run exposed a timing-sensitive evidence-harness capture;
+  `1614c1a` added bounded retries without weakening any sandbox assertion.
 
 Host validation exposed and fixed merge defects in hosted-auth context wiring,
 parallel request busy state, accessible copy/names, human-readable search and
