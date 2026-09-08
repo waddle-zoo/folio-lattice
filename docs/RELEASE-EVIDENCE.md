@@ -76,6 +76,9 @@ public MCP or the production upload form, never through service/database calls.
 - There has been no independent penetration test, browser matrix, assistive-
   technology human pass, audit export/retention review, backup/restore exercise,
   TLS deployment profile, or operational rate-limit design.
+- Seven live hosted adversarial cases remain skipped until
+  `FOLIO_HOSTED_AUTH_TEST_TARGET` supplies a real issuer, hosted endpoint, JWKS
+  rotation/failure controls, and isolated tenant fixture.
 - Search is SQLite FTS5 over chunk content. Grep is literal. Traversal follows
   outgoing edges only. There are no backlinks, path/subgraph queries, name/path
   filters, or graph metadata search.
