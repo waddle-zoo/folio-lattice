@@ -65,8 +65,12 @@ public MCP or the production upload form, never through service/database calls.
 
 ## Known product limits and release blockers
 
-- Hosted mode has no authentication adapter and refuses startup. Credentials,
-  sessions, subjects, ACLs, grants, sharing, and revocation do not exist.
+- Hosted HTTP mode has a bounded OIDC bearer slice: exact RS256 issuer,
+  audience, time, and JWKS checks feed server-owned issuer/subject membership
+  mappings with active, disabled, and revoked status. Hosted startup fails
+  closed when identity configuration or initial JWKS is unusable. Full hosted
+  sessions, ACLs, grants, sharing, and broader revocation controls remain
+  future work.
 - Local mode derives tenant and actor from process environment. Loopback Compose
   is for trusted local development only.
 - There has been no independent penetration test, browser matrix, assistive-

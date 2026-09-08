@@ -55,14 +55,19 @@ validate the message source/origin, schema, attachment, tool, size, and timeout;
 decisions are audit logged without arguments or content. This is not a generic
 MCP proxy and carries no artifact credential.
 
-HTTP and stdio derive `FOLIO_TENANT_ID` and `FOLIO_ACTOR` from process
+Local HTTP and stdio derive `FOLIO_TENANT_ID` and `FOLIO_ACTOR` from process
 configuration. Clients cannot override either value through tool arguments.
-The Docker deployment is a local development loop bound to loopback; product
-credentials and sharing policy are deliberately deferred.
+The Docker deployment is a local development loop bound to loopback; local
+mode remains explicitly unauthenticated.
 
-`FOLIO_DEPLOYMENT_MODE=hosted` intentionally refuses startup because no
-authentication adapter exists. The local banner and health response say that
-the service is unauthenticated local development. See
+Hosted HTTP mode requires `FOLIO_OIDC_ISSUER`, `FOLIO_OIDC_AUDIENCE`, and
+`FOLIO_OIDC_JWKS_URL`. It accepts only RS256 bearer tokens with exact issuer,
+audience, signature, and time validation, then maps `(issuer, subject)` through
+the server-owned membership table. `FOLIO_OIDC_MEMBERSHIPS_FILE` may seed
+immutable mappings; status changes are limited to `active`, `disabled`, and
+`revoked`. Hosted startup warms the configured JWKS and fails closed if
+configuration or keys are unusable. Health and readiness return posture only,
+never token or membership data. See
 [`docs/RELEASE-EVIDENCE.md`](docs/RELEASE-EVIDENCE.md) before making any
 readiness claim.
 

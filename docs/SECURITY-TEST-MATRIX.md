@@ -28,8 +28,9 @@ database directly.
 | TEN-03 | tenant B traverses tenant A start/edge | Not found; no node/edge leak | Two real MCP servers, shared volume |
 | VER-01 | stale optimistic write | Conflict; current pointer/history/content unchanged | UI plus public MCP verification |
 | VER-02 | invalid write/link payload | No version/edge/blob becomes visible | Public MCP before/after comparison |
-| AUTH-01 | start with `FOLIO_DEPLOYMENT_MODE=hosted` and no adapter | Process exits before listening with one clear gate error | Subprocess and container config test |
+| AUTH-01 | start with `FOLIO_DEPLOYMENT_MODE=hosted` without complete OIDC configuration | Process exits before listening with one clear gate error | Subprocess and container config test |
 | AUTH-02 | local mode is mistaken for authenticated | UI banner and health payload explicitly say unauthenticated local development | HTTP/browser test |
+| AUTH-03 | hosted bearer has wrong issuer/audience/signature/time/key or inactive membership | 401 before MCP dispatch; valid principal maps only through server-owned membership | Signed-JWT/JWKS unit and ASGI tests |
 
 ## Reproduction gates
 

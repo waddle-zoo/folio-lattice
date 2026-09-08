@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import string
 from dataclasses import dataclass
@@ -11,6 +12,15 @@ import uvicorn
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .auth import (
+    AuthenticationError,
+    JwksClient,
+    MembershipStore,
+    OidcAuthenticator,
+    OidcVerifier,
+    reset_request_principal,
+    set_request_principal,
+)
 from .bridge import AttachedMcpBridge
 from .inspection import InspectionApp
 from .mcp_protocol import build_mcp_server
@@ -34,18 +44,46 @@ class Settings:
     mcp_url: str | None
     deployment_mode: str
     bridge_timeout_seconds: float
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    oidc_jwks_url: str | None = None
+    oidc_memberships_file: str | None = None
+    oidc_jwks_timeout_seconds: float = 5
+    oidc_jwks_cache_seconds: float = 300
+    oidc_clock_skew_seconds: float = 0
 
     @classmethod
     def from_env(cls) -> Settings:
         deployment_mode = os.environ.get("FOLIO_DEPLOYMENT_MODE", "local").strip().lower()
         if deployment_mode not in {"local", "hosted"}:
             raise ValueError("FOLIO_DEPLOYMENT_MODE must be local or hosted")
-        if deployment_mode == "hosted":
-            raise ValueError("hosted mode requires an authentication adapter; none is implemented")
-        tenant_id = os.environ.get("FOLIO_TENANT_ID", "dev")
-        actor = os.environ.get("FOLIO_ACTOR", "folio-client")
-        if not tenant_id.strip() or not actor.strip():
-            raise ValueError("FOLIO_TENANT_ID and FOLIO_ACTOR must not be empty")
+        tenant_id = os.environ.get("FOLIO_TENANT_ID", "dev") if deployment_mode == "local" else ""
+        actor = os.environ.get("FOLIO_ACTOR", "folio-client") if deployment_mode == "local" else ""
+        oidc_issuer = oidc_audience = oidc_jwks_url = oidc_memberships_file = None
+        oidc_jwks_timeout_seconds = 5.0
+        oidc_jwks_cache_seconds = 300.0
+        oidc_clock_skew_seconds = 0.0
+        if deployment_mode == "local":
+            if not tenant_id.strip() or not actor.strip():
+                raise ValueError("FOLIO_TENANT_ID and FOLIO_ACTOR must not be empty")
+        else:
+            try:
+                oidc_issuer = _oidc_url_env("FOLIO_OIDC_ISSUER", required=True)
+                oidc_audience = _required_env("FOLIO_OIDC_AUDIENCE")
+                oidc_jwks_url = _oidc_url_env("FOLIO_OIDC_JWKS_URL", required=True)
+                configured_algorithm = os.environ.get("FOLIO_OIDC_ALGORITHM", "RS256")
+                if configured_algorithm != "RS256":
+                    raise ValueError("FOLIO_OIDC_ALGORITHM must be RS256")
+                oidc_memberships_file = os.environ.get("FOLIO_OIDC_MEMBERSHIPS_FILE")
+                if oidc_memberships_file is not None and not oidc_memberships_file.strip():
+                    raise ValueError("FOLIO_OIDC_MEMBERSHIPS_FILE must not be empty")
+                oidc_jwks_timeout_seconds = _positive_float_env(
+                    "FOLIO_OIDC_JWKS_TIMEOUT_SECONDS", 5
+                )
+                oidc_jwks_cache_seconds = _positive_float_env("FOLIO_OIDC_JWKS_CACHE_SECONDS", 300)
+                oidc_clock_skew_seconds = _nonnegative_float_env("FOLIO_OIDC_CLOCK_SKEW_SECONDS", 0)
+            except ValueError as exc:
+                raise ValueError(f"hosted mode requires an authentication adapter; {exc}") from exc
         return cls(
             db_path=os.environ.get("FOLIO_DB_PATH", ".data/folio.db"),
             blob_root=os.environ.get("FOLIO_BLOB_ROOT", ".data/blobs"),
@@ -60,6 +98,13 @@ class Settings:
             mcp_url=_optional_mcp_url_env("FOLIO_MCP_URL"),
             deployment_mode=deployment_mode,
             bridge_timeout_seconds=_positive_float_env("FOLIO_BRIDGE_TIMEOUT_SECONDS", 5),
+            oidc_issuer=oidc_issuer,
+            oidc_audience=oidc_audience,
+            oidc_jwks_url=oidc_jwks_url,
+            oidc_memberships_file=oidc_memberships_file,
+            oidc_jwks_timeout_seconds=oidc_jwks_timeout_seconds,
+            oidc_jwks_cache_seconds=oidc_jwks_cache_seconds,
+            oidc_clock_skew_seconds=oidc_clock_skew_seconds,
         )
 
 
@@ -72,8 +117,55 @@ def _positive_env(name: str, default: int) -> int:
 
 def _positive_float_env(name: str, default: float) -> float:
     value = float(os.environ.get(name, str(default)))
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be positive")
+    return value
+
+
+def _nonnegative_float_env(name: str, default: float) -> float:
+    value = float(os.environ.get(name, str(default)))
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{name} must not be negative")
+    return value
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if (
+        value is None
+        or not value
+        or value != value.strip()
+        or any(char.isspace() for char in value)
+    ):
+        raise ValueError(f"{name} must not be empty")
+    return value
+
+
+def _oidc_url_env(name: str, *, required: bool) -> str | None:
+    value = os.environ.get(name)
+    if value is None and not required:
+        return None
+    if (
+        value is None
+        or not value
+        or value != value.strip()
+        or any(char.isspace() for char in value)
+    ):
+        raise ValueError(f"{name} must be an HTTP URL without credentials")
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"{name} must be an HTTP URL without credentials")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an HTTP URL without credentials") from exc
     return value
 
 
@@ -133,11 +225,15 @@ class FolioHttpApp:
         inspection: InspectionApp,
         *,
         deployment_mode: str,
+        authenticator: OidcAuthenticator | None = None,
     ):
         self.app = app
         self.service = service
         self.inspection = inspection
         self.deployment_mode = deployment_mode
+        self.authenticator = authenticator
+        if deployment_mode == "hosted" and authenticator is None:
+            raise ValueError("hosted mode requires configured OIDC authentication")
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -146,44 +242,86 @@ class FolioHttpApp:
         if scope["type"] != "http":
             await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
             return
-        if scope["path"] == "/health":
+        if scope["path"] in {"/health", "/ready"}:
             health = self.service.health()
+            identity_ready = self.authenticator is None or self.authenticator.ready()
+            health["ready"] = bool(health["ready"] and identity_ready)
+            health["status"] = "ok" if health["ready"] else "not_ready"
             health.update(
                 {
                     "deployment_mode": self.deployment_mode,
-                    "authentication": "none-local-development",
+                    "authentication": (
+                        "oidc-bearer"
+                        if self.authenticator is not None
+                        else "none-local-development"
+                    ),
                 }
             )
             status = 200 if health["ready"] else 503
             await JSONResponse(health, status_code=status)(scope, receive, send)
             return
+        principal_token = None
+        if self.authenticator is not None:
+            try:
+                principal = self.authenticator.authenticate(scope)
+            except AuthenticationError:
+                await JSONResponse(
+                    {"error": "authentication required"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )(scope, receive, send)
+                return
+            principal_token = set_request_principal(principal)
         path = scope["path"]
-        if (
-            path == "/"
-            or path.startswith("/inspect/")
-            or path in {"/api/mcp", "/api/bridge", "/ui.css", "/ui.js"}
-        ):
-            await self.inspection(scope, receive, send)
-            return
-        await self.app(scope, receive, send)
+        try:
+            if (
+                path == "/"
+                or path.startswith("/inspect/")
+                or path in {"/api/mcp", "/api/bridge", "/ui.css", "/ui.js"}
+            ):
+                await self.inspection(scope, receive, send)
+                return
+            await self.app(scope, receive, send)
+        finally:
+            if principal_token is not None:
+                reset_request_principal(principal_token)
 
 
-def build_runtime(settings: Settings) -> tuple[FolioLattice, Any]:
+def build_runtime(settings: Settings) -> tuple[FolioLattice, Any, OidcAuthenticator | None]:
     service = FolioLattice(
         settings.db_path,
         settings.blob_root,
         max_artifact_bytes=settings.max_artifact_bytes,
     )
-    return service, build_mcp_server(
-        service,
-        tenant_id=settings.tenant_id,
-        actor=settings.actor,
+    if settings.deployment_mode == "local":
+        return (
+            service,
+            build_mcp_server(service, tenant_id=settings.tenant_id, actor=settings.actor),
+            None,
+        )
+    assert settings.oidc_issuer and settings.oidc_audience and settings.oidc_jwks_url
+    memberships = MembershipStore(settings.db_path)
+    if settings.oidc_memberships_file is not None:
+        memberships.seed_file(settings.oidc_memberships_file)
+    verifier = OidcVerifier(
+        issuer=settings.oidc_issuer,
+        audience=settings.oidc_audience,
+        jwks=JwksClient(
+            settings.oidc_jwks_url,
+            timeout_seconds=settings.oidc_jwks_timeout_seconds,
+            cache_seconds=settings.oidc_jwks_cache_seconds,
+        ),
+        memberships=memberships,
+        clock_skew_seconds=settings.oidc_clock_skew_seconds,
     )
+    authenticator = OidcAuthenticator(verifier)
+    authenticator.warm_up()
+    return service, build_mcp_server(service), authenticator
 
 
 def run_http(host: str, port: int) -> None:
     settings = Settings.from_env()
-    service, mcp = build_runtime(settings)
+    service, mcp, authenticator = build_runtime(settings)
     app = mcp.streamable_http_app(
         json_response=True,
         max_request_body_size=settings.max_request_bytes,
@@ -200,8 +338,9 @@ def run_http(host: str, port: int) -> None:
         render_origin=settings.render_origin,
         max_request_bytes=settings.max_request_bytes,
         bridge=AttachedMcpBridge(caller, timeout_seconds=settings.bridge_timeout_seconds),
-        organization=settings.tenant_id,
-        actor=settings.actor,
+        auth_state="authenticated" if authenticator is not None else "local",
+        organization=settings.tenant_id if authenticator is None else None,
+        actor=settings.actor if authenticator is None else None,
     )
     uvicorn.run(
         FolioHttpApp(
@@ -209,6 +348,7 @@ def run_http(host: str, port: int) -> None:
             service,
             inspection,
             deployment_mode=settings.deployment_mode,
+            authenticator=authenticator,
         ),
         host=host,
         port=port,
@@ -217,6 +357,8 @@ def run_http(host: str, port: int) -> None:
 
 def run_renderer(host: str, port: int) -> None:
     settings = Settings.from_env()
+    if settings.deployment_mode == "hosted":
+        raise ValueError("hosted renderer is not implemented")
     caller = HttpMcpClient(
         settings.mcp_url or "http://127.0.0.1:8000/mcp",
         max_result_bytes=settings.max_request_bytes,
@@ -229,7 +371,10 @@ def run_renderer(host: str, port: int) -> None:
 
 
 def run_stdio() -> None:
-    _, mcp = build_runtime(Settings.from_env())
+    settings = Settings.from_env()
+    if settings.deployment_mode == "hosted":
+        raise ValueError("hosted mode requires HTTP bearer transport")
+    _, mcp, _ = build_runtime(settings)
     mcp.run("stdio")
 
 

@@ -6,6 +6,7 @@ from html import escape
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.types import Receive, Scope, Send
 
+from .auth import get_request_principal
 from .bridge import (
     MAX_BRIDGE_BODY_BYTES,
     AttachedMcpBridge,
@@ -682,12 +683,15 @@ class InspectionApp:
         path = scope["path"]
         headers = control_headers(self.render_origin)
         if method == "GET" and (path == "/" or path.startswith("/inspect/")):
+            principal = get_request_principal()
             await HTMLResponse(
                 ui_html(
                     self.render_origin,
-                    auth_state=self.auth_state,
-                    organization=self.organization,
-                    actor=self.actor,
+                    auth_state="authenticated" if principal is not None else self.auth_state,
+                    organization=(
+                        principal.tenant_id if principal is not None else self.organization
+                    ),
+                    actor=principal.actor_id if principal is not None else self.actor,
                 ),
                 headers=headers,
             )(scope, receive, send)
