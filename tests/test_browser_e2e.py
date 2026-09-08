@@ -560,8 +560,17 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     render_port,
                 )
                 wait_ready(render_origin, renderer)
-                hostile_dom = dump_dom(browser, f"{harness_origin}/harness", root / "chrome-1")
-                match = re.search(r'<pre id="result">(.*?)</pre>', hostile_dom, re.DOTALL)
+                match = None
+                hostile_dom = ""
+                for attempt in range(3):
+                    hostile_dom = dump_dom(
+                        browser,
+                        f"{harness_origin}/harness",
+                        root / f"chrome-hostile-{attempt}",
+                    )
+                    match = re.search(r'<pre id="result">(.*?)</pre>', hostile_dom, re.DOTALL)
+                    if match is not None and html.unescape(match.group(1)) != "waiting":
+                        break
                 self.assertIsNotNone(match, hostile_dom)
                 assert match is not None
                 result = json.loads(html.unescape(match.group(1)))
