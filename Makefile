@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test test-unit test-e2e hosted-e2e browser-test check docker-build docker-up docker-test docker-down docker-sync docker-sync-once
+.PHONY: install format lint typecheck test test-unit test-e2e hosted-e2e hosted-auth-adversarial hosted-auth-e2e browser-test check docker-build docker-up docker-test docker-down docker-sync docker-sync-once
 
 install:
 	uv sync --dev
@@ -26,6 +26,13 @@ hosted-e2e:
 	FOLIO_GATE_COMMAND="$${FOLIO_GATE_COMMAND:-make hosted-e2e}" \
 	FOLIO_EVIDENCE_PATH="$${FOLIO_EVIDENCE_PATH:-/tmp/folio-lattice-fl-urj-5.2.json}" \
 	uv run python tests/hyperset_hosted_consumer.py
+
+hosted-auth-adversarial:
+	uv run pytest -q tests/adversarial/test_hosted_auth.py
+
+hosted-auth-e2e:
+	FOLIO_EVIDENCE_PATH="$${FOLIO_EVIDENCE_PATH:-/tmp/folio-lattice-fl-urj-5.2.json}" \
+	uv run python tests/hosted_auth_target.py e2e
 
 browser-test:
 	uv run pytest -q tests/test_browser_e2e.py
