@@ -399,10 +399,10 @@ function showRead(read) {
         status('Reading chunk…');
         const value = await call('artifact_read_chunk', {chunk_id: chunk.id});
         byId('chunk-content').textContent = value.content;
-        status(`Read chunk ${chunk.ordinal + 1}; offsets are Unicode code points.`);
+        status(`Read chunk ${chunk.ordinal + 1}.`);
       } catch (error) { handleFailure(error); }
     })); return li;
-  }, 'No text chunks for this version.');
+  }, 'No chunks.');
   const query = new URLSearchParams({version_id: version.id});
   byId('preview').src = `${renderOrigin}/render/${encodeURIComponent(artifact.id)}?${query}`;
 }
@@ -410,7 +410,7 @@ async function loadArtifact(versionId = null) {
   if (!artifactId) {
     byId('workspace').hidden = true;
     byId('welcome').hidden = false;
-    status('Create or upload an artifact, or open one by identifier.'); return;
+    status('Ready.'); return;
   }
   byId('welcome').hidden = true;
   byId('artifact-id').value = artifactId; status('Loading artifact…');
@@ -435,9 +435,9 @@ async function loadArtifact(versionId = null) {
     li.append(edgeType, button(targetLabel, () => {
       location.assign(`/inspect/${encodeURIComponent(edge.target_artifact_id)}`);
     })); return li;
-  }, 'No outgoing relationships.');
+  }, 'No relationships.');
   status(new URLSearchParams(location.search).has('created')
-    ? `Created ${read.artifact.name}. First immutable version is ready.`
+    ? `Created ${read.artifact.name}. Version 1 saved.`
     : `Loaded ${read.artifact.name}.`);
 }
 
@@ -508,7 +508,7 @@ byId('link').addEventListener('submit', async (event) => {
     await call('graph_link', {source_artifact_id: artifactId,
       target_artifact_id: byId('target-id').value, edge_type: byId('edge-type').value,
       metadata: {}});
-    await loadArtifact(); status('Relationship created. Traversal follows outgoing edges only.');
+    await loadArtifact(); status('Relationship created.');
   } catch (error) { handleFailure(error); }
 });
 addEventListener('message', async (event) => {
@@ -531,7 +531,7 @@ addEventListener('message', async (event) => {
       : error.status === 403 ? 'This document is not available to you.' : error.message;
     if (error.status === 401) handleFailure(error);
     source.postMessage({type: 'folio.mcp.response', id: value.id, ok: false, error: message}, '*');
-    byId('bridge-status').textContent = 'Attached MCP request did not run.';
+    byId('bridge-status').textContent = 'Attached request did not run.';
   }
 });
 
@@ -574,32 +574,29 @@ def ui_html(
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
   <section id="welcome" class="welcome-panel" aria-labelledby="welcome-title">
     <p class="eyebrow">FOLIO LATTICE / WORKSPACE</p>
-    <h1 id="welcome-title">Folio Lattice</h1>
-    <p id="intro" class="lede">A calm place to create, read, and connect working knowledge. Every edit keeps its history.</p>
+    <h1 id="welcome-title">Workspace</h1>
     <div class="welcome-grid">
-      <details class="surface create-card" open><summary><span><span class="step">01</span>Add an artifact</span><span class="summary-caption">New document or file</span></summary><form id="create" class="stacked-form">
-        <div class="row"><label for="create-name">Document or file name<input id="create-name" required maxlength="255" placeholder="e.g. launch-notes.txt"></label><label for="create-media">File type<input id="create-media" maxlength="255" placeholder="text/plain"></label></div>
+      <details class="surface create-card" open><summary><span><span class="step">01</span>New document or file</span></summary><form id="create" class="stacked-form">
+        <div class="row"><label for="create-name">Name<input id="create-name" required maxlength="255" placeholder="e.g. launch-notes.txt"></label><label for="create-media">Type<input id="create-media" maxlength="255" placeholder="text/plain"></label></div>
         <label>File (optional)<input id="create-file" type="file"></label>
-        <label>Text content when no file is selected<textarea id="create-text" placeholder="Start with a note, decision, or reference…"></textarea></label>
-        <p class="field-help">Files are stored as immutable versions. You can edit text later without losing history.</p>
+        <label>Content<textarea id="create-text" placeholder="Start writing…"></textarea></label>
         <label>Reason<input id="create-reason" value="inspection UI create" required maxlength="2000"></label><button type="submit">Create first version</button>
       </form></details>
-      <div class="surface guide-card"><p class="eyebrow">YOUR WORKSPACE</p><h2>One place for the things your team knows.</h2><p>Folio keeps source files readable, findable, and connected to the context around them.</p><ul class="feature-list"><li>Search inside indexed text</li><li>Trace outgoing relationships</li><li>Review and restore earlier versions</li></ul><div class="safety-note"><strong>Preview safely</strong><span>Anyone who can reach this address can use local mode. Web artifacts run in an isolated frame with only the Attached MCP capabilities shown on screen.</span></div></div>
     </div>
   </section>
-  <section id="find" class="surface find-panel" aria-labelledby="discover-title"><div class="section-heading"><div><p class="eyebrow">DISCOVER</p><h2 id="discover-title">Find content</h2></div><p>Search across the text you have indexed.</p></div><div class="search-grid">
-    <form id="search" class="search-form"><p class="form-kicker">INDEXED SEARCH</p><label for="search-query">Indexed content search<input id="search-query" required maxlength="500" placeholder="Try a phrase or keyword"></label><p class="field-help">Search finds words inside your artifacts.</p><button type="submit">Search</button></form>
-    <form id="grep" class="search-form"><p class="form-kicker">EXACT MATCH</p><label for="grep-pattern">Literal grep (not regular expressions)<input id="grep-pattern" required maxlength="500" placeholder="Find this exact text"></label><p class="field-help">Grep checks for an exact substring, including punctuation.</p><button type="submit">Grep</button></form>
+  <section id="find" class="surface find-panel" aria-labelledby="discover-title"><div class="section-heading"><div><p class="eyebrow">FIND</p><h2 id="discover-title">Search</h2></div></div><div class="search-grid">
+    <form id="search" class="search-form"><label for="search-query">Search documents and files<input id="search-query" required maxlength="500" placeholder="Phrase or keyword"></label><button type="submit">Search</button></form>
+    <form id="grep" class="search-form"><label for="grep-pattern">Exact text<input id="grep-pattern" required maxlength="500" placeholder="Exact text"></label><button type="submit">Find exact text</button></form>
   </div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></section>
   <article id="workspace" class="workspace" hidden>
     <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Workspace</a><span aria-hidden="true">/</span><span>Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1><div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Local workspace</span></div></div></div></div><nav class="workspace-nav" aria-label="Artifact sections"><a href="#editor">Editor</a><a href="#history">History</a><a href="#graph-context">Graph</a><a href="#preview-card">Preview</a></nav></header>
     <div class="workspace-layout"><div class="primary-column">
       <section class="surface card-pad" aria-labelledby="details-title"><div class="card-heading"><div><p class="eyebrow">CURRENT STATE</p><h2 id="details-title">Artifact details</h2></div><span class="state-pill">Current version</span></div><dl id="artifact-details" class="metadata-grid"></dl></section>
-      <section id="editor" class="surface editor-card" aria-labelledby="edit-title"><div class="card-heading"><div><p class="eyebrow">EDIT CONTENT</p><h2 id="edit-title">Make a new version</h2></div></div><p class="field-help">Saving creates a new immutable version. It never overwrites history.</p><p id="binary-note" class="binary-note" hidden>Binary content is metadata-only and cannot be edited as text.</p><form id="edit"><input id="parent-version" type="hidden"><label>Media type<input id="media-type" required maxlength="255"></label><label>Reason<input id="reason" value="inspection UI edit" required maxlength="2000"></label><label for="content">Content</label><textarea id="content" spellcheck="false"></textarea><button id="save" type="submit">Save new version</button></form></section>
-      <section id="history" class="utility-grid" aria-label="Artifact history"><div class="surface utility-card"><p class="eyebrow">READ BY CHUNK</p><h2>Chunks</h2><p>Open a piece of long text without leaving this page.</p><ul id="chunks" class="resource-list"></ul><pre id="chunk-content">Choose a chunk to read it.</pre></div><div class="surface utility-card"><p class="eyebrow">IMMUTABLE RECORD</p><h2>Version history</h2><p>Earlier versions remain available for review.</p><ul id="versions" class="resource-list"></ul></div></section>
+      <section id="editor" class="surface editor-card" aria-labelledby="edit-title"><div class="card-heading"><div><p class="eyebrow">EDIT</p><h2 id="edit-title">Content</h2></div></div><p class="field-help">Saving creates a new version.</p><p id="binary-note" class="binary-note" hidden>Binary content is metadata-only and cannot be edited as text.</p><form id="edit"><input id="parent-version" type="hidden"><label>Media type<input id="media-type" required maxlength="255"></label><label>Reason<input id="reason" value="inspection UI edit" required maxlength="2000"></label><label for="content">Content</label><textarea id="content" spellcheck="false"></textarea><button id="save" type="submit">Save new version</button></form></section>
+      <section id="history" class="utility-grid" aria-label="Artifact history"><div class="surface utility-card"><p class="eyebrow">CONTENT</p><h2>Chunks</h2><ul id="chunks" class="resource-list"></ul><pre id="chunk-content">Choose a chunk.</pre></div><div class="surface utility-card"><p class="eyebrow">HISTORY</p><h2>Versions</h2><ul id="versions" class="resource-list"></ul></div></section>
     </div><aside class="secondary-column">
-      <section id="graph-context" class="surface graph-card" aria-labelledby="graph-title"><div class="card-heading"><div><p class="eyebrow">CONTEXT</p><h2 id="graph-title">Outgoing graph</h2></div></div><p>Follow outgoing relationships to see what this artifact supports or references.</p><ul id="graph" class="graph-list"></ul><form id="link" class="link-form"><div class="row"><label>Target artifact identifier<input id="target-id" required maxlength="255" placeholder="art_…"></label><label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label></div><button type="submit">Create relationship</button></form></section>
-      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">SAFETY BOUNDARY</p><h2 id="preview-title">Isolated untrusted preview</h2></div></div><p>Web content runs in a separate origin. Network, host access, navigation, popups, forms, storage, and cookies are denied.</p><div class="capability-list" aria-label="Attached MCP capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div><p class="field-help">Only these Attached MCP capabilities are available to the artifact.</p><p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p><div class="preview-frame"><iframe id="preview" title="Untrusted artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div></section>
+      <section id="graph-context" class="surface graph-card" aria-labelledby="graph-title"><div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">Relationships</h2></div></div><ul id="graph" class="graph-list"></ul><form id="link" class="link-form"><div class="row"><label>Target artifact identifier<input id="target-id" required maxlength="255" placeholder="art_…"></label><label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label></div><button type="submit">Create relationship</button></form></section>
+      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Sandboxed preview</h2></div></div><p>Network and host access are blocked.</p><div class="capability-list" aria-label="Preview capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div><p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div></section>
     </aside></div>
   </article>
 </main></div><script src="/ui.js"></script></body></html>"""

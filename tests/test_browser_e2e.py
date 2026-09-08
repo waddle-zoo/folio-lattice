@@ -276,9 +276,7 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 handler.page_organization = "local-org"
                 handler.page_actor = "local-actor"
                 chrome = DevTools(browser, f"{origin}/?local=1", root / "chrome-auth")
-                chrome.wait(
-                    "document.querySelector('#status')?.textContent.includes('Create or upload')"
-                )
+                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
                 self.assertTrue(chrome.evaluate("Boolean(document.querySelector('.app-shell'))"))
                 self.assertTrue(
                     chrome.evaluate(
@@ -306,9 +304,7 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 handler.page_actor = None
                 handler.api_status = 401
                 chrome.command("Page.navigate", {"url": origin})
-                chrome.wait(
-                    "document.querySelector('#status')?.textContent.includes('Create or upload')"
-                )
+                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
                 chrome.evaluate(
                     "document.querySelector('#search-query').value='private phrase'; document.querySelector('#search').requestSubmit()"
                 )
@@ -369,9 +365,7 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 handler.page_organization = "Acme Operations"
                 handler.page_actor = "Ada Lovelace"
                 chrome.command("Page.navigate", {"url": origin})
-                chrome.wait(
-                    "document.querySelector('#status')?.textContent.includes('Create or upload')"
-                )
+                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
                 self.assertNotIn(
                     "Unauthenticated local development", chrome.evaluate("document.body.innerText")
                 )
@@ -664,9 +658,7 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                 )
                 wait_ready(render_origin, renderer)
                 chrome = DevTools(browser, control_origin, root / "chrome-ui")
-                chrome.wait(
-                    "document.querySelector('#status')?.textContent.includes('Create or upload')"
-                )
+                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
 
                 ax = chrome.command("Accessibility.getFullAXTree")["nodes"]
                 names = {node.get("name", {}).get("value") for node in ax}
@@ -674,8 +666,8 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                 for expected_role in ("banner", "main", "region"):
                     self.assertIn(expected_role, roles)
                 self.assertIn("Create first version", names)
-                self.assertIn("Indexed content search", names)
-                for expected_name in ("Folio Lattice", "Document or file name", "File type"):
+                self.assertIn("Search documents and files", names)
+                for expected_name in ("Folio Lattice", "Workspace", "Name", "Type"):
                     self.assertIn(expected_name, names)
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#status').getAttribute('role')"),
@@ -692,21 +684,16 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                 self.assertEqual(chrome.evaluate("document.activeElement.tagName"), "SUMMARY")
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('h1')?.textContent"),
-                    "Folio Lattice",
+                    "Workspace",
                 )
                 self.assertTrue(
                     chrome.evaluate(
-                        "document.querySelector('#intro')?.textContent.includes('create')"
+                        "document.querySelector('label[for=create-name]')?.textContent.includes('Name')"
                     )
                 )
                 self.assertTrue(
                     chrome.evaluate(
-                        "document.querySelector('label[for=create-name]')?.textContent.includes('Document or file name')"
-                    )
-                )
-                self.assertTrue(
-                    chrome.evaluate(
-                        "document.querySelector('label[for=create-media]')?.textContent.includes('File type')"
+                        "document.querySelector('label[for=create-media]')?.textContent.includes('Type')"
                     )
                 )
                 self.assertEqual(
@@ -759,15 +746,15 @@ document.querySelector('#create').requestSubmit();
                 for expected_name in (
                     "Save new version",
                     "Chunks",
-                    "Version history",
-                    "Outgoing graph",
+                    "Versions",
+                    "Relationships",
                     "Create relationship",
-                    "Isolated untrusted preview",
-                    "Untrusted artifact preview",
+                    "Sandboxed preview",
+                    "Sandboxed artifact preview",
                 ):
                     self.assertIn(expected_name, artifact_names)
                 self.assertIn(
-                    "First immutable version is ready",
+                    "Version 1 saved",
                     chrome.evaluate("document.querySelector('#status').textContent"),
                 )
                 first_version = chrome.evaluate("document.querySelector('#parent-version').value")
@@ -886,9 +873,7 @@ document.querySelector('#search').requestSubmit();
                 self.assertNotEqual(chrome.evaluate("document.activeElement.tagName"), "BODY")
 
                 chrome.command("Page.navigate", {"url": control_origin})
-                chrome.wait(
-                    "document.querySelector('#status')?.textContent.includes('Create or upload')"
-                )
+                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
                 chrome.evaluate(
                     f"document.querySelector('#artifact-id').focus(); document.querySelector('#artifact-id').value={json.dumps(artifact_id)}"
                 )

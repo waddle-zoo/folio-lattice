@@ -199,22 +199,28 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         _, headers, page = await call(self.inspection, "GET", "/")
         self.assertIn(f"frame-src {RENDER_ORIGIN}", headers["content-security-policy"])
         self.assertNotIn(b"allow-same-origin", page)
-        for marker in (b'role="status"', b'role="alert"', b'aria-busy="false"', b"Literal grep"):
+        for marker in (b'role="status"', b'role="alert"', b'aria-busy="false"', b"Exact text"):
             self.assertIn(marker, page)
 
     async def test_ui_contract_has_nontechnical_orientation_and_safe_status_copy(self) -> None:
         status, _, page = await call(self.inspection, "GET", "/")
         self.assertEqual(status, 200)
         self.assertIn(b"<h1", page)
-        self.assertIn(b'id="intro"', page)
-        self.assertIn(b"Document or file name", page)
-        self.assertIn(b"File type", page)
-        self.assertIn(b"Anyone who can reach this address", page)
-        self.assertIn(b"Attached MCP", page)
+        self.assertIn(b"New document or file", page)
+        self.assertIn(b"Search documents and files", page)
+        self.assertIn(b"Relationships", page)
+        self.assertIn(b"Sandboxed preview", page)
+        for narration in (
+            b"Search across the text you have indexed",
+            b"Grep checks for an exact substring",
+            b"One place for the things your team knows",
+            b"A calm place to create",
+        ):
+            self.assertNotIn(narration, page)
 
         status, _, script = await call(self.inspection, "GET", "/ui.js")
         self.assertEqual(status, 200)
-        self.assertIn(b"First immutable version is ready", script)
+        self.assertIn(b"Version 1 saved", script)
         self.assertIn(b"did not run", script)
         self.assertIn(b"artifact_name", script)
         self.assertIn(b"request count", script)
