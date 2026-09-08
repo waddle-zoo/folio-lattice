@@ -52,6 +52,7 @@ class ServiceTests(unittest.TestCase):
             self.service.read_artifact("acme", artifact_id)["text"], "alpha graph target revised"
         )
         self.assertTrue(self.service.search("acme", "revised"))
+        self.assertTrue(self.service.search("acme", "graph-target"))
         self.assertTrue(self.service.grep("acme", "graph target"))
         self.service.link("acme", artifact_id, second["artifact"]["id"], "references")
         traversal = self.service.traverse("acme", artifact_id, max_depth=1)

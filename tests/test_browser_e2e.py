@@ -641,7 +641,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     b"body { color: rgb(3, 4, 5); }",
                     "text/css",
                 )
-                source = b"""<!doctype html><body>browsermarker<script>
+                source = b"""<!doctype html><body>browsermarker human-first<script>
 addEventListener('message', (event) => {
  if (event.data?.type !== 'folio.mcp.response') return;
  document.body.dataset[event.data.id] = String(event.data.ok);
@@ -735,6 +735,11 @@ document.querySelector('#create').requestSubmit();
                 self.assertTrue(
                     chrome.evaluate("Boolean(document.querySelector('#graph-context'))")
                 )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "Boolean(document.querySelector('#editor').compareDocumentPosition(document.querySelector('#details')) & Node.DOCUMENT_POSITION_FOLLOWING)"
+                    )
+                )
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#artifact-media').textContent"),
                     "text/html",
@@ -793,7 +798,7 @@ loadArtifact();
                 chrome.evaluate("""
 window.__folioFetch = window.fetch;
 window.fetch = (...args) => new Promise((resolve) => setTimeout(() => resolve(window.__folioFetch(...args)), 250));
-document.querySelector('#search-query').value = 'browsermarker';
+document.querySelector('#search-query').value = 'human-first';
 document.querySelector('#search').requestSubmit();
 """)
                 self.assertEqual(

@@ -481,10 +481,12 @@ class FolioLattice:
         return result
 
     def search(self, tenant_id: str, query: str, limit: int = 20) -> list[dict[str, Any]]:
-        if not query.strip():
+        query = query.strip()
+        if not query:
             return []
         if len(query) > MAX_QUERY_LENGTH:
             raise FolioError(f"query exceeds {MAX_QUERY_LENGTH} characters")
+        match_query = '"' + query.replace('"', '""') + '"'
         try:
             with self.connect() as db:
                 rows = db.execute(
@@ -500,7 +502,7 @@ class FolioLattice:
                     ORDER BY score
                     LIMIT ?
                     """,
-                    (tenant_id, query, max(1, min(limit, 100))),
+                    (tenant_id, match_query, max(1, min(limit, 100))),
                 ).fetchall()
         except sqlite3.OperationalError as exc:
             raise FolioError("invalid search query") from exc

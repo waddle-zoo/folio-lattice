@@ -116,7 +116,7 @@ def build_mcp_server(
         request_tenant, _ = identity()
         return _tool_errors(lambda: service.read_chunk(request_tenant, chunk_id))
 
-    @server.tool(description="Search indexed text with bounded SQLite FTS5 syntax.")
+    @server.tool(description="Search indexed text for a bounded natural-language phrase.")
     def artifact_search(
         query: Annotated[str, Field(min_length=1, max_length=500)],
         limit: Annotated[int, Field(ge=1, le=100)] = 20,
