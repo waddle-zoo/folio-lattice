@@ -124,7 +124,9 @@ def main() -> None:
     assert bridged["result"]
 
     html_id = html["artifact"]["id"]
-    with urlopen(f"{render_url}/render/{html_id}") as response:
+    with urlopen(
+        Request(f"{render_url}/render/{html_id}", headers={"Sec-Fetch-Dest": "iframe"})
+    ) as response:
         rendered = response.read().decode()
         policy = response.headers["Content-Security-Policy"]
     assert "Docker renderer" in rendered

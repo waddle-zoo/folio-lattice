@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -278,6 +279,23 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 chrome.wait(
                     "document.querySelector('#status')?.textContent.includes('Create or upload')"
                 )
+                self.assertTrue(chrome.evaluate("Boolean(document.querySelector('.app-shell'))"))
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('nav[aria-label=\"Primary\"]')?.textContent.includes('Workspace')"
+                    )
+                )
+                self.assertIn(
+                    "Unauthenticated local development",
+                    chrome.evaluate("document.querySelector('#local-warning')?.textContent"),
+                )
+                self.assertIn(
+                    chrome.evaluate("getComputedStyle(document.body).backgroundColor"),
+                    {"rgb(245, 247, 249)", "rgb(16, 23, 32)"},
+                )
+                self.assertGreaterEqual(
+                    chrome.evaluate("document.querySelectorAll('.surface').length"), 4
+                )
                 self.assertIn(
                     "Unauthenticated local development", chrome.evaluate("document.body.innerText")
                 )
@@ -512,7 +530,8 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     control_origin,
                     "behavior.js",
                     b"document.getElementById('output').textContent='JavaScript ran';"
-                    b"document.body.dataset.javascript='ran'",
+                    b"document.body.dataset.javascript='ran';"
+                    b"parent.postMessage({type:'folio-render-result',value:'javascript-ran'}, '*')",
                     "application/javascript",
                 )
                 css = create(
@@ -525,7 +544,13 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 ).encode()
                 hostile = create(control_origin, "hostile.html", hostile_source, "text/html")
                 hostile_url = f"{render_origin}/render/{hostile['artifact']['id']}"
-                handler = self._handler(hostile_url)
+                handler = self._handler(
+                    hostile_url,
+                    {
+                        "javascript": f"{render_origin}/render/{js_id}",
+                        "stylesheet": f"{render_origin}/render/{css['artifact']['id']}",
+                    },
+                )
                 harness = ThreadingHTTPServer(("127.0.0.1", harness_port), handler)
                 thread = threading.Thread(target=harness.serve_forever, daemon=True)
                 thread.start()
@@ -552,17 +577,20 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                         "same_origin_fetch_blocked": True,
                         "xhr_blocked": True,
                         "websocket_blocked": True,
+                        "top_navigation_script_continued": True,
                     },
                 )
                 self.assertEqual(handler.leaks, [])
-                javascript_dom = dump_dom(
-                    browser, f"{render_origin}/render/{js_id}", root / "chrome-2"
+                denied_request = urllib.request.Request(
+                    hostile_url, headers={"Sec-Fetch-Dest": "document"}
                 )
-                self.assertIn("JavaScript ran", javascript_dom)
-                css_dom = dump_dom(
-                    browser, f"{render_origin}/render/{css['artifact']['id']}", root / "chrome-3"
-                )
-                self.assertIn('data-computed-color="rgb(1, 2, 3)"', css_dom)
+                with self.assertRaises(urllib.error.HTTPError) as denied:
+                    urllib.request.urlopen(denied_request)
+                self.assertEqual(denied.exception.code, 404)
+                self.assertNotIn(b"script_ran", denied.exception.read())
+                embedded_dom = dump_dom(browser, f"{harness_origin}/embedded", root / "chrome-3")
+                self.assertIn("javascript-ran", embedded_dom)
+                self.assertIn("stylesheet-loaded", embedded_dom)
             finally:
                 if renderer is not None:
                     stop_server(renderer)
@@ -633,8 +661,66 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
 
                 ax = chrome.command("Accessibility.getFullAXTree")["nodes"]
                 names = {node.get("name", {}).get("value") for node in ax}
+                roles = {node.get("role", {}).get("value") for node in ax}
+                for expected_role in ("banner", "main", "region"):
+                    self.assertIn(expected_role, roles)
                 self.assertIn("Create first version", names)
                 self.assertIn("Indexed content search", names)
+                for expected_name in ("Folio Lattice", "Document or file name", "File type"):
+                    self.assertIn(expected_name, names)
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#status').getAttribute('role')"),
+                    "status",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#error').getAttribute('role')"),
+                    "alert",
+                )
+                chrome.evaluate("document.querySelector('#artifact-id').focus()")
+                chrome.key("Tab", "Tab", 9)
+                self.assertEqual(chrome.evaluate("document.activeElement.textContent"), "Open")
+                chrome.key("Tab", "Tab", 9)
+                self.assertEqual(chrome.evaluate("document.activeElement.tagName"), "SUMMARY")
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('h1')?.textContent"),
+                    "Folio Lattice",
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('#intro')?.textContent.includes('create')"
+                    )
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('label[for=create-name]')?.textContent.includes('Document or file name')"
+                    )
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('label[for=create-media]')?.textContent.includes('File type')"
+                    )
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('[tabindex]')].filter((node) => Number(node.tabIndex) > 0).length"
+                    ),
+                    0,
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('#bridge-status').getAttribute('aria-live') === 'polite'"
+                    )
+                )
+                chrome.command(
+                    "Emulation.setDeviceMetricsOverride",
+                    {"width": 320, "height": 900, "deviceScaleFactor": 1, "mobile": False},
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+                    )
+                )
+                chrome.command("Emulation.clearDeviceMetricsOverride")
                 chrome.set_file("#create-file", upload)
                 chrome.evaluate("""
 document.querySelector('#create-name').value = 'browser-note.html';
@@ -645,10 +731,68 @@ document.querySelector('#create').requestSubmit();
                 chrome.wait("location.pathname.startsWith('/inspect/art_')")
                 artifact_id = chrome.evaluate("decodeURIComponent(location.pathname.split('/')[2])")
                 chrome.wait("document.querySelector('#title')?.textContent === 'browser-note.html'")
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('#workspace')?.classList.contains('workspace')"
+                    )
+                )
+                self.assertTrue(
+                    chrome.evaluate("Boolean(document.querySelector('#graph-context'))")
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#artifact-media').textContent"),
+                    "text/html",
+                )
+                artifact_ax = chrome.command("Accessibility.getFullAXTree")["nodes"]
+                artifact_names = {node.get("name", {}).get("value") for node in artifact_ax}
+                artifact_roles = {node.get("role", {}).get("value") for node in artifact_ax}
+                self.assertIn("main", artifact_roles)
+                for expected_name in (
+                    "Save new version",
+                    "Chunks",
+                    "Version history",
+                    "Outgoing graph",
+                    "Create relationship",
+                    "Isolated untrusted preview",
+                    "Untrusted artifact preview",
+                ):
+                    self.assertIn(expected_name, artifact_names)
+                self.assertIn(
+                    "First immutable version is ready",
+                    chrome.evaluate("document.querySelector('#status').textContent"),
+                )
                 first_version = chrome.evaluate("document.querySelector('#parent-version').value")
                 chrome.wait(
-                    "document.querySelector('#bridge-status').textContent.includes('Denied')"
+                    "document.querySelector('#bridge-status').textContent.includes('did not run')"
                 )
+                bridge_status = chrome.evaluate(
+                    "document.querySelector('#bridge-status').textContent"
+                )
+                self.assertIn("did not run", bridge_status)
+                self.assertNotIn("Denied or failed", bridge_status)
+                self.assertNotIn("artifact_write", bridge_status)
+
+                chrome.evaluate("""
+window.__folioFetch = window.fetch;
+window.__folioFetchCount = 0;
+window.fetch = (...args) => {
+  const delay = ++window.__folioFetchCount === 1 ? 400 : 100;
+  return new Promise((resolve) => setTimeout(() => resolve(window.__folioFetch(...args)), delay));
+};
+loadArtifact();
+""")
+                time.sleep(0.15)
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#main').getAttribute('aria-busy')"),
+                    "true",
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('button[type=submit]')].every((button) => button.disabled)"
+                    )
+                )
+                chrome.wait("document.querySelector('#main').getAttribute('aria-busy') === 'false'")
+                chrome.evaluate("window.fetch = window.__folioFetch")
 
                 chrome.evaluate("""
 window.__folioFetch = window.fetch;
@@ -663,6 +807,11 @@ document.querySelector('#search').requestSubmit();
                 chrome.wait(
                     "document.querySelector('#results button')?.textContent.startsWith('art_')"
                 )
+                result_label = chrome.evaluate(
+                    "document.querySelector('#results button')?.textContent"
+                )
+                self.assertIn("browser-note.html", result_label)
+                self.assertNotEqual(result_label, artifact_id)
                 chrome.evaluate("window.fetch = window.__folioFetch")
                 chrome.evaluate(
                     "document.querySelector('#search-query').value='definitelynomatches'; document.querySelector('#search').requestSubmit()"
@@ -681,6 +830,10 @@ document.querySelector('#search').requestSubmit();
                     f"document.querySelector('#target-id').value={json.dumps(target['artifact']['id'])}; document.querySelector('#edge-type').value='supports'; document.querySelector('#link').requestSubmit()"
                 )
                 chrome.wait("document.querySelector('#graph').textContent.includes('supports')")
+                self.assertIn(
+                    "decision.txt",
+                    chrome.evaluate("document.querySelector('#graph button')?.textContent"),
+                )
                 chrome.evaluate(
                     "document.querySelector('#content').value += '\\nupdated'; document.querySelector('#reason').value='Morgan edit'; document.querySelector('#edit').requestSubmit()"
                 )
@@ -720,6 +873,8 @@ document.querySelector('#search').requestSubmit();
                 self.assertIn(
                     "unsaved", chrome.evaluate("document.querySelector('#content').value")
                 )
+                chrome.key("Tab", "Tab", 9)
+                self.assertNotEqual(chrome.evaluate("document.activeElement.tagName"), "BODY")
 
                 chrome.command("Page.navigate", {"url": control_origin})
                 chrome.wait(
@@ -732,7 +887,7 @@ document.querySelector('#search').requestSubmit();
                 chrome.wait("location.pathname.startsWith('/inspect/art_')")
                 chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
                 chrome.wait(
-                    "document.querySelector('#bridge-status').textContent.includes('Denied')"
+                    "document.querySelector('#bridge-status').textContent.includes('did not run')"
                 )
                 chrome.wait("document.querySelector('#graph').textContent.includes('supports')")
                 chrome.evaluate("document.querySelector('#graph button').click()")
@@ -750,7 +905,7 @@ document.querySelector('#search').requestSubmit();
                     )
                 chrome.command("Page.navigate", {"url": f"{control_origin}/inspect/{artifact_id}"})
                 chrome.wait(
-                    "document.querySelector('#bridge-status').textContent.includes('Denied')"
+                    "document.querySelector('#bridge-status').textContent.includes('did not run')"
                 )
 
                 spoof = create(
@@ -771,7 +926,34 @@ document.querySelector('#search').requestSubmit();
                 chrome.wait("document.querySelector('#error').textContent.includes('not found')")
                 error_text = chrome.evaluate("document.querySelector('#error').textContent")
                 self.assertNotIn(str(root), error_text)
-                self.assertNotIn("Traceback", error_text)
+                for forbidden in (
+                    "Traceback",
+                    "content_base64",
+                    "source_context",
+                    "Bearer",
+                    "tenant_id",
+                ):
+                    self.assertNotIn(forbidden, error_text)
+                self.assertTrue(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('button[type=submit]')].every((button) => !button.disabled)"
+                    )
+                )
+                chrome.command(
+                    "Emulation.setDeviceMetricsOverride",
+                    {"width": 320, "height": 900, "deviceScaleFactor": 1, "mobile": False},
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+                    )
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('#preview').getBoundingClientRect().width <= document.documentElement.clientWidth"
+                    )
+                )
+                chrome.command("Emulation.clearDeviceMetricsOverride")
             finally:
                 if chrome is not None:
                     chrome.close()
@@ -799,15 +981,32 @@ document.querySelector('#search').requestSubmit();
   result.websocket_blocked = await new Promise((resolve) => {{ try {{ const socket = new WebSocket('ws://127.0.0.1:{harness_origin.rsplit(":", 1)[1]}/leak'); socket.onopen = () => resolve(false); socket.onerror = () => resolve(true); setTimeout(() => resolve(socket.readyState !== WebSocket.OPEN), 300); }} catch {{ resolve(true); }} }});
   try {{ const form = document.createElement('form'); form.action = '{harness_origin}/leak'; form.method = 'POST'; document.body.append(form); form.submit(); }} catch {{}}
   try {{ top.location = '{harness_origin}/escaped'; }} catch {{}}
+  result.top_navigation_script_continued = true;
   parent.postMessage({{type: 'folio-sandbox-result', result}}, '*');
 }})();
 </script></body>"""
 
     @staticmethod
-    def _handler(hostile_url: str) -> type[BaseHTTPRequestHandler]:
+    def _handler(
+        hostile_url: str, embedded_urls: dict[str, str] | None = None
+    ) -> type[BaseHTTPRequestHandler]:
         page = f"""<!doctype html><body><pre id="result">waiting</pre><script>
 addEventListener('message', (event) => {{ const frame = document.getElementById('artifact'); if (event.source !== frame.contentWindow || event.data?.type !== 'folio-sandbox-result') return; document.getElementById('result').textContent = JSON.stringify(event.data.result); }});
 </script><iframe id="artifact" sandbox="allow-scripts" src="{hostile_url}"></iframe></body>""".encode()
+        embedded_page = None
+        if embedded_urls is not None:
+            embedded_page = f"""<!doctype html><body><pre id="embedded-result">waiting</pre>
+<iframe id="javascript" sandbox="allow-scripts" src="{embedded_urls["javascript"]}"></iframe>
+<iframe id="stylesheet" sandbox="allow-scripts" src="{embedded_urls["stylesheet"]}"></iframe>
+<script>
+const result = document.getElementById('embedded-result');
+const values = new Set();
+const report = (value) => {{ values.add(value); result.textContent = [...values].join(' '); }};
+document.getElementById('stylesheet').addEventListener('load', () => report('stylesheet-loaded'));
+addEventListener('message', (event) => {{
+  if (event.source === document.getElementById('javascript').contentWindow && event.data?.type === 'folio-render-result') report(event.data.value);
+}});
+</script></body>""".encode()
 
         class Handler(BaseHTTPRequestHandler):
             leaks: list[str] = []
@@ -819,6 +1018,13 @@ addEventListener('message', (event) => {{ const frame = document.getElementById(
                     self.send_header("Content-Length", str(len(page)))
                     self.end_headers()
                     self.wfile.write(page)
+                    return
+                if self.path == "/embedded" and embedded_page is not None:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(embedded_page)))
+                    self.end_headers()
+                    self.wfile.write(embedded_page)
                     return
                 if self.path in {"/leak", "/escaped"}:
                     self.leaks.append(self.path)

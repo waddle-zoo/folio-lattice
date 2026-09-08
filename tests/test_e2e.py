@@ -99,6 +99,10 @@ def stop_server(process: subprocess.Popen[bytes]) -> str:
     return (stdout + stderr).decode(errors="replace")
 
 
+def iframe_get(url: str) -> Any:
+    return urllib.request.urlopen(urllib.request.Request(url, headers={"Sec-Fetch-Dest": "iframe"}))
+
+
 def create(base_url: str, name: str, content: bytes, media_type: str) -> dict[str, Any]:
     return mcp_call(
         base_url,
@@ -439,21 +443,30 @@ class InspectionRendererE2ETests(unittest.TestCase):
                     self.assertIn('sandbox="allow-scripts"', page)
                     self.assertNotIn("allow-same-origin", page)
                     self.assertIn("Unauthenticated local development", page)
-                with urllib.request.urlopen(
+                with iframe_get(
                     f"{render_origin}/render/{artifact_id}?version_id={updated['id']}"
                 ) as response:
                     self.assertEqual(response.read().decode(), updated_text)
                     policy = response.headers["Content-Security-Policy"]
                     self.assertIn("connect-src 'none'", policy)
                     self.assertIn(f"frame-ancestors {control_origin}", policy)
-                with urllib.request.urlopen(
+                with self.assertRaises(urllib.error.HTTPError) as top_level:
+                    urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{render_origin}/render/{artifact_id}?version_id={updated['id']}",
+                            headers={"Sec-Fetch-Dest": "document"},
+                        )
+                    )
+                self.assertEqual(top_level.exception.code, 404)
+                self.assertNotIn(updated_text, top_level.exception.read().decode())
+                with iframe_get(
                     f"{render_origin}/render/{artifact_id}?version_id={first_version}"
                 ) as response:
                     self.assertIn("<h1>First</h1>", response.read().decode())
                 self._assert_wrapped_resource(render_origin, css, "link")
                 self._assert_wrapped_resource(render_origin, javascript, "script")
                 with self.assertRaises(urllib.error.HTTPError) as unsupported:
-                    urllib.request.urlopen(f"{render_origin}/render/{binary['artifact']['id']}")
+                    iframe_get(f"{render_origin}/render/{binary['artifact']['id']}")
                 self.assertEqual(unsupported.exception.code, 415)
             finally:
                 if renderer is not None:
@@ -468,7 +481,7 @@ class InspectionRendererE2ETests(unittest.TestCase):
     ) -> None:
         artifact_id = created["artifact"]["id"]
         version_id = created["version"]["id"]
-        with urllib.request.urlopen(f"{render_origin}/render/{artifact_id}") as response:
+        with iframe_get(f"{render_origin}/render/{artifact_id}") as response:
             self.assertIn(f"<{element}", response.read().decode())
         with urllib.request.urlopen(
             f"{render_origin}/content/{artifact_id}/{version_id}"

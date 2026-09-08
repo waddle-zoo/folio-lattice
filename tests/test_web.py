@@ -102,6 +102,7 @@ async def call(
     content_type: str | None = None,
     origin: str | None = None,
     query: str = "",
+    fetch_dest: str | None = None,
 ) -> tuple[int, dict[str, str], bytes]:
     request = {"type": "http.request", "body": body, "more_body": False}
     sent: list[dict[str, Any]] = []
@@ -117,6 +118,8 @@ async def call(
         headers.append((b"content-type", content_type.encode()))
     if origin is not None:
         headers.append((b"origin", origin.encode()))
+    if fetch_dest is not None:
+        headers.append((b"sec-fetch-dest", fetch_dest.encode()))
     scope = {
         "type": "http",
         "asgi": {"version": "3.0"},
@@ -198,6 +201,68 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"allow-same-origin", page)
         for marker in (b'role="status"', b'role="alert"', b'aria-busy="false"', b"Literal grep"):
             self.assertIn(marker, page)
+
+    async def test_ui_contract_has_nontechnical_orientation_and_safe_status_copy(self) -> None:
+        status, _, page = await call(self.inspection, "GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"<h1", page)
+        self.assertIn(b'id="intro"', page)
+        self.assertIn(b"Document or file name", page)
+        self.assertIn(b"File type", page)
+        self.assertIn(b"Anyone who can reach this address", page)
+        self.assertIn(b"Attached MCP", page)
+
+        status, _, script = await call(self.inspection, "GET", "/ui.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"First immutable version is ready", script)
+        self.assertIn(b"did not run", script)
+        self.assertIn(b"artifact_name", script)
+        self.assertIn(b"request count", script)
+
+        status, _, css = await call(self.inspection, "GET", "/ui.css")
+        self.assertEqual(status, 200)
+        self.assertIn(b"prefers-color-scheme: dark", css)
+        self.assertIn(b"#error", css)
+
+    async def test_ui_contract_covers_core_loop_and_omits_debug_output(self) -> None:
+        status, _, page = await call(self.inspection, "GET", "/")
+        self.assertEqual(status, 200)
+        for marker in (
+            b'id="open"',
+            b'id="create"',
+            b'id="create-file"',
+            b'id="search"',
+            b'id="grep"',
+            b'id="workspace"',
+            b'id="content"',
+            b'id="chunks"',
+            b'id="versions"',
+            b'id="graph"',
+            b'id="link"',
+            b'id="preview"',
+            b'id="bridge-status"',
+            b'aria-live="polite"',
+        ):
+            self.assertIn(marker, page)
+        for forbidden in (b"Traceback", b"content_base64", b"source_context", b"sqlite"):
+            self.assertNotIn(forbidden, page)
+
+        status, _, script = await call(self.inspection, "GET", "/ui.js")
+        self.assertEqual(status, 200)
+        for marker in (
+            b"location.assign",
+            b"artifact_read_chunk",
+            b"artifact_write",
+            b"artifact_versions",
+            b"graph_link",
+            b"graph_traverse",
+            b"/render/",
+            b"/api/bridge",
+            b"activeRequests",
+        ):
+            self.assertIn(marker, script)
+        for forbidden in (b"Traceback", b"console.log", b"document.cookie"):
+            self.assertNotIn(forbidden, script)
 
     async def test_ui_renders_auth_context_without_local_warning_in_hosted_state(self) -> None:
         page = ui_html(
@@ -436,7 +501,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_renderer_serves_only_safe_web_types_through_caller(self) -> None:
         html_id = self.html["artifact"]["id"]
-        status, headers, body = await call(self.renderer, "GET", f"/render/{html_id}")
+        status, headers, body = await call(
+            self.renderer, "GET", f"/render/{html_id}", fetch_dest="iframe"
+        )
         self.assertEqual(status, 200)
         self.assertEqual(body, b"<h1>Page</h1>")
         self.assertIn("sandbox allow-scripts", headers["content-security-policy"])
@@ -445,7 +512,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         for created, marker in ((self.css, b"<link"), (self.javascript, b"<script")):
             artifact_id = created["artifact"]["id"]
             version_id = created["version"]["id"]
-            status, _, wrapper = await call(self.renderer, "GET", f"/render/{artifact_id}")
+            status, _, wrapper = await call(
+                self.renderer, "GET", f"/render/{artifact_id}", fetch_dest="iframe"
+            )
             self.assertEqual(status, 200)
             self.assertIn(marker, wrapper)
             status, _, content = await call(
@@ -454,7 +523,12 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status, 200)
             self.assertTrue(content)
 
-        status, _, _ = await call(self.renderer, "GET", f"/render/{self.binary['artifact']['id']}")
+        status, _, _ = await call(
+            self.renderer,
+            "GET",
+            f"/render/{self.binary['artifact']['id']}",
+            fetch_dest="iframe",
+        )
         self.assertEqual(status, 415)
         status, _, _ = await call(
             self.renderer, "GET", f"/content/{html_id}/{self.html['version']['id']}"
@@ -466,6 +540,25 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         status, headers, _ = await call(self.renderer, "POST", f"/render/{html_id}")
         self.assertEqual(status, 405)
         self.assertIn("sandbox allow-scripts", headers["content-security-policy"])
+
+    async def test_renderer_denies_top_level_render_navigation_but_allows_iframe(self) -> None:
+        html_id = self.html["artifact"]["id"]
+        status, headers, body = await call(
+            self.renderer, "GET", f"/render/{html_id}", fetch_dest="document"
+        )
+        self.assertEqual(status, 404)
+        self.assertNotIn(b"<h1>Page</h1>", body)
+        self.assertIn("sandbox allow-scripts", headers["content-security-policy"])
+
+        status, _, body = await call(self.renderer, "GET", f"/render/{html_id}")
+        self.assertEqual(status, 404)
+        self.assertNotIn(b"<h1>Page</h1>", body)
+
+        status, _, body = await call(
+            self.renderer, "GET", f"/render/{html_id}", fetch_dest="iframe"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"<h1>Page</h1>")
 
     def test_configuration_is_canonical_and_hosted_mode_fails_closed(self) -> None:
         with patch.dict(os.environ, {"TEST_ORIGIN": "https://Example.COM:8443/"}):

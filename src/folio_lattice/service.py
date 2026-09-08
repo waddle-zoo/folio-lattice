@@ -489,10 +489,14 @@ class FolioLattice:
             with self.connect() as db:
                 rows = db.execute(
                     """
-                    SELECT chunk_id, artifact_id, version_id, snippet(chunk_fts, 4, '[', ']', '…', 18) AS snippet,
+                    SELECT chunk_fts.chunk_id, chunk_fts.artifact_id, chunk_fts.version_id,
+                           artifacts.name AS artifact_name,
+                           snippet(chunk_fts, 4, '[', ']', '…', 18) AS snippet,
                            bm25(chunk_fts) AS score
-                    FROM chunk_fts
-                    WHERE tenant_id = ? AND chunk_fts MATCH ?
+                    FROM chunk_fts JOIN artifacts
+                      ON artifacts.id = chunk_fts.artifact_id
+                     AND artifacts.tenant_id = chunk_fts.tenant_id
+                    WHERE chunk_fts.tenant_id = ? AND chunk_fts MATCH ?
                     ORDER BY score
                     LIMIT ?
                     """,
@@ -509,7 +513,14 @@ class FolioLattice:
             raise FolioError(f"pattern exceeds {MAX_QUERY_LENGTH} characters")
         with self.connect() as db:
             rows = db.execute(
-                "SELECT id, artifact_id, version_id, ordinal, start_offset, end_offset, content FROM chunks WHERE tenant_id = ? ORDER BY artifact_id, version_id, ordinal",
+                """SELECT chunks.id, chunks.artifact_id, chunks.version_id, chunks.ordinal,
+                          chunks.start_offset, chunks.end_offset, chunks.content,
+                          artifacts.name AS artifact_name
+                   FROM chunks JOIN artifacts
+                     ON artifacts.id = chunks.artifact_id
+                    AND artifacts.tenant_id = chunks.tenant_id
+                   WHERE chunks.tenant_id = ?
+                   ORDER BY chunks.artifact_id, chunks.version_id, chunks.ordinal""",
                 (tenant_id,),
             ).fetchall()
         matches: list[dict[str, Any]] = []
@@ -611,9 +622,14 @@ class FolioLattice:
                     continue
                 rows = db.execute(
                     """
-                    SELECT id, source_artifact_id, target_artifact_id, edge_type, metadata_json
-                    FROM edges WHERE tenant_id = ? AND source_artifact_id = ?
-                    ORDER BY created_at, id
+                    SELECT edges.id, edges.source_artifact_id, edges.target_artifact_id,
+                           edges.edge_type, edges.metadata_json,
+                           artifacts.name AS target_artifact_name
+                    FROM edges JOIN artifacts
+                      ON artifacts.id = edges.target_artifact_id
+                     AND artifacts.tenant_id = edges.tenant_id
+                    WHERE edges.tenant_id = ? AND edges.source_artifact_id = ?
+                    ORDER BY edges.created_at, edges.id
                     """,
                     (tenant_id, current),
                 ).fetchall()

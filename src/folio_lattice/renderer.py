@@ -71,6 +71,13 @@ class RendererApp:
             return
         try:
             if path.startswith("/render/"):
+                request_headers = {key.lower(): value.lower() for key, value in scope["headers"]}
+                # Browser-controlled Fetch Metadata keeps raw artifact responses iframe-only.
+                if request_headers.get(b"sec-fetch-dest") != b"iframe":
+                    await JSONResponse(
+                        {"error": "not found"}, status_code=404, headers=self.headers
+                    )(scope, receive, send)
+                    return
                 artifact_id = path.removeprefix("/render/")
                 if not artifact_id or "/" in artifact_id:
                     raise PublicMcpError("artifact not found")

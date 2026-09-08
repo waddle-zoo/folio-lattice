@@ -21,43 +21,233 @@ CONTROL_HEADERS = {
 }
 
 UI_CSS = """
-:root { color-scheme: light dark; font: 15px/1.45 system-ui, sans-serif; }
-body { margin: 0; }
-header, main, .notice { max-width: 1120px; margin: auto; padding: 1rem; }
-.skip-link { position: absolute; left: -10000px; top: auto; }
-.skip-link:focus { left: 1rem; top: 1rem; z-index: 1; padding: .5rem; background: Canvas; color: CanvasText; }
-header { display: flex; gap: .8rem; align-items: end; border-bottom: 1px solid #8885; }
-header form { display: flex; gap: .4rem; align-items: end; flex: 1; }
-input, textarea, button { font: inherit; }
-input, textarea { box-sizing: border-box; padding: .5rem; max-width: 100%; }
-textarea { width: 100%; min-height: 12rem; font-family: ui-monospace, monospace; }
-button { cursor: pointer; padding: .5rem .7rem; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, iframe:focus-visible,
-a:focus-visible, summary:focus-visible {
-  outline: 3px solid #579dff; outline-offset: 2px;
+:root {
+  color-scheme: light;
+  font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1d2633;
+  background: #f5f7f9;
+  --ink: #1d2633;
+  --muted: #647184;
+  --soft: #8c98a8;
+  --line: #dce2e9;
+  --line-strong: #c9d2dd;
+  --surface: #ffffff;
+  --canvas: #f5f7f9;
+  --blue: #2956d7;
+  --blue-dark: #1d43b8;
+  --blue-soft: #eef2ff;
+  --green: #19714a;
+  --green-soft: #eaf7f0;
+  --amber: #9a5a16;
+  --amber-soft: #fff5e7;
+  --shadow: 0 12px 32px rgb(27 42 65 / 6%), 0 2px 6px rgb(27 42 65 / 4%);
 }
-.notice { box-sizing: border-box; background: #7a410020; border: 1px solid #b66b32; }
-.auth-context { max-width: 1120px; margin: 0 auto; padding: .5rem 1rem; }
-.auth-context span + span { margin-left: 1rem; }
-.auth-recovery { box-sizing: border-box; max-width: 1120px; margin: 1rem auto; padding: 1rem; border: 2px solid #b66b32; }
-.auth-recovery a { display: inline-block; margin-top: .5rem; }
-.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
-.row { display: flex; gap: .5rem; align-items: end; flex-wrap: wrap; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { min-width: 320px; margin: 0; background: var(--canvas); color: var(--ink); }
+a { color: var(--blue); }
+a:hover { color: var(--blue-dark); }
+button, input, textarea { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: wait; opacity: .58; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, iframe:focus-visible, a:focus-visible, summary:focus-visible {
+  outline: 3px solid #8ca9ff; outline-offset: 3px;
+}
+button[type="submit"] {
+  border: 1px solid var(--blue);
+  border-radius: 7px;
+  padding: .63rem .9rem;
+  background: var(--blue);
+  color: white;
+  font-weight: 700;
+}
+button[type="submit"]:hover:not(:disabled) { background: var(--blue-dark); }
+input, textarea {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  padding: .67rem .75rem;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: inset 0 1px 1px rgb(27 42 65 / 3%);
+}
+input::placeholder { color: #8b97a6; }
+textarea { min-height: 17rem; resize: vertical; font: .88rem/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
+label { display: block; color: #3d4a5b; font-size: .83rem; font-weight: 700; letter-spacing: .01em; }
+label > input, label > textarea { margin-top: .35rem; font-weight: 400; }
+ul { margin: 0; padding: 0; list-style: none; }
+li { margin: 0; }
+pre { overflow: auto; max-height: 15rem; margin: .75rem 0 0; border: 1px solid var(--line); border-radius: 8px; padding: .85rem; background: #f7f9fb; color: #334258; white-space: pre-wrap; }
+h1, h2, h3, p { margin-top: 0; }
+h1, h2, h3 { color: var(--ink); letter-spacing: -.025em; }
+h1 { margin-bottom: .65rem; font-size: clamp(2rem, 4vw, 3.35rem); line-height: 1.08; }
+h2 { margin-bottom: .35rem; font-size: 1.15rem; line-height: 1.25; }
+h3 { margin-bottom: .3rem; font-size: .94rem; }
+.skip-link { position: absolute; top: .75rem; left: .75rem; z-index: 5; transform: translateY(-150%); border-radius: 6px; padding: .6rem .8rem; background: var(--ink); color: white; }
+.skip-link:focus { transform: translateY(0); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.app-shell { min-height: 100vh; }
+.topbar { display: flex; align-items: center; gap: 1.6rem; max-width: 1240px; min-height: 76px; margin: auto; padding: 1rem 1.5rem; }
+.brand-lockup { display: flex; align-items: center; gap: .7rem; min-width: max-content; }
+.brand-mark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 10px; background: var(--ink); color: white; font-weight: 800; letter-spacing: -.05em; }
+.brand-name { font-weight: 800; letter-spacing: -.025em; }
+.brand-subtitle { color: var(--muted); font-size: .72rem; }
+.primary-nav { display: flex; gap: 1.15rem; margin-right: auto; }
+.primary-nav a { padding: .35rem 0; color: var(--muted); font-size: .86rem; font-weight: 700; text-decoration: none; }
+.primary-nav a:hover, .primary-nav a.is-active { color: var(--ink); }
+.primary-nav a.is-active { border-bottom: 2px solid var(--blue); }
+.nav-index { margin-right: .35rem; color: var(--soft); font: .65rem ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; }
+.topbar-open { display: flex; align-items: center; gap: .45rem; width: min(26rem, 35vw); }
+.topbar-open label { flex: 1; }
+.topbar-open input { height: 38px; padding-block: .45rem; }
+.topbar-open button, .button-secondary { border: 1px solid var(--line-strong); border-radius: 7px; padding: .58rem .8rem; background: var(--surface); color: #39485d; font-weight: 700; }
+.topbar-open button:hover, .button-secondary:hover { border-color: #a9b7c7; background: #f8fafc; }
+.security-banner { display: flex; align-items: flex-start; gap: .8rem; max-width: 1240px; margin: .1rem auto 0; padding: .75rem 1.5rem; color: #70440e; font-size: .8rem; }
+.security-banner::before { content: "!"; display: grid; flex: 0 0 21px; height: 21px; place-items: center; border: 1px solid #d9a05d; border-radius: 50%; background: var(--amber-soft); font-weight: 800; }
+.security-banner strong { display: block; margin-bottom: .05rem; color: #70440e; }
+.security-banner span { color: #88643b; }
+.auth-context { display: flex; justify-content: flex-end; gap: 1rem; max-width: 1240px; margin: 0 auto; padding: .1rem 1.5rem .45rem; color: var(--muted); font-size: .72rem; }
+.auth-recovery { margin: 0 0 1rem; border: 1px solid #e9b5b5; border-radius: 10px; padding: 1rem 1.1rem; background: #fff8f8; }
+.auth-recovery h2 { margin-bottom: .25rem; color: #8f2323; font-size: 1rem; }
+.auth-recovery p { margin-bottom: .7rem; color: #6f4141; font-size: .84rem; }
+.auth-recovery a { display: inline-block; border-radius: 6px; padding: .5rem .7rem; background: var(--blue); color: white; font-size: .82rem; font-weight: 700; text-decoration: none; }
+.page { max-width: 1240px; margin: auto; padding: 1.5rem 1.5rem 4rem; }
+.live-region { min-height: 2rem; }
+#status, #error { margin: 0 0 1rem; border-radius: 7px; padding: .65rem .8rem; font-size: .84rem; }
+#status:empty { display: none; }
+#status { background: var(--green-soft); color: var(--green); }
+.error { border: 1px solid #e9b5b5; background: #fff2f2; color: #a12828; font-weight: 700; }
+.eyebrow { margin-bottom: .45rem; color: var(--blue); font-size: .68rem; font-weight: 800; letter-spacing: .14em; }
+.muted, .field-help { color: var(--muted); }
+.lede { max-width: 42rem; margin-bottom: 1.7rem; color: var(--muted); font-size: 1.08rem; }
+.welcome-panel { padding: 2.2rem 0 1.3rem; }
+.welcome-grid { display: grid; grid-template-columns: minmax(0, 1.28fr) minmax(18rem, .72fr); gap: 1rem; align-items: stretch; }
+.surface { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+.create-card { padding: 1.25rem 1.3rem 1.35rem; }
+.create-card summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer; list-style: none; }
+.create-card summary::-webkit-details-marker { display: none; }
+.create-card summary > span:first-child { display: flex; align-items: center; gap: .6rem; font-weight: 800; }
+.create-card summary > span:first-child::before { content: "+"; display: grid; width: 25px; height: 25px; place-items: center; border-radius: 7px; background: var(--blue-soft); color: var(--blue); font-size: 1.1rem; }
+.step { display: none; }
+.summary-caption { color: var(--muted); font-size: .78rem; }
+.stacked-form { display: grid; gap: .85rem; margin-top: 1.35rem; }
+.row { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; }
 .row > label { flex: 1 1 12rem; }
-section { min-width: 0; border-top: 1px solid #8885; margin-top: 1rem; }
-iframe { width: 100%; min-height: 32rem; border: 1px solid #8888; background: white; }
-pre { overflow: auto; padding: .7rem; border: 1px solid #8885; white-space: pre-wrap; }
-label { display: block; margin: .55rem 0; }
-label > input { display: block; width: 100%; }
-ul { padding-left: 1.3rem; }
-li { margin: .35rem 0; }
-.error { color: #c33; font-weight: 600; }
-.muted { color: #777; }
-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25rem .8rem; }
-dt { font-weight: 600; }
-dd { margin: 0; overflow-wrap: anywhere; }
+.field-help { margin: .35rem 0 0; font-size: .76rem; }
+.guide-card { display: flex; flex-direction: column; padding: 1.3rem; }
+.guide-card h2 { font-size: 1.25rem; }
+.guide-card > p:not(.eyebrow) { color: var(--muted); font-size: .9rem; }
+.feature-list { display: grid; gap: .75rem; margin-top: .45rem; }
+.feature-list li { display: flex; gap: .6rem; color: #435167; font-size: .86rem; }
+.feature-list li::before { content: "✓"; color: var(--green); font-weight: 800; }
+.safety-note { margin-top: auto; border-top: 1px solid var(--line); padding-top: 1rem; color: #70522f; font-size: .78rem; }
+.safety-note strong { display: block; margin-bottom: .2rem; color: #70440e; }
+.find-panel { margin-top: 1rem; padding: 1.3rem; }
+.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.section-heading p { margin-bottom: 0; color: var(--muted); font-size: .8rem; }
+.search-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem; }
+.search-form { border: 1px solid var(--line); border-radius: 9px; padding: 1rem; background: #fbfcfd; }
+.search-form .form-kicker { margin-bottom: .7rem; color: var(--soft); font-size: .68rem; font-weight: 800; letter-spacing: .12em; }
+.search-form button { margin-top: .85rem; }
+.results-wrap { margin-top: 1.15rem; }
+.results-label { margin-bottom: .5rem; color: var(--muted); font-size: .77rem; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; }
+.results-list { border-top: 1px solid var(--line); }
+.result-item { display: flex; align-items: baseline; gap: .55rem; border-bottom: 1px solid var(--line); padding: .75rem .2rem; color: var(--muted); font-size: .84rem; }
+.inline-action { border: 0; padding: .1rem 0; background: transparent; color: var(--blue); font-weight: 700; text-align: left; }
+.inline-action:hover { color: var(--blue-dark); text-decoration: underline; }
+.workspace { margin-top: 1.8rem; }
+.workspace-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1.2rem; }
+.breadcrumb { display: flex; gap: .45rem; margin-bottom: .8rem; color: var(--muted); font-size: .78rem; }
+.breadcrumb a { text-decoration: none; }
+.artifact-title-row { display: flex; align-items: center; gap: .85rem; }
+.artifact-icon { display: grid; width: 44px; height: 50px; place-items: center; border: 1px solid #bfcbea; border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-size: 1.15rem; font-weight: 800; }
+.artifact-title-row h1 { margin-bottom: .25rem; font-size: clamp(1.8rem, 4vw, 2.6rem); overflow-wrap: anywhere; }
+.title-metadata { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .78rem; }
+.title-metadata .dot { width: 4px; height: 4px; border-radius: 50%; background: #aab5c2; }
+.workspace-nav { display: flex; gap: 1rem; }
+.workspace-nav a { color: var(--muted); font-size: .78rem; font-weight: 700; text-decoration: none; }
+.workspace-nav a:hover { color: var(--blue); }
+.workspace-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(19rem, .85fr); gap: 1rem; align-items: start; }
+.primary-column, .secondary-column { display: grid; gap: 1rem; min-width: 0; }
+.card-pad { padding: 1.25rem; }
+.card-heading { display: flex; align-items: start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.card-heading h2 { margin-bottom: 0; }
+.state-pill, .capability { display: inline-flex; align-items: center; border-radius: 999px; padding: .27rem .55rem; background: var(--green-soft); color: var(--green); font-size: .7rem; font-weight: 800; white-space: nowrap; }
+.metadata-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .6rem 1.25rem; margin: 0; }
+.metadata-grid dt { color: var(--muted); font-size: .75rem; font-weight: 700; }
+.metadata-grid dd { margin: 0; overflow-wrap: anywhere; color: #35445a; font: .76rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.editor-card { padding: 1.25rem; }
+.editor-card .field-help { margin: -.45rem 0 1rem; }
+.editor-card form { display: grid; gap: .8rem; }
+.binary-note { border-radius: 7px; padding: .7rem .8rem; background: var(--amber-soft); color: var(--amber); font-size: .82rem; }
+.utility-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.utility-card { padding: 1.15rem 1.25rem; }
+.utility-card h2 { margin-bottom: .2rem; }
+.utility-card > p { margin-bottom: .8rem; color: var(--muted); font-size: .78rem; }
+.resource-list { border-top: 1px solid var(--line); }
+.resource-item, .history-item, .graph-item { border-bottom: 1px solid var(--line); padding: .6rem 0; color: #47566b; font-size: .8rem; }
+.resource-item .inline-action, .history-item .inline-action { width: 100%; }
+.graph-card, .preview-card { padding: 1.25rem; }
+.graph-card > p, .preview-card > p { color: var(--muted); font-size: .8rem; }
+.graph-list { margin: .9rem 0 1rem; border-top: 1px solid var(--line); }
+.graph-item { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.graph-item::before { content: "↳"; color: var(--blue); font-weight: 800; }
+.graph-item .inline-action { overflow-wrap: anywhere; }
+.link-form { display: grid; gap: .75rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.preview-card { background: #fbfcff; }
+.preview-card .card-heading { align-items: center; }
+.preview-card .card-heading h2 { display: flex; align-items: center; gap: .5rem; }
+.preview-card .card-heading h2::before { content: "●"; color: #d1903b; font-size: .75rem; }
+.capability-list { display: flex; flex-wrap: wrap; gap: .4rem; margin: .8rem 0; }
+.capability { background: #edf1f8; color: #475972; }
+#bridge-status { min-height: 2.3rem; margin: .7rem 0; border-radius: 7px; padding: .55rem .65rem; background: #f0f3f8; color: #526176; font-size: .76rem; }
+.preview-frame { overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; background: white; }
+iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: white; }
 [hidden] { display: none !important; }
-@media (max-width: 760px) { .grid { grid-template-columns: 1fr; } header { display: block; } }
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ink: #edf3fb;
+    --muted: #a7b3c4;
+    --soft: #8290a4;
+    --line: #344154;
+    --line-strong: #4a5a70;
+    --surface: #17202d;
+    --canvas: #101720;
+    --blue: #8cafff;
+    --blue-dark: #b4caff;
+    --blue-soft: #202f54;
+    --green: #7bd6a8;
+    --green-soft: #17382d;
+    --amber: #efb66e;
+    --amber-soft: #3b2b18;
+    --shadow: 0 12px 32px rgb(0 0 0 / 22%);
+  }
+  input, textarea, pre, .search-form, .preview-card { background: #111a26; color: var(--ink); }
+  .topbar-open button, .button-secondary { background: var(--surface); color: var(--ink); }
+  .feature-list li, .metadata-grid dd, .resource-item, .history-item, .graph-item { color: #c3cedc; }
+  .capability, #bridge-status { background: #253247; color: #c9d5e5; }
+}
+@media (max-width: 900px) {
+  .topbar { flex-wrap: wrap; gap: .8rem 1.3rem; }
+  .topbar-open { order: 3; width: 100%; }
+  .workspace-heading { align-items: start; flex-direction: column; }
+  .workspace-layout { grid-template-columns: 1fr; }
+  .secondary-column { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+}
+@media (max-width: 640px) {
+  .topbar, .security-banner, .page { padding-inline: 1rem; }
+  .primary-nav { order: 2; width: 100%; }
+  .welcome-panel { padding-top: 1.3rem; }
+  .welcome-grid, .search-grid, .utility-grid, .secondary-column { grid-template-columns: 1fr; }
+  .section-heading { align-items: start; flex-direction: column; gap: .35rem; }
+  .metadata-grid { grid-template-columns: 1fr; gap: .15rem; }
+  .metadata-grid dd { margin-bottom: .45rem; }
+  .result-item { align-items: start; flex-direction: column; gap: .15rem; }
+  .workspace-nav { flex-wrap: wrap; }
+  .auth-context { justify-content: flex-start; flex-wrap: wrap; padding-inline: 1rem; }
+}
 """.strip()
 
 UI_JS = r"""
@@ -66,6 +256,7 @@ const parts = location.pathname.split('/').filter(Boolean);
 const artifactId = parts[0] === 'inspect' ? decodeURIComponent(parts[1] || '') : '';
 const renderOrigin = document.body.dataset.renderOrigin;
 let wasAuthenticated = document.body.dataset.authState === 'authenticated';
+let activeRequests = 0;
 
 function safeReturnPath() {
   const path = location.pathname;
@@ -80,6 +271,7 @@ function clearAuthRecovery() {
 }
 function hideProtectedView() {
   byId('workspace').hidden = true;
+  byId('welcome').hidden = true;
   byId('title').textContent = 'Artifact';
   byId('artifact-details').replaceChildren();
   byId('chunks').replaceChildren();
@@ -137,8 +329,11 @@ function failure(message) {
   byId('error').focus();
 }
 function busy(value) {
-  byId('main').setAttribute('aria-busy', String(value));
-  document.querySelectorAll('button[type="submit"]').forEach((item) => { item.disabled = value; });
+  // A request count keeps parallel artifact reads from clearing busy state early.
+  activeRequests = Math.max(0, activeRequests + (value ? 1 : -1));
+  const isBusy = activeRequests > 0;
+  byId('main').setAttribute('aria-busy', String(isBusy));
+  document.querySelectorAll('button[type="submit"]').forEach((item) => { item.disabled = isBusy; });
 }
 async function call(tool, args, endpoint = '/api/mcp') {
   busy(true);
@@ -166,6 +361,7 @@ function list(id, items, render, empty) {
 }
 function button(label, action) {
   const value = document.createElement('button'); value.type = 'button';
+  value.className = 'inline-action';
   value.textContent = label; value.addEventListener('click', action); return value;
 }
 function base64(bytes) {
@@ -178,6 +374,7 @@ function base64(bytes) {
 function showRead(read) {
   const artifact = read.artifact; const version = read.version;
   byId('title').textContent = artifact.name;
+  byId('artifact-media').textContent = version.media_type;
   byId('artifact-details').textContent = '';
   const values = [
     ['Artifact', artifact.id], ['Media type', version.media_type], ['Version', version.id],
@@ -195,7 +392,7 @@ function showRead(read) {
   byId('media-type').value = version.media_type;
   byId('parent-version').value = version.id; byId('binary-note').hidden = editable;
   list('chunks', read.chunks || [], (chunk) => {
-    const li = document.createElement('li');
+    const li = document.createElement('li'); li.className = 'resource-item';
     li.append(button(`Chunk ${chunk.ordinal + 1}: ${chunk.start_offset}–${chunk.end_offset}`, async () => {
       try {
         status('Reading chunk…');
@@ -211,8 +408,10 @@ function showRead(read) {
 async function loadArtifact(versionId = null) {
   if (!artifactId) {
     byId('workspace').hidden = true;
+    byId('welcome').hidden = false;
     status('Create or upload an artifact, or open one by identifier.'); return;
   }
+  byId('welcome').hidden = true;
   byId('artifact-id').value = artifactId; status('Loading artifact…');
   const args = {artifact_id: artifactId}; if (versionId) args.version_id = versionId;
   const [read, versions, graph] = await Promise.all([
@@ -222,18 +421,23 @@ async function loadArtifact(versionId = null) {
   ]);
   byId('workspace').hidden = false; showRead(read);
   list('versions', versions, (version) => {
-    const li = document.createElement('li');
+    const li = document.createElement('li'); li.className = 'history-item';
     const label = `${version.created_at} — ${version.reason}${version.id === read.version.id ? ' (shown)' : ''}`;
     li.append(button(label, () => loadArtifact(version.id).catch(handleFailure)));
     return li;
   }, 'No versions found.');
   list('graph', graph, (edge) => {
-    const li = document.createElement('li');
-    li.append(`${edge.edge_type} → `, button(edge.target_artifact_id, () => {
+    const li = document.createElement('li'); li.className = 'graph-item';
+    const edgeType = document.createElement('span'); edgeType.textContent = `${edge.edge_type} → `;
+    const targetLabel = edge.target_artifact_name
+      ? `${edge.target_artifact_id} — ${edge.target_artifact_name}` : edge.target_artifact_id;
+    li.append(edgeType, button(targetLabel, () => {
       location.assign(`/inspect/${encodeURIComponent(edge.target_artifact_id)}`);
     })); return li;
   }, 'No outgoing relationships.');
-  status(`Loaded ${read.artifact.name}.`);
+  status(new URLSearchParams(location.search).has('created')
+    ? `Created ${read.artifact.name}. First immutable version is ready.`
+    : `Loaded ${read.artifact.name}.`);
 }
 
 byId('open').addEventListener('submit', (event) => {
@@ -256,7 +460,7 @@ byId('create').addEventListener('submit', async (event) => {
       reason: byId('create-reason').value, content_base64: base64(bytes),
       source_context: {interface: 'inspection-ui'},
     });
-    location.assign(`/inspect/${encodeURIComponent(created.artifact.id)}`);
+    location.assign(`/inspect/${encodeURIComponent(created.artifact.id)}?created=1`);
   } catch (error) { handleFailure(error); }
 });
 async function discover(tool, field, inputId) {
@@ -264,8 +468,11 @@ async function discover(tool, field, inputId) {
     status(tool === 'artifact_search' ? 'Searching indexed content…' : 'Running literal grep…');
     const results = await call(tool, {[field]: byId(inputId).value, limit: 20});
     list('results', results, (result) => {
-      const li = document.createElement('li'); const excerpt = result.snippet || result.content || '';
-      li.append(button(result.artifact_id, () => location.assign(`/inspect/${encodeURIComponent(result.artifact_id)}`)));
+      const li = document.createElement('li'); li.className = 'result-item';
+      const excerpt = result.snippet || result.content || '';
+      const resultLabel = result.artifact_name
+        ? `${result.artifact_id} — ${result.artifact_name}` : result.artifact_id;
+      li.append(button(resultLabel, () => location.assign(`/inspect/${encodeURIComponent(result.artifact_id)}`)));
       const span = document.createElement('span'); span.textContent = ` — ${excerpt.slice(0, 240)}`;
       li.append(span); return li;
     }, 'No results.'); status(`${results.length} result${results.length === 1 ? '' : 's'}.`);
@@ -288,7 +495,10 @@ byId('edit').addEventListener('submit', async (event) => {
       source_context: {interface: 'inspection-ui'},
     });
     status(`Saved new version ${written.id}.`); await loadArtifact();
-  } catch (error) { handleFailure(error); }
+  } catch (error) {
+    if (error.status === 409) failure('A newer version already exists. Refresh before saving again; your edit remains here.');
+    else handleFailure(error);
+  }
 });
 byId('link').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -320,7 +530,7 @@ addEventListener('message', async (event) => {
       : error.status === 403 ? 'This document is not available to you.' : error.message;
     if (error.status === 401) handleFailure(error);
     source.postMessage({type: 'folio.mcp.response', id: value.id, ok: false, error: message}, '*');
-    byId('bridge-status').textContent = `Denied or failed attached tool ${value.tool}.`;
+    byId('bridge-status').textContent = 'Attached MCP request did not run.';
   }
 });
 
@@ -339,9 +549,9 @@ def ui_html(
     state = escape(auth_state, quote=True)
     organization_value = escape(organization or "Unavailable", quote=True)
     actor_value = escape(actor or "Unavailable", quote=True)
+    auth_context_hidden = " hidden" if not organization and not actor else ""
     local_warning = (
-        '<p id="local-warning" class="notice" role="note"><strong>Unauthenticated local '
-        "development.</strong> Do not expose this service to an untrusted network.</p>"
+        '<div id="local-warning" class="security-banner" role="note" aria-label="Local security notice"><div><strong>Unauthenticated local development</strong><span>Keep this service on a trusted network. Do not expose it to untrusted users.</span></div></div>'
         if auth_state == "local"
         else ""
     )
@@ -350,28 +560,48 @@ def ui_html(
 <title>Folio Lattice inspection</title><link rel="stylesheet" href="/ui.css"></head>
 <body data-render-origin="{origin}" data-auth-state="{state}">
 <a class="skip-link" href="#main">Skip to content</a>
+<div class="app-shell">
+<header class="topbar">
+  <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">F</span><div><div class="brand-name">Folio Lattice</div><div class="brand-subtitle">Knowledge workspace</div></div></div>
+  <nav class="primary-nav" aria-label="Primary"><a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Workspace</a><a href="#find"><span class="nav-index" aria-hidden="true">02</span>Find</a></nav>
+  <form id="open" class="topbar-open"><label class="sr-only" for="artifact-id">Open artifact identifier</label><input id="artifact-id" required maxlength="255" placeholder="Open an artifact ID"><button class="button-secondary" type="submit">Open</button></form>
+</header>
 {local_warning}
-<p id="auth-context" class="auth-context" aria-label="Active account"><span id="organization-context">Organization: {organization_value}</span><span id="actor-context">Actor: {actor_value}</span></p>
-<header><strong>Folio Lattice</strong><form id="open"><label for="artifact-id">Open artifact identifier<input id="artifact-id" required maxlength="255"></label><button type="submit">Open</button></form></header>
-<main id="main" aria-busy="false"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p>
-<section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
-<details open><summary>Create or upload an artifact</summary><form id="create">
-<div class="row"><label>Name<input id="create-name" required maxlength="255"></label><label>Media type<input id="create-media" maxlength="255" placeholder="text/plain"></label></div>
-<label>File (optional)<input id="create-file" type="file"></label><label>Text content when no file is selected<textarea id="create-text"></textarea></label>
-<label>Reason<input id="create-reason" value="inspection UI create" required maxlength="2000"></label><button type="submit">Create first version</button></form></details>
-<section aria-labelledby="discover-title"><h2 id="discover-title">Find content</h2><div class="grid">
-<form id="search"><label>Indexed content search<input id="search-query" required maxlength="500"></label><button type="submit">Search</button></form>
-<form id="grep"><label>Literal grep (not regular expressions)<input id="grep-pattern" required maxlength="500"></label><button type="submit">Grep</button></form></div><ul id="results"><li class="muted">No search run yet.</li></ul></section>
-<article id="workspace" hidden><h1 id="title">Artifact</h1><dl id="artifact-details"></dl><div class="grid">
-<section aria-labelledby="edit-title"><h2 id="edit-title">Edit current text</h2><p id="binary-note" hidden>Binary content is metadata-only and cannot be edited as text.</p>
-<form id="edit"><input id="parent-version" type="hidden"><label>Media type<input id="media-type" required maxlength="255"></label>
-<label>Reason<input id="reason" value="inspection UI edit" required maxlength="2000"></label><label for="content">Content</label><textarea id="content" spellcheck="false"></textarea><button id="save" type="submit">Save new version</button></form>
-<h2>Chunks</h2><ul id="chunks"></ul><pre id="chunk-content">Choose a chunk to read it.</pre><h2>Version history</h2><ul id="versions"></ul>
-<h2>Outgoing graph</h2><p>Navigation and traversal follow outgoing edges only.</p><ul id="graph"></ul>
-<form id="link"><div class="row"><label>Target artifact identifier<input id="target-id" required maxlength="255"></label><label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label></div><button type="submit">Create relationship</button></form></section>
-<section aria-labelledby="preview-title"><h2 id="preview-title">Isolated untrusted preview</h2><p>Direct network, host access, navigation, popups, forms, storage, and cookies are denied. Attached Folio capability: read, indexed search, and outgoing traversal only.</p>
-<p id="bridge-status" role="status">No attached tool call yet.</p><iframe id="preview" title="Untrusted artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></section>
-</div></article></main><script src="/ui.js"></script></body></html>"""
+<p id="auth-context" class="auth-context" aria-label="Active account"{auth_context_hidden}><span id="organization-context">Organization: {organization_value}</span><span id="actor-context">Actor: {actor_value}</span></p>
+<main id="main" class="page" aria-busy="false">
+  <div class="live-region"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
+  <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
+  <section id="welcome" class="welcome-panel" aria-labelledby="welcome-title">
+    <p class="eyebrow">FOLIO LATTICE / WORKSPACE</p>
+    <h1 id="welcome-title">Folio Lattice</h1>
+    <p id="intro" class="lede">A calm place to create, read, and connect working knowledge. Every edit keeps its history.</p>
+    <div class="welcome-grid">
+      <details class="surface create-card" open><summary><span><span class="step">01</span>Add an artifact</span><span class="summary-caption">New document or file</span></summary><form id="create" class="stacked-form">
+        <div class="row"><label for="create-name">Document or file name<input id="create-name" required maxlength="255" placeholder="e.g. launch-notes.txt"></label><label for="create-media">File type<input id="create-media" maxlength="255" placeholder="text/plain"></label></div>
+        <label>File (optional)<input id="create-file" type="file"></label>
+        <label>Text content when no file is selected<textarea id="create-text" placeholder="Start with a note, decision, or reference…"></textarea></label>
+        <p class="field-help">Files are stored as immutable versions. You can edit text later without losing history.</p>
+        <label>Reason<input id="create-reason" value="inspection UI create" required maxlength="2000"></label><button type="submit">Create first version</button>
+      </form></details>
+      <div class="surface guide-card"><p class="eyebrow">YOUR WORKSPACE</p><h2>One place for the things your team knows.</h2><p>Folio keeps source files readable, findable, and connected to the context around them.</p><ul class="feature-list"><li>Search inside indexed text</li><li>Trace outgoing relationships</li><li>Review and restore earlier versions</li></ul><div class="safety-note"><strong>Preview safely</strong><span>Anyone who can reach this address can use local mode. Web artifacts run in an isolated frame with only the Attached MCP capabilities shown on screen.</span></div></div>
+    </div>
+  </section>
+  <section id="find" class="surface find-panel" aria-labelledby="discover-title"><div class="section-heading"><div><p class="eyebrow">DISCOVER</p><h2 id="discover-title">Find content</h2></div><p>Search across the text you have indexed.</p></div><div class="search-grid">
+    <form id="search" class="search-form"><p class="form-kicker">INDEXED SEARCH</p><label for="search-query">Indexed content search<input id="search-query" required maxlength="500" placeholder="Try a phrase or keyword"></label><p class="field-help">Search finds words inside your artifacts.</p><button type="submit">Search</button></form>
+    <form id="grep" class="search-form"><p class="form-kicker">EXACT MATCH</p><label for="grep-pattern">Literal grep (not regular expressions)<input id="grep-pattern" required maxlength="500" placeholder="Find this exact text"></label><p class="field-help">Grep checks for an exact substring, including punctuation.</p><button type="submit">Grep</button></form>
+  </div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></section>
+  <article id="workspace" class="workspace" hidden>
+    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Workspace</a><span aria-hidden="true">/</span><span>Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1><div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Local workspace</span></div></div></div></div><nav class="workspace-nav" aria-label="Artifact sections"><a href="#editor">Editor</a><a href="#history">History</a><a href="#graph-context">Graph</a><a href="#preview-card">Preview</a></nav></header>
+    <div class="workspace-layout"><div class="primary-column">
+      <section class="surface card-pad" aria-labelledby="details-title"><div class="card-heading"><div><p class="eyebrow">CURRENT STATE</p><h2 id="details-title">Artifact details</h2></div><span class="state-pill">Current version</span></div><dl id="artifact-details" class="metadata-grid"></dl></section>
+      <section id="editor" class="surface editor-card" aria-labelledby="edit-title"><div class="card-heading"><div><p class="eyebrow">EDIT CONTENT</p><h2 id="edit-title">Make a new version</h2></div></div><p class="field-help">Saving creates a new immutable version. It never overwrites history.</p><p id="binary-note" class="binary-note" hidden>Binary content is metadata-only and cannot be edited as text.</p><form id="edit"><input id="parent-version" type="hidden"><label>Media type<input id="media-type" required maxlength="255"></label><label>Reason<input id="reason" value="inspection UI edit" required maxlength="2000"></label><label for="content">Content</label><textarea id="content" spellcheck="false"></textarea><button id="save" type="submit">Save new version</button></form></section>
+      <section id="history" class="utility-grid" aria-label="Artifact history"><div class="surface utility-card"><p class="eyebrow">READ BY CHUNK</p><h2>Chunks</h2><p>Open a piece of long text without leaving this page.</p><ul id="chunks" class="resource-list"></ul><pre id="chunk-content">Choose a chunk to read it.</pre></div><div class="surface utility-card"><p class="eyebrow">IMMUTABLE RECORD</p><h2>Version history</h2><p>Earlier versions remain available for review.</p><ul id="versions" class="resource-list"></ul></div></section>
+    </div><aside class="secondary-column">
+      <section id="graph-context" class="surface graph-card" aria-labelledby="graph-title"><div class="card-heading"><div><p class="eyebrow">CONTEXT</p><h2 id="graph-title">Outgoing graph</h2></div></div><p>Follow outgoing relationships to see what this artifact supports or references.</p><ul id="graph" class="graph-list"></ul><form id="link" class="link-form"><div class="row"><label>Target artifact identifier<input id="target-id" required maxlength="255" placeholder="art_…"></label><label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label></div><button type="submit">Create relationship</button></form></section>
+      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">SAFETY BOUNDARY</p><h2 id="preview-title">Isolated untrusted preview</h2></div></div><p>Web content runs in a separate origin. Network, host access, navigation, popups, forms, storage, and cookies are denied.</p><div class="capability-list" aria-label="Attached MCP capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div><p class="field-help">Only these Attached MCP capabilities are available to the artifact.</p><p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p><div class="preview-frame"><iframe id="preview" title="Untrusted artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div></section>
+    </aside></div>
+  </article>
+</main></div><script src="/ui.js"></script></body></html>"""
 
 
 def control_headers(render_origin: str) -> dict[str, str]:
