@@ -152,6 +152,23 @@ docker compose -f deploy/compose/hosted.yml run --rm folio backup verify --input
 docker compose -f deploy/compose/hosted.yml run --rm folio dr restore --input /evidence/backup
 ```
 
+### Hyperset hosted-auth consumer gate (`fl-urj.5.2`)
+
+The black-box consumer is executable once a hosted deployment and
+standards-conformant test issuer are supplied:
+
+```sh
+make hosted-e2e
+```
+
+Configure the two public `/mcp` URLs, issuer discovery/JWKS URL, three token
+sources, membership revoke hook, restart hook, revocation bound, source SHA,
+and image digest as documented in
+[`hyperset-hosted-e2e.md`](hyperset-hosted-e2e.md). The consumer is independent
+of the in-process implementation. A run without that external deployment and
+issuer must record `blocked`, never a local-mode pass. Redacted output follows
+[`hyperset-hosted-evidence.schema.json`](hyperset-hosted-evidence.schema.json).
+
 Planned browser commands use a pinned Playwright image/toolchain. The browser
 must exercise the UI and the dedicated sandbox origin, not a mocked DOM.
 
