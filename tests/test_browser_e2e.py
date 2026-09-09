@@ -284,11 +284,10 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                         "document.querySelector('nav[aria-label=\"Primary\"]')?.textContent.includes('Library')"
                     )
                 )
-                self.assertIn(
-                    "Unauthenticated local development",
-                    chrome.evaluate("document.querySelector('#local-warning')?.textContent"),
+                self.assertNotIn(
+                    "Unauthenticated local development", chrome.evaluate("document.body.innerText")
                 )
-                self.assertFalse(chrome.evaluate("document.querySelector('.account-details').open"))
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#auth-context'))"))
                 self.assertIn(
                     chrome.evaluate("getComputedStyle(document.body).backgroundColor"),
                     {"rgb(245, 247, 249)", "rgb(16, 23, 32)"},
@@ -296,9 +295,13 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 self.assertGreaterEqual(
                     chrome.evaluate("document.querySelectorAll('.surface').length"), 4
                 )
+                handler.api_status = 401
+                chrome.command("Page.navigate", {"url": f"{origin}/inspect/opaque-reference"})
+                chrome.wait("!document.querySelector('#error').hidden")
+                self.assertTrue(chrome.evaluate("Boolean(document.querySelector('#auth-context'))"))
                 self.assertIn(
-                    "Organization: local-org",
-                    chrome.evaluate("document.querySelector('#auth-context').textContent"),
+                    "Unauthenticated local development",
+                    chrome.evaluate("document.querySelector('#local-warning').textContent"),
                 )
 
                 handler.page_auth_state = "unauthenticated"
@@ -372,14 +375,7 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 self.assertNotIn(
                     "Unauthenticated local development", chrome.evaluate("document.body.innerText")
                 )
-                self.assertIn(
-                    "Organization: Acme Operations",
-                    chrome.evaluate("document.querySelector('#auth-context').textContent"),
-                )
-                self.assertIn(
-                    "Actor: Ada Lovelace",
-                    chrome.evaluate("document.querySelector('#auth-context').textContent"),
-                )
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#auth-context'))"))
                 handler.api_status = 401
                 chrome.evaluate(
                     "document.querySelector('#grep-pattern').value='unsaved search'; document.querySelector('#grep').requestSubmit()"
@@ -388,7 +384,7 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                     "document.querySelector('#error').textContent === 'Your session expired. Sign in again.'"
                 )
                 self.assertEqual(chrome.evaluate("document.activeElement.id"), "error")
-                self.assertTrue(chrome.evaluate("document.querySelector('#auth-context').hidden"))
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#auth-context'))"))
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#grep-pattern').value"),
                     "unsaved search",
@@ -461,13 +457,14 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 if path == "/ui.js":
                     self._send(UI_JS.encode(), "application/javascript")
                     return
-                if path == "/" or path.startswith("/inspect/"):
+                if path == "/" or path.startswith("/inspect/") or path.startswith("/artifacts/"):
                     self._send(
                         ui_html(
                             origin,
                             auth_state=self.page_auth_state,
                             organization=self.page_organization,
                             actor=self.page_actor,
+                            debug=path.startswith("/inspect/"),
                         ).encode(),
                         "text/html",
                     )
@@ -681,7 +678,6 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                     "Recent artifacts",
                     "New document or file",
                     "Search library",
-                    "Open by identifier",
                 ):
                     self.assertIn(expected_name, names)
                 self.assertEqual(
@@ -699,17 +695,16 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                     "Library",
                 )
                 self.assertNotIn("Open artifact ID", chrome.evaluate("document.body.innerText"))
+                self.assertNotIn("Open by identifier", chrome.evaluate("document.body.innerText"))
+                self.assertNotIn("Unauthenticated local development", chrome.evaluate("document.body.innerText"))
                 self.assertEqual(
                     chrome.evaluate(
                         "[...document.querySelectorAll('[tabindex]')].filter((node) => Number(node.tabIndex) > 0).length"
                     ),
                     0,
                 )
-                self.assertTrue(
-                    chrome.evaluate(
-                        "document.querySelector('#bridge-status').getAttribute('aria-live') === 'polite'"
-                    )
-                )
+                for selector in ("#artifact-id", "#sharing", "#bridge-status", "#fullscreen-preview"):
+                    self.assertFalse(chrome.evaluate(f"Boolean(document.querySelector({selector!r}))"))
                 chrome.command(
                     "Emulation.setDeviceMetricsOverride",
                     {"width": 320, "height": 900, "deviceScaleFactor": 1, "mobile": False},
@@ -728,7 +723,7 @@ document.querySelector('#create-media').value = 'text/html';
 document.querySelector('#create-reason').value = 'Morgan upload';
 document.querySelector('#create').requestSubmit();
 """)
-                chrome.wait("location.pathname.startsWith('/inspect/art_')")
+                chrome.wait("location.pathname.startsWith('/artifacts/art_')")
                 artifact_id = chrome.evaluate("decodeURIComponent(location.pathname.split('/')[2])")
                 chrome.wait("document.querySelector('#title')?.textContent === 'browser-note.html'")
                 self.assertTrue(
@@ -736,6 +731,23 @@ document.querySelector('#create').requestSubmit();
                         "document.querySelector('#workspace')?.classList.contains('workspace')"
                     )
                 )
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#artifact-details'))"))
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#sharing'))"))
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#graph-context'))"))
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#bridge-status'))"))
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#fullscreen-preview'))"))
+                self.assertTrue(
+                    chrome.evaluate(
+                        "Boolean(document.querySelector('#reader').compareDocumentPosition(document.querySelector('#preview-card')) & Node.DOCUMENT_POSITION_FOLLOWING)"
+                    )
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#preview').getAttribute('sandbox')"),
+                    "allow-scripts",
+                )
+                self.assertIn("Version 1 saved", chrome.evaluate("document.querySelector('#status').textContent"))
+                chrome.command("Page.navigate", {"url": f"{control_origin}/inspect/{artifact_id}?created=1"})
+                chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
                 self.assertTrue(
                     chrome.evaluate("Boolean(document.querySelector('#graph-context'))")
                 )
@@ -969,7 +981,11 @@ document.querySelector('#search').requestSubmit();
                     "const item = [...document.querySelectorAll('#recent-artifacts button')].find((button) => button.textContent === 'browser-note.html'); item.focus()"
                 )
                 chrome.key("Enter", "Enter", 13)
-                chrome.wait("location.pathname.startsWith('/inspect/art_')")
+                chrome.wait("location.pathname.startsWith('/artifacts/art_')")
+                chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#sharing'))"))
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#bridge-status'))"))
+                chrome.command("Page.navigate", {"url": f"{control_origin}/inspect/{artifact_id}"})
                 chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
                 chrome.wait(
                     "document.querySelector('#bridge-status').textContent.includes('did not run')"

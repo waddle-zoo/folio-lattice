@@ -187,7 +187,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_static_ui_is_bounded_accessible_and_strictly_sandboxed(self) -> None:
         for path, expected in (
-            ("/", b"Unauthenticated local development"),
+            ("/", b"Recent artifacts"),
+            (f"/artifacts/{self.html['artifact']['id']}", b"Back to library"),
             (f"/inspect/{self.html['artifact']['id']}", b'sandbox="allow-scripts"'),
             ("/ui.css", b"focus-visible"),
             ("/ui.js", b"event.origin !== 'null' || event.source !== frame.contentWindow"),
@@ -201,6 +202,14 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"allow-same-origin", page)
         for marker in (b'role="status"', b'role="alert"', b'aria-busy="false"', b"Exact text"):
             self.assertIn(marker, page)
+        for forbidden in (
+            b"Unauthenticated local development",
+            b'id="artifact-id"',
+            b'id="sharing"',
+            b'id="bridge-status"',
+            b'id="fullscreen-preview"',
+        ):
+            self.assertNotIn(forbidden, page)
 
     async def test_ui_contract_has_nontechnical_orientation_and_safe_status_copy(self) -> None:
         status, _, page = await call(self.inspection, "GET", "/")
@@ -209,7 +218,6 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"Recent artifacts", page)
         self.assertIn(b"New document or file", page)
         self.assertIn(b"Search documents and files", page)
-        self.assertIn(b"Relationships", page)
         self.assertIn(b"Artifact preview", page)
         for narration in (
             b"Search across the text you have indexed",
@@ -235,7 +243,6 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         status, _, page = await call(self.inspection, "GET", "/")
         self.assertEqual(status, 200)
         for marker in (
-            b'id="open"',
             b'id="recent-artifacts"',
             b'id="back-to-library"',
             b'id="create"',
@@ -246,18 +253,44 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="content"',
             b'id="chunks"',
             b'id="versions"',
-            b'id="graph"',
-            b'id="link"',
             b'id="preview"',
-            b'id="bridge-status"',
-            b'id="sharing"',
-            b'id="people-with-access"',
-            b'id="share-recipient"',
             b'aria-live="polite"',
         ):
             self.assertIn(marker, page)
+        for forbidden in (
+            b"Open by identifier",
+            b'id="open"',
+            b'id="artifact-id"',
+            b'id="artifact-details"',
+            b'id="graph"',
+            b'id="sharing"',
+            b'id="bridge-status"',
+            b'id="fullscreen-preview"',
+        ):
+            self.assertNotIn(forbidden, page)
         for forbidden in (b"Traceback", b"content_base64", b"source_context", b"sqlite"):
             self.assertNotIn(forbidden, page)
+
+        debug_page = (await call(
+            self.inspection, "GET", f"/inspect/{self.html['artifact']['id']}"
+        ))[2]
+        for marker in (
+            b'id="open"',
+            b'id="artifact-id"',
+            b'id="artifact-details"',
+            b'id="graph"',
+            b'id="sharing"',
+            b'id="bridge-status"',
+            b'id="fullscreen-preview"',
+        ):
+            self.assertIn(marker, debug_page)
+        human_page = (await call(
+            self.inspection, "GET", f"/artifacts/{self.html['artifact']['id']}"
+        ))[2]
+        self.assertNotIn(b'id="artifact-id"', human_page)
+        self.assertNotIn(b"People with access", human_page)
+        self.assertIn(b'iframe id="preview"', human_page)
+        self.assertIn(b'sandbox="allow-scripts"', human_page)
 
         status, _, script = await call(self.inspection, "GET", "/ui.js")
         self.assertEqual(status, 200)
@@ -305,6 +338,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             auth_state="authenticated",
             organization="Acme & Sons",
             actor='Ada "A" Lovelace',
+            debug=True,
         )
         self.assertIn('data-auth-state="authenticated"', page)
         self.assertIn("Organization: Acme &amp; Sons", page)

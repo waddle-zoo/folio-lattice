@@ -282,14 +282,20 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
 UI_JS = r"""
 const byId = (id) => document.getElementById(id);
 const parts = location.pathname.split('/').filter(Boolean);
-const artifactId = parts[0] === 'inspect' ? decodeURIComponent(parts[1] || '') : '';
+const debugMode = parts[0] === 'inspect';
+const humanArtifactMode = parts[0] === 'artifacts';
+const artifactId = debugMode || humanArtifactMode ? decodeURIComponent(parts[1] || '') : '';
 const renderOrigin = document.body.dataset.renderOrigin;
 let wasAuthenticated = document.body.dataset.authState === 'authenticated';
 let activeRequests = 0;
 
+function artifactPath(id) {
+  return `/${debugMode ? 'inspect' : 'artifacts'}/${encodeURIComponent(id)}`;
+}
+
 function safeReturnPath() {
   const path = location.pathname;
-  return path === '/' || /^\/inspect\/[^/]+$/.test(path) ? path : '/';
+  return path === '/' || /^\/(?:inspect|artifacts)\/[^/]+$/.test(path) ? path : '/';
 }
 function authLink(path = safeReturnPath()) {
   return `/sign-in?return_to=${encodeURIComponent(path)}`;
@@ -302,11 +308,11 @@ function hideProtectedView() {
   byId('workspace').hidden = true;
   byId('welcome').hidden = true;
   byId('title').textContent = 'Artifact';
-  byId('artifact-details').replaceChildren();
+  byId('artifact-details')?.replaceChildren();
   byId('chunks').replaceChildren();
   byId('versions').replaceChildren();
-  byId('graph').replaceChildren();
-  byId('people-with-access').replaceChildren();
+  byId('graph')?.replaceChildren();
+  byId('people-with-access')?.replaceChildren();
   byId('chunk-content').textContent = '';
   byId('readable-content').textContent = '';
   byId('results').replaceChildren();
@@ -319,7 +325,7 @@ function showAuthFailure() {
     : 'Sign-in required. Sign in to continue.';
   wasAuthenticated = false;
   hideProtectedView();
-  byId('auth-context').hidden = true;
+  byId('auth-context')?.setAttribute('hidden', '');
   failure(message);
   byId('auth-recovery-title').textContent = 'Authentication required';
   byId('auth-recovery-message').textContent = message;
@@ -408,17 +414,20 @@ function showRead(read) {
   byId('title').textContent = artifact.name;
   byId('artifact-path').textContent = artifact.name;
   byId('artifact-media').textContent = version.media_type;
-  byId('artifact-details').textContent = '';
-  const values = [
-    ['Artifact', artifact.id], ['Media type', version.media_type], ['Version', version.id],
-    ['SHA-256', version.blob_hash], ['Bytes', String(version.byte_size)],
-    ['Actor', version.actor], ['Reason', version.reason], ['Created', version.created_at],
-  ];
-  values.forEach(([term, description]) => {
-    const dt = document.createElement('dt'); dt.textContent = term;
-    const dd = document.createElement('dd'); dd.textContent = description;
-    byId('artifact-details').append(dt, dd);
-  });
+  const details = byId('artifact-details');
+  if (details) {
+    details.textContent = '';
+    const values = [
+      ['Artifact', artifact.id], ['Media type', version.media_type], ['Version', version.id],
+      ['SHA-256', version.blob_hash], ['Bytes', String(version.byte_size)],
+      ['Actor', version.actor], ['Reason', version.reason], ['Created', version.created_at],
+    ];
+    values.forEach(([term, description]) => {
+      const dt = document.createElement('dt'); dt.textContent = term;
+      const dd = document.createElement('dd'); dd.textContent = description;
+      details.append(dt, dd);
+    });
+  }
   const editable = Object.hasOwn(read, 'text');
   byId('readable-content').textContent = editable
     ? read.text ?? ''
@@ -453,10 +462,11 @@ async function togglePreviewFullscreen() {
     else throw new Error('Full-screen preview is not supported in this browser.');
   } catch (error) { failure(error.message); }
 }
-byId('fullscreen-preview').addEventListener('click', togglePreviewFullscreen);
+byId('fullscreen-preview')?.addEventListener('click', togglePreviewFullscreen);
 addEventListener('fullscreenchange', () => {
   const active = document.fullscreenElement === byId('preview-card');
-  byId('fullscreen-preview').textContent = active ? 'Exit full screen' : 'Open full screen';
+  const button = byId('fullscreen-preview');
+  if (button) button.textContent = active ? 'Exit full screen' : 'Open full screen';
 });
 async function loadArtifact(versionId = null) {
   if (!artifactId) {
@@ -465,10 +475,13 @@ async function loadArtifact(versionId = null) {
   byId('welcome').hidden = true;
   status('Loading artifact…');
   const args = {artifact_id: artifactId}; if (versionId) args.version_id = versionId;
+  const graphRequest = debugMode
+    ? call('graph_traverse', {start_artifact_id: artifactId, max_depth: 2, limit: 100})
+    : Promise.resolve([]);
   const [read, versions, graph] = await Promise.all([
     call('artifact_read', args),
     call('artifact_versions', {artifact_id: artifactId, limit: 100}),
-    call('graph_traverse', {start_artifact_id: artifactId, max_depth: 2, limit: 100}),
+    graphRequest,
   ]);
   byId('workspace').hidden = false; showRead(read);
   list('versions', versions, (version) => {
@@ -477,35 +490,37 @@ async function loadArtifact(versionId = null) {
     li.append(button(label, () => loadArtifact(version.id).catch(handleFailure)));
     return li;
   }, 'No versions found.');
-  list('graph', graph, (edge) => {
-    const li = document.createElement('li'); li.className = 'graph-item';
-    const edgeType = document.createElement('span'); edgeType.textContent = `${edge.edge_type} → `;
-    const targetLabel = edge.target_artifact_name
-      ? `${edge.target_artifact_id} — ${edge.target_artifact_name}` : edge.target_artifact_id;
-    li.append(edgeType, button(targetLabel, () => {
-      location.assign(`/inspect/${encodeURIComponent(edge.target_artifact_id)}`);
-    })); return li;
-  }, 'No relationships.');
-  try {
-    const grants = await call('artifact_acl', {artifact_id: artifactId});
-    byId('sharing').hidden = false;
-    list('people-with-access', grants.filter((grant) =>
-      grant.status === 'active' && grant.reason !== 'artifact owner'), (grant) => {
-      const li = document.createElement('li'); li.className = 'resource-item access-row';
-      const role = grant.action === 'read' ? 'Can view' : grant.action === 'write' ? 'Can edit' : 'Can manage';
-      const label = document.createElement('span'); label.textContent = `${grant.subject_id} — ${role}`;
-      const remove = button('Remove access', async () => {
-        try {
-          await call('artifact_revoke', {artifact_id: artifactId, grant_id: grant.id,
-            reason: 'removed in inspection UI'});
-          await loadArtifact(); status(`Removed access for ${grant.subject_id}.`);
-        } catch (error) { handleFailure(error); }
-      });
-      li.append(label, remove); return li;
-    }, 'No one else has access.');
-  } catch (error) {
-    if (error.status === 403 || error.status === 404) byId('sharing').hidden = true;
-    else throw error;
+  if (debugMode) {
+    list('graph', graph, (edge) => {
+      const li = document.createElement('li'); li.className = 'graph-item';
+      const edgeType = document.createElement('span'); edgeType.textContent = `${edge.edge_type} → `;
+      const targetLabel = edge.target_artifact_name
+        ? `${edge.target_artifact_id} — ${edge.target_artifact_name}` : edge.target_artifact_id;
+      li.append(edgeType, button(targetLabel, () => {
+        location.assign(`/inspect/${encodeURIComponent(edge.target_artifact_id)}`);
+      })); return li;
+    }, 'No relationships.');
+    try {
+      const grants = await call('artifact_acl', {artifact_id: artifactId});
+      byId('sharing').hidden = false;
+      list('people-with-access', grants.filter((grant) =>
+        grant.status === 'active' && grant.reason !== 'artifact owner'), (grant) => {
+        const li = document.createElement('li'); li.className = 'resource-item access-row';
+        const role = grant.action === 'read' ? 'Can view' : grant.action === 'write' ? 'Can edit' : 'Can manage';
+        const label = document.createElement('span'); label.textContent = `${grant.subject_id} — ${role}`;
+        const remove = button('Remove access', async () => {
+          try {
+            await call('artifact_revoke', {artifact_id: artifactId, grant_id: grant.id,
+              reason: 'removed in inspection UI'});
+            await loadArtifact(); status(`Removed access for ${grant.subject_id}.`);
+          } catch (error) { handleFailure(error); }
+        });
+        li.append(label, remove); return li;
+      }, 'No one else has access.');
+    } catch (error) {
+      if (error.status === 403 || error.status === 404) byId('sharing').hidden = true;
+      else throw error;
+    }
   }
   status(new URLSearchParams(location.search).has('created')
     ? `Created ${read.artifact.name}. Version 1 saved.`
@@ -521,7 +536,7 @@ async function loadLibrary() {
     list('recent-artifacts', artifacts, (artifact) => {
       const li = document.createElement('li'); li.className = 'library-item';
       const open = button(artifact.name, () => {
-        location.assign(`/inspect/${encodeURIComponent(artifact.id)}`);
+        location.assign(artifactPath(artifact.id));
       });
       const meta = document.createElement('span'); meta.className = 'library-meta';
       meta.textContent = `${artifact.media_type} · Updated ${artifact.updated_at}`;
@@ -532,7 +547,7 @@ async function loadLibrary() {
   } catch (error) { handleFailure(error); }
 }
 
-byId('open').addEventListener('submit', (event) => {
+byId('open')?.addEventListener('submit', (event) => {
   event.preventDefault(); const id = byId('artifact-id').value.trim();
   if (id) location.assign(`/inspect/${encodeURIComponent(id)}`);
 });
@@ -552,7 +567,7 @@ byId('create').addEventListener('submit', async (event) => {
       reason: byId('create-reason').value, content_base64: base64(bytes),
       source_context: {interface: 'inspection-ui'},
     });
-    location.assign(`/inspect/${encodeURIComponent(created.artifact.id)}?created=1`);
+    location.assign(`${artifactPath(created.artifact.id)}?created=1`);
   } catch (error) { handleFailure(error); }
 });
 async function discover(tool, field, inputId) {
@@ -562,9 +577,10 @@ async function discover(tool, field, inputId) {
     list('results', results, (result) => {
       const li = document.createElement('li'); li.className = 'result-item';
       const excerpt = result.snippet || result.content || '';
-      const resultLabel = result.artifact_name
-        ? `${result.artifact_id} — ${result.artifact_name}` : result.artifact_id;
-      li.append(button(resultLabel, () => location.assign(`/inspect/${encodeURIComponent(result.artifact_id)}`)));
+      const resultLabel = debugMode && result.artifact_name
+        ? `${result.artifact_id} — ${result.artifact_name}`
+        : result.artifact_name || 'Open artifact';
+      li.append(button(resultLabel, () => location.assign(artifactPath(result.artifact_id))));
       const span = document.createElement('span'); span.textContent = ` — ${excerpt.slice(0, 240)}`;
       li.append(span); return li;
     }, 'No results.'); status(`${results.length} result${results.length === 1 ? '' : 's'}.`);
@@ -592,7 +608,7 @@ byId('edit').addEventListener('submit', async (event) => {
     else handleFailure(error);
   }
 });
-byId('link').addEventListener('submit', async (event) => {
+byId('link')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     status('Creating relationship…');
@@ -602,7 +618,7 @@ byId('link').addEventListener('submit', async (event) => {
     await loadArtifact(); status('Relationship created.');
   } catch (error) { handleFailure(error); }
 });
-byId('share').addEventListener('submit', async (event) => {
+byId('share')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     const subject = byId('share-recipient').value.trim();
@@ -621,18 +637,18 @@ addEventListener('message', async (event) => {
       typeof value.tool !== 'string' || !value.arguments || typeof value.arguments !== 'object') return;
   const source = event.source;
   try {
-    byId('bridge-status').textContent = `Attached artifact requested ${value.tool}…`;
+    if (byId('bridge-status')) byId('bridge-status').textContent = `Attached artifact requested ${value.tool}…`;
     const response = await call('', {request_id: value.id, artifact_id: artifactId,
       attachment: value.attachment, tool: value.tool, arguments: value.arguments}, '/api/bridge');
     source.postMessage({type: 'folio.mcp.response', id: value.id, ok: true, result: response.result}, '*');
-    byId('bridge-status').textContent = `Allowed attached tool ${value.tool}.`;
+    if (byId('bridge-status')) byId('bridge-status').textContent = `Allowed attached tool ${value.tool}.`;
   } catch (error) {
     const message = error.status === 401
       ? (wasAuthenticated ? 'Your session expired. Sign in again.' : 'Sign-in required. Sign in to continue.')
       : error.status === 403 ? 'This document is not available to you.' : error.message;
     if (error.status === 401) handleFailure(error);
     source.postMessage({type: 'folio.mcp.response', id: value.id, ok: false, error: message}, '*');
-    byId('bridge-status').textContent = 'Attached request did not run.';
+    if (byId('bridge-status')) byId('bridge-status').textContent = 'Attached request did not run.';
   }
 });
 
@@ -646,6 +662,7 @@ def ui_html(
     auth_state: str = "local",
     organization: str | None = None,
     actor: str | None = None,
+    debug: bool = False,
 ) -> str:
     origin = escape(render_origin, quote=True)
     state = escape(auth_state, quote=True)
@@ -657,6 +674,73 @@ def ui_html(
         if auth_state == "local"
         else ""
     )
+    account_surface = (
+        f'<details class="account-details"><summary>Workspace status</summary>{local_warning}'
+        f'<p id="auth-context" class="auth-context" aria-label="Active account"{auth_context_hidden}>'
+        f'<span id="organization-context">Organization: {organization_value}</span>'
+        f'<span id="actor-context">Actor: {actor_value}</span></p></details>'
+        if debug
+        else ""
+    )
+    debug_open = (
+        '<details class="surface create-card"><summary><span>Open by identifier</span></summary>'
+        '<form id="open" class="stacked-form"><label for="artifact-id">Artifact identifier'
+        '<input id="artifact-id" required maxlength="255" placeholder="art_…"></label>'
+        '<button class="button-secondary" type="submit">Open</button></form></details>'
+        if debug
+        else ""
+    )
+    debug_workspace_nav = (
+        '<a href="#graph-context">Relationships</a><a href="#details">Details</a>'
+        if debug
+        else ""
+    )
+    debug_details = (
+        '<section id="details" class="surface card-pad" aria-labelledby="details-title">'
+        '<div class="card-heading"><div><p class="eyebrow">DETAILS</p><h2 id="details-title">'
+        'Artifact details</h2></div><span class="state-pill">Current version</span></div>'
+        '<dl id="artifact-details" class="metadata-grid"></dl></section>'
+        if debug
+        else ""
+    )
+    debug_access = (
+        '<section id="sharing" class="surface access-card" aria-labelledby="sharing-title">'
+        '<div class="card-heading"><div><p class="eyebrow">ACCESS</p><h2 id="sharing-title">'
+        'People with access</h2></div><span id="privacy-status" class="state-pill">Private</span></div>'
+        '<p class="privacy-line">Only people you add can open this artifact.</p>'
+        '<ul id="people-with-access" class="access-list"><li class="muted">Loading access…</li></ul>'
+        '<form id="share" class="link-form"><label for="share-recipient">Person identifier'
+        '<input id="share-recipient" required maxlength="255" placeholder="person-id"></label>'
+        '<label for="share-role">Access<select id="share-role"><option value="read">Can view</option>'
+        '<option value="write">Can edit</option></select></label><button type="submit">Share</button>'
+        '</form></section>'
+        if debug
+        else ""
+    )
+    debug_graph = (
+        '<section id="graph-context" class="surface graph-card" aria-labelledby="graph-title">'
+        '<div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">'
+        'Relationships</h2></div></div><ul id="graph" class="graph-list"></ul>'
+        '<form id="link" class="link-form"><div class="row"><label>Target artifact identifier'
+        '<input id="target-id" required maxlength="255" placeholder="art_…"></label>'
+        '<label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label>'
+        '</div><button type="submit">Create relationship</button></form></section>'
+        if debug
+        else ""
+    )
+    preview_debug = (
+        '<button id="fullscreen-preview" class="button-secondary" type="button">Open full screen</button>'
+        if debug
+        else ""
+    )
+    preview_details = (
+        '<details><summary>Preview capabilities</summary><p>Network and host access are blocked.</p>'
+        '<div class="capability-list" aria-label="Preview capabilities"><span class="capability">Read</span>'
+        '<span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div>'
+        '<p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p></details>'
+        if debug
+        else '<p class="field-help">Safe preview runs in an isolated frame with host and network access blocked.</p>'
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Folio Lattice</title><link rel="stylesheet" href="/ui.css"></head>
@@ -667,9 +751,7 @@ def ui_html(
   <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">F</span><div><div class="brand-name">Folio Lattice</div><div class="brand-subtitle">Knowledge workspace</div></div></div>
   <nav class="primary-nav" aria-label="Primary"><a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a></nav>
 </header>
-<details class="account-details"><summary>Workspace status</summary>{local_warning}
-  <p id="auth-context" class="auth-context" aria-label="Active account"{auth_context_hidden}><span id="organization-context">Organization: {organization_value}</span><span id="actor-context">Actor: {actor_value}</span></p>
-</details>
+{account_surface}
 <main id="main" class="page" aria-busy="false">
   <div class="live-region"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
@@ -689,21 +771,21 @@ def ui_html(
           <form id="search" class="search-form"><label for="search-query">Search documents and files<input id="search-query" required maxlength="500" placeholder="Phrase or keyword"></label><button type="submit">Search</button></form>
           <form id="grep" class="search-form"><label for="grep-pattern">Exact text<input id="grep-pattern" required maxlength="500" placeholder="Exact text"></label><button type="submit">Find exact text</button></form>
         </div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></div></details>
-        <details class="surface create-card"><summary><span>Open by identifier</span></summary><form id="open" class="stacked-form"><label for="artifact-id">Artifact identifier<input id="artifact-id" required maxlength="255" placeholder="art_…"></label><button class="button-secondary" type="submit">Open</button></form></details>
+        {debug_open}
       </div>
     </div>
   </section>
   <article id="workspace" class="workspace" hidden>
-    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1><div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div></div></div></div><nav class="workspace-nav" aria-label="Artifact sections"><a id="back-to-library" class="button-secondary" href="/">Back to library</a><a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#editor">Edit</a><a href="#history">History</a><a href="#graph-context">Relationships</a><a href="#details">Details</a></nav></header>
+    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1><div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div></div></div></div><nav class="workspace-nav" aria-label="Artifact sections"><a id="back-to-library" class="button-secondary" href="/">Back to library</a><a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#editor">Edit</a><a href="#history">History</a>{debug_workspace_nav}</nav></header>
     <div class="workspace-layout"><div class="primary-column">
       <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Content</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Current version</p><pre id="readable-content">Loading content…</pre></section>
-      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div><button id="fullscreen-preview" class="button-secondary" type="button">Open full screen</button></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div><details><summary>Preview capabilities</summary><p>Network and host access are blocked.</p><div class="capability-list" aria-label="Preview capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div><p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p></details></section>
+      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div>{preview_debug}</div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>
       <section id="editor" class="surface editor-card" aria-labelledby="edit-title"><div class="card-heading"><div><p class="eyebrow">CURRENT VERSION</p><h2 id="edit-title">Content</h2></div></div><p id="binary-note" class="binary-note" hidden>Binary content is metadata-only and cannot be edited as text.</p><form id="edit"><input id="parent-version" type="hidden"><label for="content">Content</label><textarea id="content" spellcheck="false"></textarea><div class="row"><label>Media type<input id="media-type" required maxlength="255"></label><label>Reason<input id="reason" value="inspection UI edit" required maxlength="2000"></label></div><p class="field-help">Saving creates a new version.</p><button id="save" type="submit">Save new version</button></form></section>
       <section id="history" class="utility-grid" aria-label="Artifact history"><div class="surface utility-card"><p class="eyebrow">CONTENT</p><h2>Chunks</h2><ul id="chunks" class="resource-list"></ul><pre id="chunk-content">Choose a chunk.</pre></div><div class="surface utility-card"><p class="eyebrow">HISTORY</p><h2>Versions</h2><ul id="versions" class="resource-list"></ul></div></section>
-      <section id="details" class="surface card-pad" aria-labelledby="details-title"><div class="card-heading"><div><p class="eyebrow">DETAILS</p><h2 id="details-title">Artifact details</h2></div><span class="state-pill">Current version</span></div><dl id="artifact-details" class="metadata-grid"></dl></section>
+      {debug_details}
     </div><aside class="secondary-column">
-      <section id="sharing" class="surface access-card" aria-labelledby="sharing-title"><div class="card-heading"><div><p class="eyebrow">ACCESS</p><h2 id="sharing-title">People with access</h2></div><span id="privacy-status" class="state-pill">Private</span></div><p class="privacy-line">Only people you add can open this artifact.</p><ul id="people-with-access" class="access-list"><li class="muted">Loading access…</li></ul><form id="share" class="link-form"><label for="share-recipient">Person identifier<input id="share-recipient" required maxlength="255" placeholder="person-id"></label><label for="share-role">Access<select id="share-role"><option value="read">Can view</option><option value="write">Can edit</option></select></label><button type="submit">Share</button></form></section>
-      <section id="graph-context" class="surface graph-card" aria-labelledby="graph-title"><div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">Relationships</h2></div></div><ul id="graph" class="graph-list"></ul><form id="link" class="link-form"><div class="row"><label>Target artifact identifier<input id="target-id" required maxlength="255" placeholder="art_…"></label><label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label></div><button type="submit">Create relationship</button></form></section>
+      {debug_access}
+      {debug_graph}
     </aside></div>
   </article>
 </main></div><script src="/ui.js"></script></body></html>"""
@@ -786,7 +868,9 @@ class InspectionApp:
         method = scope["method"]
         path = scope["path"]
         headers = control_headers(self.render_origin)
-        if method == "GET" and (path == "/" or path.startswith("/inspect/")):
+        if method == "GET" and (
+            path == "/" or path.startswith("/inspect/") or path.startswith("/artifacts/")
+        ):
             principal = get_request_principal()
             await HTMLResponse(
                 ui_html(
@@ -796,6 +880,7 @@ class InspectionApp:
                         principal.tenant_id if principal is not None else self.organization
                     ),
                     actor=principal.actor_id if principal is not None else self.actor,
+                    debug=path.startswith("/inspect/"),
                 ),
                 headers=headers,
             )(scope, receive, send)
