@@ -172,6 +172,10 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .workspace-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(19rem, .85fr); gap: 1rem; align-items: start; }
 .primary-column, .secondary-column { display: grid; gap: 1rem; min-width: 0; }
 .card-pad { padding: 1.25rem; }
+.reader-card { padding: 1.25rem; }
+.reader-card .card-heading { align-items: center; }
+.reader-card .state-pill { background: var(--blue-soft); color: var(--blue); }
+.reader-card pre { min-height: 10rem; max-height: 34rem; margin-top: 0; background: #fbfcfe; font: .9rem/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .card-heading { display: flex; align-items: start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .card-heading h2 { margin-bottom: 0; }
 .state-pill, .capability { display: inline-flex; align-items: center; border-radius: 999px; padding: .27rem .55rem; background: var(--green-soft); color: var(--green); font-size: .7rem; font-weight: 800; white-space: nowrap; }
@@ -200,6 +204,10 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .preview-card .card-heading { align-items: center; }
 .preview-card .card-heading h2 { display: flex; align-items: center; gap: .5rem; }
 .preview-card .card-heading h2::before { content: "●"; color: #d1903b; font-size: .75rem; }
+.preview-actions { display: flex; justify-content: flex-end; margin: .75rem 0; }
+.preview-card:fullscreen { overflow: auto; padding: 1.25rem; background: var(--canvas); }
+.preview-card:fullscreen .preview-frame { height: calc(100vh - 12rem); }
+.preview-card:fullscreen iframe { height: 100%; min-height: 0; }
 .capability-list { display: flex; flex-wrap: wrap; gap: .4rem; margin: .8rem 0; }
 .capability { background: #edf1f8; color: #475972; }
 #bridge-status { min-height: 2.3rem; margin: .7rem 0; border-radius: 7px; padding: .55rem .65rem; background: #f0f3f8; color: #526176; font-size: .76rem; }
@@ -279,6 +287,7 @@ function hideProtectedView() {
   byId('versions').replaceChildren();
   byId('graph').replaceChildren();
   byId('chunk-content').textContent = '';
+  byId('readable-content').textContent = '';
   byId('results').replaceChildren();
   byId('preview').removeAttribute('src');
 }
@@ -375,6 +384,7 @@ function base64(bytes) {
 function showRead(read) {
   const artifact = read.artifact; const version = read.version;
   byId('title').textContent = artifact.name;
+  byId('artifact-path').textContent = artifact.name;
   byId('artifact-media').textContent = version.media_type;
   byId('artifact-details').textContent = '';
   const values = [
@@ -388,6 +398,13 @@ function showRead(read) {
     byId('artifact-details').append(dt, dd);
   });
   const editable = Object.hasOwn(read, 'text');
+  byId('readable-content').textContent = editable
+    ? read.text ?? ''
+    : 'Binary content is available as metadata only.';
+  byId('reader-kind').textContent = editable ? 'Text' : 'Binary';
+  byId('reader-note').textContent = editable
+    ? 'Current version'
+    : 'Binary content cannot be displayed as text.';
   byId('content').value = read.text ?? '';
   byId('content').disabled = !editable; byId('save').disabled = !editable;
   byId('media-type').value = version.media_type;
@@ -406,6 +423,19 @@ function showRead(read) {
   const query = new URLSearchParams({version_id: version.id});
   byId('preview').src = `${renderOrigin}/render/${encodeURIComponent(artifact.id)}?${query}`;
 }
+async function togglePreviewFullscreen() {
+  const panel = byId('preview-card');
+  try {
+    if (document.fullscreenElement === panel) await document.exitFullscreen();
+    else if (panel.requestFullscreen) await panel.requestFullscreen();
+    else throw new Error('Full-screen preview is not supported in this browser.');
+  } catch (error) { failure(error.message); }
+}
+byId('fullscreen-preview').addEventListener('click', togglePreviewFullscreen);
+addEventListener('fullscreenchange', () => {
+  const active = document.fullscreenElement === byId('preview-card');
+  byId('fullscreen-preview').textContent = active ? 'Exit full screen' : 'Open full screen';
+});
 async function loadArtifact(versionId = null) {
   if (!artifactId) {
     byId('workspace').hidden = true;
@@ -589,14 +619,15 @@ def ui_html(
     <form id="grep" class="search-form"><label for="grep-pattern">Exact text<input id="grep-pattern" required maxlength="500" placeholder="Exact text"></label><button type="submit">Find exact text</button></form>
   </div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></section>
   <article id="workspace" class="workspace" hidden>
-    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Workspace</a><span aria-hidden="true">/</span><span>Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1><div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Local workspace</span></div></div></div></div><nav class="workspace-nav" aria-label="Artifact sections"><a href="#editor">Content</a><a href="#history">History</a><a href="#graph-context">Relationships</a><a href="#preview-card">Preview</a><a href="#details">Details</a></nav></header>
+    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1><div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Local workspace</span></div></div></div></div><nav class="workspace-nav" aria-label="Artifact sections"><a href="#reader">Read</a><a href="#editor">Edit</a><a href="#history">History</a><a href="#graph-context">Relationships</a><a href="#preview-card">Preview</a><a href="#details">Details</a></nav></header>
     <div class="workspace-layout"><div class="primary-column">
+      <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Content</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Current version</p><pre id="readable-content">Loading content…</pre></section>
       <section id="editor" class="surface editor-card" aria-labelledby="edit-title"><div class="card-heading"><div><p class="eyebrow">CURRENT VERSION</p><h2 id="edit-title">Content</h2></div></div><p id="binary-note" class="binary-note" hidden>Binary content is metadata-only and cannot be edited as text.</p><form id="edit"><input id="parent-version" type="hidden"><label for="content">Content</label><textarea id="content" spellcheck="false"></textarea><div class="row"><label>Media type<input id="media-type" required maxlength="255"></label><label>Reason<input id="reason" value="inspection UI edit" required maxlength="2000"></label></div><p class="field-help">Saving creates a new version.</p><button id="save" type="submit">Save new version</button></form></section>
       <section id="history" class="utility-grid" aria-label="Artifact history"><div class="surface utility-card"><p class="eyebrow">CONTENT</p><h2>Chunks</h2><ul id="chunks" class="resource-list"></ul><pre id="chunk-content">Choose a chunk.</pre></div><div class="surface utility-card"><p class="eyebrow">HISTORY</p><h2>Versions</h2><ul id="versions" class="resource-list"></ul></div></section>
       <section id="details" class="surface card-pad" aria-labelledby="details-title"><div class="card-heading"><div><p class="eyebrow">DETAILS</p><h2 id="details-title">Artifact details</h2></div><span class="state-pill">Current version</span></div><dl id="artifact-details" class="metadata-grid"></dl></section>
     </div><aside class="secondary-column">
       <section id="graph-context" class="surface graph-card" aria-labelledby="graph-title"><div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">Relationships</h2></div></div><ul id="graph" class="graph-list"></ul><form id="link" class="link-form"><div class="row"><label>Target artifact identifier<input id="target-id" required maxlength="255" placeholder="art_…"></label><label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label></div><button type="submit">Create relationship</button></form></section>
-      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Sandboxed preview</h2></div></div><p>Network and host access are blocked.</p><div class="capability-list" aria-label="Preview capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div><p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div></section>
+      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Sandboxed preview</h2></div></div><p>Network and host access are blocked.</p><div class="capability-list" aria-label="Preview capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div><p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p><div class="preview-actions"><button id="fullscreen-preview" class="button-secondary" type="button">Open full screen</button></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div></section>
     </aside></div>
   </article>
 </main></div><script src="/ui.js"></script></body></html>"""

@@ -744,6 +744,23 @@ document.querySelector('#create').requestSubmit();
                     chrome.evaluate("document.querySelector('#artifact-media').textContent"),
                     "text/html",
                 )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#artifact-path').textContent"),
+                    "browser-note.html",
+                )
+                self.assertIn(
+                    "human-first",
+                    chrome.evaluate("document.querySelector('#readable-content').textContent"),
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "Boolean(document.querySelector('#reader').compareDocumentPosition(document.querySelector('#editor')) & Node.DOCUMENT_POSITION_FOLLOWING)"
+                    )
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#preview').getAttribute('sandbox')"),
+                    "allow-scripts",
+                )
                 artifact_ax = chrome.command("Accessibility.getFullAXTree")["nodes"]
                 artifact_names = {node.get("name", {}).get("value") for node in artifact_ax}
                 artifact_roles = {node.get("role", {}).get("value") for node in artifact_ax}
@@ -756,6 +773,7 @@ document.querySelector('#create').requestSubmit();
                     "Create relationship",
                     "Sandboxed preview",
                     "Sandboxed artifact preview",
+                    "Open full screen",
                 ):
                     self.assertIn(expected_name, artifact_names)
                 self.assertIn(
