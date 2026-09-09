@@ -31,7 +31,10 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         async with Client(self.server, raise_exceptions=True) as client:
             listed = await client.list_tools()
             names = {tool.name for tool in listed.tools}
+            self.assertIn("artifact_list", names)
             self.assertIn("artifact_search", names)
+            list_tool = next(tool for tool in listed.tools if tool.name == "artifact_list")
+            self.assertEqual(set(list_tool.input_schema.get("properties", {})), {"limit"})
             for tool in listed.tools:
                 properties = tool.input_schema.get("properties", {})
                 self.assertNotIn("tenant_id", properties)
@@ -49,6 +52,8 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(created["artifact"]["tenant_id"], "acme")
             self.assertEqual(created["version"]["actor"], "hyperset")
+            library = await self.call(client, "artifact_list", {})
+            self.assertEqual([item["name"] for item in library], ["note.md"])
             read = await self.call(
                 client, "artifact_read", {"artifact_id": created["artifact"]["id"]}
             )

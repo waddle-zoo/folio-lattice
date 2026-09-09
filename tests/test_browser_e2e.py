@@ -275,18 +275,20 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 handler.page_auth_state = "local"
                 handler.page_organization = "local-org"
                 handler.page_actor = "local-actor"
+                handler.api_status = 200
                 chrome = DevTools(browser, f"{origin}/?local=1", root / "chrome-auth")
-                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 self.assertTrue(chrome.evaluate("Boolean(document.querySelector('.app-shell'))"))
                 self.assertTrue(
                     chrome.evaluate(
-                        "document.querySelector('nav[aria-label=\"Primary\"]')?.textContent.includes('Workspace')"
+                        "document.querySelector('nav[aria-label=\"Primary\"]')?.textContent.includes('Library')"
                     )
                 )
                 self.assertIn(
                     "Unauthenticated local development",
                     chrome.evaluate("document.querySelector('#local-warning')?.textContent"),
                 )
+                self.assertFalse(chrome.evaluate("document.querySelector('.account-details').open"))
                 self.assertIn(
                     chrome.evaluate("getComputedStyle(document.body).backgroundColor"),
                     {"rgb(245, 247, 249)", "rgb(16, 23, 32)"},
@@ -295,16 +297,16 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                     chrome.evaluate("document.querySelectorAll('.surface').length"), 4
                 )
                 self.assertIn(
-                    "Unauthenticated local development", chrome.evaluate("document.body.innerText")
+                    "Organization: local-org",
+                    chrome.evaluate("document.querySelector('#auth-context').textContent"),
                 )
-                self.assertIn("Organization: local-org", chrome.evaluate("document.body.innerText"))
 
                 handler.page_auth_state = "unauthenticated"
                 handler.page_organization = None
                 handler.page_actor = None
                 handler.api_status = 401
                 chrome.command("Page.navigate", {"url": origin})
-                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
+                chrome.wait("!document.querySelector('#error').hidden")
                 chrome.evaluate(
                     "document.querySelector('#search-query').value='private phrase'; document.querySelector('#search').requestSubmit()"
                 )
@@ -364,15 +366,20 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 handler.page_auth_state = "authenticated"
                 handler.page_organization = "Acme Operations"
                 handler.page_actor = "Ada Lovelace"
+                handler.api_status = 200
                 chrome.command("Page.navigate", {"url": origin})
-                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 self.assertNotIn(
                     "Unauthenticated local development", chrome.evaluate("document.body.innerText")
                 )
                 self.assertIn(
-                    "Organization: Acme Operations", chrome.evaluate("document.body.innerText")
+                    "Organization: Acme Operations",
+                    chrome.evaluate("document.querySelector('#auth-context').textContent"),
                 )
-                self.assertIn("Actor: Ada Lovelace", chrome.evaluate("document.body.innerText"))
+                self.assertIn(
+                    "Actor: Ada Lovelace",
+                    chrome.evaluate("document.querySelector('#auth-context').textContent"),
+                )
                 handler.api_status = 401
                 chrome.evaluate(
                     "document.querySelector('#grep-pattern').value='unsaved search'; document.querySelector('#grep').requestSubmit()"
@@ -470,7 +477,9 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
 
             def do_POST(self) -> None:
                 if self.path == "/api/mcp":
-                    body = json.dumps({"error": "private server detail"}).encode()
+                    body = json.dumps(
+                        [] if self.api_status == 200 else {"error": "private server detail"}
+                    ).encode()
                     self.send_response(self.api_status)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
@@ -658,16 +667,22 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                 )
                 wait_ready(render_origin, renderer)
                 chrome = DevTools(browser, control_origin, root / "chrome-ui")
-                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.wait("Boolean(document.querySelector('#recent-artifacts button'))")
 
                 ax = chrome.command("Accessibility.getFullAXTree")["nodes"]
                 names = {node.get("name", {}).get("value") for node in ax}
                 roles = {node.get("role", {}).get("value") for node in ax}
                 for expected_role in ("banner", "main", "region"):
                     self.assertIn(expected_role, roles)
-                self.assertIn("Create first version", names)
-                self.assertIn("Search documents and files", names)
-                for expected_name in ("Folio Lattice", "Workspace", "Name", "Type"):
+                for expected_name in (
+                    "Folio Lattice",
+                    "Library",
+                    "Recent artifacts",
+                    "New document or file",
+                    "Search library",
+                    "Open by identifier",
+                ):
                     self.assertIn(expected_name, names)
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#status').getAttribute('role')"),
@@ -677,25 +692,13 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                     chrome.evaluate("document.querySelector('#error').getAttribute('role')"),
                     "alert",
                 )
-                chrome.evaluate("document.querySelector('#artifact-id').focus()")
-                chrome.key("Tab", "Tab", 9)
-                self.assertEqual(chrome.evaluate("document.activeElement.textContent"), "Open")
-                chrome.key("Tab", "Tab", 9)
-                self.assertEqual(chrome.evaluate("document.activeElement.tagName"), "SUMMARY")
+                chrome.evaluate("document.querySelector('#recent-artifacts button').focus()")
+                self.assertEqual(chrome.evaluate("document.activeElement.tagName"), "BUTTON")
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('h1')?.textContent"),
-                    "Workspace",
+                    "Library",
                 )
-                self.assertTrue(
-                    chrome.evaluate(
-                        "document.querySelector('label[for=create-name]')?.textContent.includes('Name')"
-                    )
-                )
-                self.assertTrue(
-                    chrome.evaluate(
-                        "document.querySelector('label[for=create-media]')?.textContent.includes('Type')"
-                    )
-                )
+                self.assertNotIn("Open artifact ID", chrome.evaluate("document.body.innerText"))
                 self.assertEqual(
                     chrome.evaluate(
                         "[...document.querySelectorAll('[tabindex]')].filter((node) => Number(node.tabIndex) > 0).length"
@@ -717,6 +720,7 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                     )
                 )
                 chrome.command("Emulation.clearDeviceMetricsOverride")
+                chrome.evaluate("document.querySelector('#create').closest('details').open = true")
                 chrome.set_file("#create-file", upload)
                 chrome.evaluate("""
 document.querySelector('#create-name').value = 'browser-note.html';
@@ -757,6 +761,11 @@ document.querySelector('#create').requestSubmit();
                         "Boolean(document.querySelector('#reader').compareDocumentPosition(document.querySelector('#editor')) & Node.DOCUMENT_POSITION_FOLLOWING)"
                     )
                 )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "Boolean(document.querySelector('#reader').compareDocumentPosition(document.querySelector('#preview-card')) & Node.DOCUMENT_POSITION_FOLLOWING)"
+                    )
+                )
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#preview').getAttribute('sandbox')"),
                     "allow-scripts",
@@ -771,7 +780,7 @@ document.querySelector('#create').requestSubmit();
                     "Versions",
                     "Relationships",
                     "Create relationship",
-                    "Sandboxed preview",
+                    "Artifact preview",
                     "Sandboxed artifact preview",
                     "Open full screen",
                     "People with access",
@@ -783,6 +792,24 @@ document.querySelector('#create').requestSubmit();
                     "Version 1 saved",
                     chrome.evaluate("document.querySelector('#status').textContent"),
                 )
+                chrome.evaluate("""
+window.__folioAclFetch = window.fetch;
+window.fetch = (url, options) => {
+  const payload = JSON.parse(options?.body || '{}');
+  if (payload.tool === 'artifact_acl') return Promise.resolve(new Response(
+    JSON.stringify({error: 'artifact not found'}),
+    {status: 404, headers: {'Content-Type': 'application/json'}}));
+  return window.__folioAclFetch(url, options);
+};
+loadArtifact();
+""")
+                chrome.wait("document.querySelector('#sharing').hidden")
+                self.assertIn(
+                    "human-first",
+                    chrome.evaluate("document.querySelector('#readable-content').textContent"),
+                )
+                chrome.evaluate("window.fetch = window.__folioAclFetch; loadArtifact()")
+                chrome.wait("!document.querySelector('#sharing').hidden")
                 first_version = chrome.evaluate("document.querySelector('#parent-version').value")
                 chrome.wait(
                     "document.querySelector('#bridge-status').textContent.includes('did not run')"
@@ -836,10 +863,8 @@ document.querySelector('#share').requestSubmit();
 
                 chrome.evaluate("""
 window.__folioFetch = window.fetch;
-window.__folioFetchCount = 0;
 window.fetch = (...args) => {
-  const delay = ++window.__folioFetchCount === 1 ? 400 : 100;
-  return new Promise((resolve) => setTimeout(() => resolve(window.__folioFetch(...args)), delay));
+  return new Promise((resolve) => setTimeout(() => resolve(window.__folioFetch(...args)), 400));
 };
 loadArtifact();
 """)
@@ -939,9 +964,9 @@ document.querySelector('#search').requestSubmit();
                 self.assertNotEqual(chrome.evaluate("document.activeElement.tagName"), "BODY")
 
                 chrome.command("Page.navigate", {"url": control_origin})
-                chrome.wait("document.querySelector('#status')?.textContent === 'Ready.'")
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.evaluate(
-                    f"document.querySelector('#artifact-id').focus(); document.querySelector('#artifact-id').value={json.dumps(artifact_id)}"
+                    "const item = [...document.querySelectorAll('#recent-artifacts button')].find((button) => button.textContent === 'browser-note.html'); item.focus()"
                 )
                 chrome.key("Enter", "Enter", 13)
                 chrome.wait("location.pathname.startsWith('/inspect/art_')")

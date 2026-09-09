@@ -109,6 +109,10 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .security-banner strong { display: block; margin-bottom: .05rem; color: #70440e; }
 .security-banner span { color: #88643b; }
 .auth-context { display: flex; justify-content: flex-end; gap: 1rem; max-width: 1240px; margin: 0 auto; padding: .1rem 1.5rem .45rem; color: var(--muted); font-size: .72rem; }
+.account-details { max-width: 1240px; margin: 0 auto; padding: 0 1.5rem; color: var(--muted); font-size: .78rem; }
+.account-details > summary { width: max-content; margin-left: auto; cursor: pointer; }
+.account-details[open] > summary { margin-bottom: .5rem; }
+.account-details .security-banner, .account-details .auth-context { padding-inline: 0; }
 .auth-recovery { margin: 0 0 1rem; border: 1px solid #e9b5b5; border-radius: 10px; padding: 1rem 1.1rem; background: #fff8f8; }
 .auth-recovery h2 { margin-bottom: .25rem; color: #8f2323; font-size: 1rem; }
 .auth-recovery p { margin-bottom: .7rem; color: #6f4141; font-size: .84rem; }
@@ -123,8 +127,15 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .muted, .field-help { color: var(--muted); }
 .lede { max-width: 42rem; margin-bottom: 1.7rem; color: var(--muted); font-size: 1.08rem; }
 .welcome-panel { padding: 2.2rem 0 1.3rem; }
-.welcome-grid { display: grid; grid-template-columns: minmax(0, 1.28fr) minmax(18rem, .72fr); gap: 1rem; align-items: stretch; }
+.welcome-grid { display: grid; gap: 1rem; }
 .surface { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+.library-card { padding: 1.25rem 1.3rem; }
+.library-list { border-top: 1px solid var(--line); }
+.library-item { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--line); padding: .85rem .2rem; }
+.library-item .inline-action { font-size: .98rem; font-weight: 800; }
+.library-meta { color: var(--muted); font-size: .76rem; text-align: right; }
+.library-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.library-actions > details { min-width: 0; }
 .create-card { padding: 1.25rem 1.3rem 1.35rem; }
 .create-card summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer; list-style: none; }
 .create-card summary::-webkit-details-marker { display: none; }
@@ -248,6 +259,7 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
   .topbar-open { order: 3; width: 100%; }
   .workspace-heading { align-items: start; flex-direction: column; }
   .workspace-layout { grid-template-columns: 1fr; }
+  .library-actions { grid-template-columns: 1fr; }
   .secondary-column { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 }
 @media (max-width: 640px) {
@@ -261,6 +273,9 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
   .result-item { align-items: start; flex-direction: column; gap: .15rem; }
   .workspace-nav { flex-wrap: wrap; }
   .auth-context { justify-content: flex-start; flex-wrap: wrap; padding-inline: 1rem; }
+  .account-details { padding-inline: 1rem; }
+  .library-item { align-items: start; flex-direction: column; gap: .2rem; }
+  .library-meta { text-align: left; }
 }
 """.strip()
 
@@ -295,6 +310,7 @@ function hideProtectedView() {
   byId('chunk-content').textContent = '';
   byId('readable-content').textContent = '';
   byId('results').replaceChildren();
+  byId('recent-artifacts').replaceChildren();
   byId('preview').removeAttribute('src');
 }
 function showAuthFailure() {
@@ -444,18 +460,15 @@ addEventListener('fullscreenchange', () => {
 });
 async function loadArtifact(versionId = null) {
   if (!artifactId) {
-    byId('workspace').hidden = true;
-    byId('welcome').hidden = false;
-    status('Ready.'); return;
+    await loadLibrary(); return;
   }
   byId('welcome').hidden = true;
-  byId('artifact-id').value = artifactId; status('Loading artifact…');
+  status('Loading artifact…');
   const args = {artifact_id: artifactId}; if (versionId) args.version_id = versionId;
-  const [read, versions, graph, grants] = await Promise.all([
+  const [read, versions, graph] = await Promise.all([
     call('artifact_read', args),
     call('artifact_versions', {artifact_id: artifactId, limit: 100}),
     call('graph_traverse', {start_artifact_id: artifactId, max_depth: 2, limit: 100}),
-    call('artifact_acl', {artifact_id: artifactId}),
   ]);
   byId('workspace').hidden = false; showRead(read);
   list('versions', versions, (version) => {
@@ -473,23 +486,50 @@ async function loadArtifact(versionId = null) {
       location.assign(`/inspect/${encodeURIComponent(edge.target_artifact_id)}`);
     })); return li;
   }, 'No relationships.');
-  list('people-with-access', grants.filter((grant) =>
-    grant.status === 'active' && grant.reason !== 'artifact owner'), (grant) => {
-    const li = document.createElement('li'); li.className = 'resource-item access-row';
-    const role = grant.action === 'read' ? 'Can view' : grant.action === 'write' ? 'Can edit' : 'Can manage';
-    const label = document.createElement('span'); label.textContent = `${grant.subject_id} — ${role}`;
-    const remove = button('Remove access', async () => {
-      try {
-        await call('artifact_revoke', {artifact_id: artifactId, grant_id: grant.id,
-          reason: 'removed in inspection UI'});
-        await loadArtifact(); status(`Removed access for ${grant.subject_id}.`);
-      } catch (error) { handleFailure(error); }
-    });
-    li.append(label, remove); return li;
-  }, 'No one else has access.');
+  try {
+    const grants = await call('artifact_acl', {artifact_id: artifactId});
+    byId('sharing').hidden = false;
+    list('people-with-access', grants.filter((grant) =>
+      grant.status === 'active' && grant.reason !== 'artifact owner'), (grant) => {
+      const li = document.createElement('li'); li.className = 'resource-item access-row';
+      const role = grant.action === 'read' ? 'Can view' : grant.action === 'write' ? 'Can edit' : 'Can manage';
+      const label = document.createElement('span'); label.textContent = `${grant.subject_id} — ${role}`;
+      const remove = button('Remove access', async () => {
+        try {
+          await call('artifact_revoke', {artifact_id: artifactId, grant_id: grant.id,
+            reason: 'removed in inspection UI'});
+          await loadArtifact(); status(`Removed access for ${grant.subject_id}.`);
+        } catch (error) { handleFailure(error); }
+      });
+      li.append(label, remove); return li;
+    }, 'No one else has access.');
+  } catch (error) {
+    if (error.status === 403 || error.status === 404) byId('sharing').hidden = true;
+    else throw error;
+  }
   status(new URLSearchParams(location.search).has('created')
     ? `Created ${read.artifact.name}. Version 1 saved.`
     : `Loaded ${read.artifact.name}.`);
+}
+
+async function loadLibrary() {
+  byId('workspace').hidden = true;
+  byId('welcome').hidden = false;
+  status('Loading recent artifacts…');
+  try {
+    const artifacts = await call('artifact_list', {limit: 20});
+    list('recent-artifacts', artifacts, (artifact) => {
+      const li = document.createElement('li'); li.className = 'library-item';
+      const open = button(artifact.name, () => {
+        location.assign(`/inspect/${encodeURIComponent(artifact.id)}`);
+      });
+      const meta = document.createElement('span'); meta.className = 'library-meta';
+      meta.textContent = `${artifact.media_type} · Updated ${artifact.updated_at}`;
+      li.append(open, meta); return li;
+    }, 'No artifacts yet. Create one to start your library.');
+    byId('library-count').textContent = `${artifacts.length} recent artifact${artifacts.length === 1 ? '' : 's'}`;
+    status('Library ready.');
+  } catch (error) { handleFailure(error); }
 }
 
 byId('open').addEventListener('submit', (event) => {
@@ -619,47 +659,51 @@ def ui_html(
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Folio Lattice inspection</title><link rel="stylesheet" href="/ui.css"></head>
+<title>Folio Lattice</title><link rel="stylesheet" href="/ui.css"></head>
 <body data-render-origin="{origin}" data-auth-state="{state}">
 <a class="skip-link" href="#main">Skip to content</a>
 <div class="app-shell">
 <header class="topbar">
   <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">F</span><div><div class="brand-name">Folio Lattice</div><div class="brand-subtitle">Knowledge workspace</div></div></div>
-  <nav class="primary-nav" aria-label="Primary"><a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Workspace</a><a href="#find"><span class="nav-index" aria-hidden="true">02</span>Find</a></nav>
-  <form id="open" class="topbar-open"><label class="sr-only" for="artifact-id">Open artifact identifier</label><input id="artifact-id" required maxlength="255" placeholder="Open an artifact ID"><button class="button-secondary" type="submit">Open</button></form>
+  <nav class="primary-nav" aria-label="Primary"><a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a></nav>
 </header>
-{local_warning}
-<p id="auth-context" class="auth-context" aria-label="Active account"{auth_context_hidden}><span id="organization-context">Organization: {organization_value}</span><span id="actor-context">Actor: {actor_value}</span></p>
+<details class="account-details"><summary>Workspace status</summary>{local_warning}
+  <p id="auth-context" class="auth-context" aria-label="Active account"{auth_context_hidden}><span id="organization-context">Organization: {organization_value}</span><span id="actor-context">Actor: {actor_value}</span></p>
+</details>
 <main id="main" class="page" aria-busy="false">
   <div class="live-region"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
   <section id="welcome" class="welcome-panel" aria-labelledby="welcome-title">
-    <p class="eyebrow">FOLIO LATTICE / WORKSPACE</p>
-    <h1 id="welcome-title">Workspace</h1>
+    <p class="eyebrow">YOUR SPACE</p>
+    <h1 id="welcome-title">Library</h1>
     <div class="welcome-grid">
-      <details class="surface create-card" open><summary><span><span class="step">01</span>New document or file</span></summary><form id="create" class="stacked-form">
-        <div class="row"><label for="create-name">Name<input id="create-name" required maxlength="255" placeholder="e.g. launch-notes.txt"></label><label for="create-media">Type<input id="create-media" maxlength="255" placeholder="text/plain"></label></div>
-        <label>File (optional)<input id="create-file" type="file"></label>
-        <label>Content<textarea id="create-text" placeholder="Start writing…"></textarea></label>
-        <label>Reason<input id="create-reason" value="inspection UI create" required maxlength="2000"></label><button type="submit">Create first version</button>
-      </form></details>
+      <section class="surface library-card" aria-labelledby="recent-title"><div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2 id="recent-title">Recent artifacts</h2></div><p id="library-count">Loading recent artifacts…</p></div><ul id="recent-artifacts" class="library-list"><li class="muted">Loading recent artifacts…</li></ul></section>
+      <div class="library-actions">
+        <details class="surface create-card"><summary><span>New document or file</span></summary><form id="create" class="stacked-form">
+          <div class="row"><label for="create-name">Name<input id="create-name" required maxlength="255" placeholder="e.g. launch-notes.txt"></label><label for="create-media">Type<input id="create-media" maxlength="255" placeholder="text/plain"></label></div>
+          <label>File (optional)<input id="create-file" type="file"></label>
+          <label>Content<textarea id="create-text" placeholder="Start writing…"></textarea></label>
+          <label>Reason<input id="create-reason" value="inspection UI create" required maxlength="2000"></label><button type="submit">Create first version</button>
+        </form></details>
+        <details id="find" class="surface create-card"><summary><span>Search library</span></summary><div class="stacked-form"><div class="search-grid">
+          <form id="search" class="search-form"><label for="search-query">Search documents and files<input id="search-query" required maxlength="500" placeholder="Phrase or keyword"></label><button type="submit">Search</button></form>
+          <form id="grep" class="search-form"><label for="grep-pattern">Exact text<input id="grep-pattern" required maxlength="500" placeholder="Exact text"></label><button type="submit">Find exact text</button></form>
+        </div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></div></details>
+        <details class="surface create-card"><summary><span>Open by identifier</span></summary><form id="open" class="stacked-form"><label for="artifact-id">Artifact identifier<input id="artifact-id" required maxlength="255" placeholder="art_…"></label><button class="button-secondary" type="submit">Open</button></form></details>
+      </div>
     </div>
   </section>
-  <section id="find" class="surface find-panel" aria-labelledby="discover-title"><div class="section-heading"><div><p class="eyebrow">FIND</p><h2 id="discover-title">Search</h2></div></div><div class="search-grid">
-    <form id="search" class="search-form"><label for="search-query">Search documents and files<input id="search-query" required maxlength="500" placeholder="Phrase or keyword"></label><button type="submit">Search</button></form>
-    <form id="grep" class="search-form"><label for="grep-pattern">Exact text<input id="grep-pattern" required maxlength="500" placeholder="Exact text"></label><button type="submit">Find exact text</button></form>
-  </div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></section>
   <article id="workspace" class="workspace" hidden>
-    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1><div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Local workspace</span></div></div></div></div><nav class="workspace-nav" aria-label="Artifact sections"><a href="#reader">Read</a><a href="#editor">Edit</a><a href="#history">History</a><a href="#graph-context">Relationships</a><a href="#preview-card">Preview</a><a href="#details">Details</a></nav></header>
+    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1><div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div></div></div></div><nav class="workspace-nav" aria-label="Artifact sections"><a id="back-to-library" class="button-secondary" href="/">Back to library</a><a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#editor">Edit</a><a href="#history">History</a><a href="#graph-context">Relationships</a><a href="#details">Details</a></nav></header>
     <div class="workspace-layout"><div class="primary-column">
       <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Content</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Current version</p><pre id="readable-content">Loading content…</pre></section>
+      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div><button id="fullscreen-preview" class="button-secondary" type="button">Open full screen</button></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div><details><summary>Preview capabilities</summary><p>Network and host access are blocked.</p><div class="capability-list" aria-label="Preview capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div><p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p></details></section>
       <section id="editor" class="surface editor-card" aria-labelledby="edit-title"><div class="card-heading"><div><p class="eyebrow">CURRENT VERSION</p><h2 id="edit-title">Content</h2></div></div><p id="binary-note" class="binary-note" hidden>Binary content is metadata-only and cannot be edited as text.</p><form id="edit"><input id="parent-version" type="hidden"><label for="content">Content</label><textarea id="content" spellcheck="false"></textarea><div class="row"><label>Media type<input id="media-type" required maxlength="255"></label><label>Reason<input id="reason" value="inspection UI edit" required maxlength="2000"></label></div><p class="field-help">Saving creates a new version.</p><button id="save" type="submit">Save new version</button></form></section>
       <section id="history" class="utility-grid" aria-label="Artifact history"><div class="surface utility-card"><p class="eyebrow">CONTENT</p><h2>Chunks</h2><ul id="chunks" class="resource-list"></ul><pre id="chunk-content">Choose a chunk.</pre></div><div class="surface utility-card"><p class="eyebrow">HISTORY</p><h2>Versions</h2><ul id="versions" class="resource-list"></ul></div></section>
       <section id="details" class="surface card-pad" aria-labelledby="details-title"><div class="card-heading"><div><p class="eyebrow">DETAILS</p><h2 id="details-title">Artifact details</h2></div><span class="state-pill">Current version</span></div><dl id="artifact-details" class="metadata-grid"></dl></section>
     </div><aside class="secondary-column">
       <section id="sharing" class="surface access-card" aria-labelledby="sharing-title"><div class="card-heading"><div><p class="eyebrow">ACCESS</p><h2 id="sharing-title">People with access</h2></div><span id="privacy-status" class="state-pill">Private</span></div><p class="privacy-line">Only people you add can open this artifact.</p><ul id="people-with-access" class="access-list"><li class="muted">Loading access…</li></ul><form id="share" class="link-form"><label for="share-recipient">Person identifier<input id="share-recipient" required maxlength="255" placeholder="person-id"></label><label for="share-role">Access<select id="share-role"><option value="read">Can view</option><option value="write">Can edit</option></select></label><button type="submit">Share</button></form></section>
       <section id="graph-context" class="surface graph-card" aria-labelledby="graph-title"><div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">Relationships</h2></div></div><ul id="graph" class="graph-list"></ul><form id="link" class="link-form"><div class="row"><label>Target artifact identifier<input id="target-id" required maxlength="255" placeholder="art_…"></label><label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label></div><button type="submit">Create relationship</button></form></section>
-      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Sandboxed preview</h2></div></div><p>Network and host access are blocked.</p><div class="capability-list" aria-label="Preview capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div><p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p><div class="preview-actions"><button id="fullscreen-preview" class="button-secondary" type="button">Open full screen</button></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div></section>
     </aside></div>
   </article>
 </main></div><script src="/ui.js"></script></body></html>"""

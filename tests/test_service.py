@@ -75,6 +75,44 @@ class ServiceTests(unittest.TestCase):
             )
         self.assertEqual(len(self.service.versions("acme", first["artifact"]["id"])), 1)
 
+    def test_list_artifacts_returns_recent_named_readable_items(self):
+        owned = self.service.create_artifact(
+            tenant_id="acme", name="owned.md", data=b"owned", actor="reader"
+        )
+        private = self.service.create_artifact(
+            tenant_id="acme", name="private.md", data=b"private", actor="other"
+        )
+        shared = self.service.create_artifact(
+            tenant_id="acme", name="shared.md", data=b"shared", actor="owner"
+        )
+        self.service.create_artifact(
+            tenant_id="other", name="foreign.md", data=b"foreign", actor="reader"
+        )
+        self.service.share_artifact(
+            "acme",
+            shared["artifact"]["id"],
+            actor="owner",
+            subject_actor_id="reader",
+        )
+        with self.service.connect() as db:
+            for created, updated_at in (
+                (owned, "2026-01-01T00:00:00+00:00"),
+                (private, "2026-01-02T00:00:00+00:00"),
+                (shared, "2026-01-03T00:00:00+00:00"),
+            ):
+                db.execute(
+                    "UPDATE versions SET created_at = ? WHERE id = ?",
+                    (updated_at, created["version"]["id"]),
+                )
+        listed = self.service.list_artifacts("acme", actor="reader")
+        self.assertEqual([item["name"] for item in listed], ["shared.md", "owned.md"])
+        self.assertEqual(
+            self.service.list_artifacts("acme", limit=1, actor="reader")[0]["id"],
+            shared["artifact"]["id"],
+        )
+        self.assertIn("updated_at", listed[0])
+        self.assertNotIn("tenant_id", listed[0])
+
     def test_create_is_atomic_and_inputs_are_bounded(self):
         with patch.object(self.service, "_insert_version", side_effect=FolioError("failed")):
             with self.assertRaisesRegex(FolioError, "failed"):

@@ -11,6 +11,7 @@ PUBLIC_TOOLS = frozenset(
     {
         "artifact_create",
         "artifact_write",
+        "artifact_list",
         "artifact_read",
         "artifact_read_chunk",
         "artifact_search",

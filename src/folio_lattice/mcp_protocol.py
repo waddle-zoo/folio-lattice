@@ -112,6 +112,15 @@ def build_mcp_server(
 
         return _tool_errors(operation)
 
+    @server.tool(description="List recent artifacts available to the current actor.")
+    def artifact_list(
+        limit: Annotated[int, Field(ge=1, le=100)] = 20,
+    ) -> list[dict[str, Any]]:
+        request_tenant, request_actor = identity()
+        return _tool_errors(
+            lambda: service.list_artifacts(request_tenant, limit, actor=policy_actor(request_actor))
+        )
+
     @server.tool(description="Read a complete immutable artifact version.")
     def artifact_read(
         artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],

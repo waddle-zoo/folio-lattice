@@ -206,10 +206,11 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         status, _, page = await call(self.inspection, "GET", "/")
         self.assertEqual(status, 200)
         self.assertIn(b"<h1", page)
+        self.assertIn(b"Recent artifacts", page)
         self.assertIn(b"New document or file", page)
         self.assertIn(b"Search documents and files", page)
         self.assertIn(b"Relationships", page)
-        self.assertIn(b"Sandboxed preview", page)
+        self.assertIn(b"Artifact preview", page)
         for narration in (
             b"Search across the text you have indexed",
             b"Grep checks for an exact substring",
@@ -235,6 +236,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         for marker in (
             b'id="open"',
+            b'id="recent-artifacts"',
+            b'id="back-to-library"',
             b'id="create"',
             b'id="create-file"',
             b'id="search"',
@@ -260,6 +263,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         for marker in (
             b"location.assign",
+            b"artifact_list",
+            b"loadLibrary",
             b"artifact_read_chunk",
             b"artifact_write",
             b"artifact_versions",
@@ -275,6 +280,24 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(marker, script)
         for forbidden in (b"Traceback", b"console.log", b"document.cookie"):
             self.assertNotIn(forbidden, script)
+
+    async def test_library_returns_named_recent_artifacts(self) -> None:
+        status, _, body = await call(
+            self.inspection,
+            "POST",
+            "/api/mcp",
+            body=request("artifact_list", {"limit": 20}),
+            content_type="application/json",
+            origin=CONTROL_ORIGIN,
+        )
+        self.assertEqual(status, 200)
+        names = {item["name"] for item in json.loads(body)}
+        self.assertIn("page.html", names)
+
+        page = (await call(self.inspection, "GET", "/"))[2]
+        self.assertIn(b"Recent artifacts", page)
+        viewer = (await call(self.inspection, "GET", f"/inspect/{self.html['artifact']['id']}"))[2]
+        self.assertIn(b"Back to library", viewer)
 
     async def test_ui_renders_auth_context_without_local_warning_in_hosted_state(self) -> None:
         page = ui_html(

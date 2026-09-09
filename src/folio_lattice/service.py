@@ -453,6 +453,28 @@ class FolioLattice:
         result.pop("owner_actor_id", None)
         return result
 
+    def list_artifacts(
+        self, tenant_id: str, limit: int = 20, *, actor: str | None = None
+    ) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            access_sql, access_params = self._access_clause(actor, "read")
+            rows = db.execute(
+                """
+                SELECT a.id, a.name, a.media_type, a.created_at,
+                       a.current_version_id, v.created_at AS updated_at
+                FROM artifacts a
+                LEFT JOIN versions v
+                  ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
+                WHERE a.tenant_id = ? AND """
+                + access_sql
+                + """
+                ORDER BY COALESCE(v.created_at, a.created_at) DESC, a.id DESC
+                LIMIT ?
+                """,
+                (tenant_id, *access_params, max(1, min(limit, 100))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def write_version(
         self,
         *,
