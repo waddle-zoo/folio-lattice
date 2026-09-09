@@ -38,6 +38,8 @@ def build_mcp_server(
 ) -> MCPServer:
     """Bind local identity or resolve one authenticated principal per request."""
 
+    fixed_local_identity = tenant_id is not None and actor is not None
+
     def identity() -> tuple[str, str]:
         principal = get_request_principal()
         if principal is not None:
@@ -45,6 +47,9 @@ def build_mcp_server(
         if tenant_id is None or actor is None:
             raise FolioError("authentication required")
         return tenant_id, actor
+
+    def policy_actor(request_actor: str) -> str | None:
+        return None if fixed_local_identity else request_actor
 
     server = MCPServer(
         "folio-lattice",
@@ -87,7 +92,12 @@ def build_mcp_server(
     ) -> dict[str, Any]:
         def operation() -> dict[str, Any]:
             request_tenant, request_actor = identity()
-            artifact = service.get_artifact(request_tenant, artifact_id)
+            artifact = service.get_artifact(
+                request_tenant,
+                artifact_id,
+                actor=policy_actor(request_actor),
+                action="write",
+            )
             return service.write_version(
                 tenant_id=request_tenant,
                 artifact_id=artifact_id,
@@ -97,6 +107,7 @@ def build_mcp_server(
                 reason=reason,
                 source_context=source_context or {},
                 parent_version_id=parent_version_id,
+                authorization_actor=policy_actor(request_actor),
             )
 
         return _tool_errors(operation)
@@ -106,31 +117,44 @@ def build_mcp_server(
         artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         version_id: Annotated[str | None, Field(max_length=MAX_ID_LENGTH)] = None,
     ) -> dict[str, Any]:
-        request_tenant, _ = identity()
-        return _tool_errors(lambda: service.read_artifact(request_tenant, artifact_id, version_id))
+        request_tenant, request_actor = identity()
+        return _tool_errors(
+            lambda: service.read_artifact(
+                request_tenant,
+                artifact_id,
+                version_id,
+                actor=policy_actor(request_actor),
+            )
+        )
 
     @server.tool(description="Read one bounded text chunk with explicit offset units.")
     def artifact_read_chunk(
         chunk_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
     ) -> dict[str, Any]:
-        request_tenant, _ = identity()
-        return _tool_errors(lambda: service.read_chunk(request_tenant, chunk_id))
+        request_tenant, request_actor = identity()
+        return _tool_errors(
+            lambda: service.read_chunk(request_tenant, chunk_id, actor=policy_actor(request_actor))
+        )
 
     @server.tool(description="Search indexed text for a bounded natural-language phrase.")
     def artifact_search(
         query: Annotated[str, Field(min_length=1, max_length=500)],
         limit: Annotated[int, Field(ge=1, le=100)] = 20,
     ) -> list[dict[str, Any]]:
-        request_tenant, _ = identity()
-        return _tool_errors(lambda: service.search(request_tenant, query, limit))
+        request_tenant, request_actor = identity()
+        return _tool_errors(
+            lambda: service.search(request_tenant, query, limit, actor=policy_actor(request_actor))
+        )
 
     @server.tool(description="Find a bounded literal string within indexed text chunks.")
     def artifact_grep(
         pattern: Annotated[str, Field(min_length=1, max_length=500)],
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, _ = identity()
-        return _tool_errors(lambda: service.grep(request_tenant, pattern, limit))
+        request_tenant, request_actor = identity()
+        return _tool_errors(
+            lambda: service.grep(request_tenant, pattern, limit, actor=policy_actor(request_actor))
+        )
 
     @server.tool(description="Create an immutable, idempotent typed edge between artifacts.")
     def graph_link(
@@ -139,7 +163,7 @@ def build_mcp_server(
         edge_type: Annotated[str, Field(min_length=1, max_length=100)],
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        request_tenant, _ = identity()
+        request_tenant, request_actor = identity()
         return _tool_errors(
             lambda: service.link(
                 request_tenant,
@@ -147,6 +171,7 @@ def build_mcp_server(
                 target_artifact_id,
                 edge_type,
                 metadata or {},
+                actor=policy_actor(request_actor),
             )
         )
 
@@ -156,9 +181,15 @@ def build_mcp_server(
         max_depth: Annotated[int, Field(ge=0, le=10)] = 2,
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, _ = identity()
+        request_tenant, request_actor = identity()
         return _tool_errors(
-            lambda: service.traverse(request_tenant, start_artifact_id, max_depth, limit)
+            lambda: service.traverse(
+                request_tenant,
+                start_artifact_id,
+                max_depth,
+                limit,
+                actor=policy_actor(request_actor),
+            )
         )
 
     @server.tool(description="List an artifact's immutable version history.")
@@ -166,7 +197,63 @@ def build_mcp_server(
         artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, _ = identity()
-        return _tool_errors(lambda: service.versions(request_tenant, artifact_id, limit))
+        request_tenant, request_actor = identity()
+        return _tool_errors(
+            lambda: service.versions(
+                request_tenant, artifact_id, limit, actor=policy_actor(request_actor)
+            )
+        )
+
+    @server.tool(description="Grant an actor bounded access to an artifact.")
+    def artifact_share(
+        artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+        subject_actor_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+        action: Annotated[str, Field(pattern="^(read|write|share)$")] = "read",
+        reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "shared artifact",
+    ) -> dict[str, Any]:
+        request_tenant, request_actor = identity()
+        return _tool_errors(
+            lambda: service.share_artifact(
+                request_tenant,
+                artifact_id,
+                actor=request_actor,
+                subject_actor_id=subject_actor_id,
+                action=action,
+                reason=reason,
+                authorization_actor=policy_actor(request_actor),
+            )
+        )
+
+    @server.tool(description="Revoke an existing artifact grant immediately.")
+    def artifact_revoke(
+        artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+        grant_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+        reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "revoked share",
+    ) -> dict[str, Any]:
+        request_tenant, request_actor = identity()
+        return _tool_errors(
+            lambda: service.revoke_share(
+                request_tenant,
+                artifact_id,
+                actor=request_actor,
+                grant_id=grant_id,
+                reason=reason,
+                authorization_actor=policy_actor(request_actor),
+            )
+        )
+
+    @server.tool(description="List an artifact's server-owned access grants.")
+    def artifact_acl(
+        artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+    ) -> list[dict[str, Any]]:
+        request_tenant, request_actor = identity()
+        return _tool_errors(
+            lambda: service.artifact_acl(
+                request_tenant,
+                artifact_id,
+                actor=request_actor,
+                authorization_actor=policy_actor(request_actor),
+            )
+        )
 
     return server

@@ -34,6 +34,15 @@ MAX_REASON_LENGTH = 2_000
 MAX_CONTEXT_BYTES = 32 * 1024
 MAX_QUERY_LENGTH = 500
 MAX_EDGE_TYPE_LENGTH = 100
+ACL_ACTIONS = frozenset({"read", "write", "share"})
+ACL_SUBJECT_TYPE = "actor"
+
+
+class _UseCallerActor:
+    pass
+
+
+_USE_CALLER_ACTOR = _UseCallerActor()
 
 
 def utc_now() -> str:
@@ -95,6 +104,7 @@ class FolioLattice:
                 CREATE TABLE IF NOT EXISTS artifacts (
                     id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL REFERENCES tenants(id),
+                    owner_actor_id TEXT NOT NULL,
                     name TEXT NOT NULL,
                     media_type TEXT NOT NULL,
                     current_version_id TEXT REFERENCES versions(id),
@@ -148,9 +158,53 @@ class FolioLattice:
                     ON edges(tenant_id, source_artifact_id, edge_type);
                 CREATE INDEX IF NOT EXISTS edges_target_idx
                     ON edges(tenant_id, target_artifact_id, edge_type);
+                CREATE TABLE IF NOT EXISTS acl_grants (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+                    artifact_id TEXT NOT NULL REFERENCES artifacts(id),
+                    subject_type TEXT NOT NULL CHECK(subject_type = 'actor'),
+                    subject_id TEXT NOT NULL,
+                    action TEXT NOT NULL CHECK(action IN ('read', 'write', 'share')),
+                    status TEXT NOT NULL CHECK(status IN ('active', 'revoked')),
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    revoked_by TEXT,
+                    revoked_at TEXT,
+                    revocation_reason TEXT
+                );
+                CREATE INDEX IF NOT EXISTS acl_grants_lookup_idx
+                    ON acl_grants(tenant_id, artifact_id, subject_type, subject_id, action, status);
+                CREATE UNIQUE INDEX IF NOT EXISTS acl_grants_active_idx
+                    ON acl_grants(tenant_id, artifact_id, subject_type, subject_id, action)
+                    WHERE status = 'active';
                 """
             )
+            grant_columns = {row["name"] for row in db.execute("PRAGMA table_info(acl_grants)")}
+            if "revocation_reason" not in grant_columns:
+                db.execute("ALTER TABLE acl_grants ADD COLUMN revocation_reason TEXT")
             columns = {row["name"] for row in db.execute("PRAGMA table_info(artifacts)")}
+            if "owner_actor_id" not in columns:
+                db.execute("ALTER TABLE artifacts ADD COLUMN owner_actor_id TEXT")
+            rows = db.execute(
+                "SELECT id, tenant_id FROM artifacts WHERE owner_actor_id IS NULL"
+            ).fetchall()
+            for row in rows:
+                owner = db.execute(
+                    """
+                    SELECT actor FROM versions
+                    WHERE artifact_id = ? AND tenant_id = ?
+                    ORDER BY created_at, id
+                    LIMIT 1
+                    """,
+                    (row["id"], row["tenant_id"]),
+                ).fetchone()
+                if owner is None or not owner["actor"]:
+                    raise FolioError("cannot migrate artifact without an owner actor")
+                db.execute(
+                    "UPDATE artifacts SET owner_actor_id = ? WHERE id = ?",
+                    (owner["actor"], row["id"]),
+                )
             if "current_version_id" not in columns:
                 db.execute(
                     "ALTER TABLE artifacts ADD COLUMN current_version_id TEXT REFERENCES versions(id)"
@@ -167,6 +221,29 @@ class FolioLattice:
                     )
                     """
                 )
+            for row in db.execute(
+                "SELECT id, tenant_id, owner_actor_id FROM artifacts WHERE owner_actor_id IS NOT NULL"
+            ):
+                for action in ACL_ACTIONS:
+                    db.execute(
+                        """
+                        INSERT OR IGNORE INTO acl_grants(
+                            id, tenant_id, artifact_id, subject_type, subject_id,
+                            action, status, created_by, created_at, reason
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                        """,
+                        (
+                            f"owner_{row['id']}_{action}",
+                            row["tenant_id"],
+                            row["id"],
+                            ACL_SUBJECT_TYPE,
+                            row["owner_actor_id"],
+                            action,
+                            row["owner_actor_id"],
+                            utc_now(),
+                            "artifact owner",
+                        ),
+                    )
 
     def _ensure_tenant(self, db: sqlite3.Connection, tenant_id: str) -> None:
         self._validate_text("tenant_id", tenant_id, MAX_NAME_LENGTH)
@@ -174,6 +251,62 @@ class FolioLattice:
             "INSERT OR IGNORE INTO tenants(id, created_at) VALUES (?, ?)",
             (tenant_id, utc_now()),
         )
+
+    def _authorize(
+        self,
+        db: sqlite3.Connection,
+        tenant_id: str,
+        artifact_id: str,
+        actor: str | None,
+        action: str,
+    ) -> None:
+        if actor is None:
+            return
+        self._validate_text("actor", actor, MAX_NAME_LENGTH)
+        if action not in ACL_ACTIONS:
+            raise FolioError("unknown authorization action")
+        artifact = db.execute(
+            "SELECT owner_actor_id FROM artifacts WHERE id = ? AND tenant_id = ?",
+            (artifact_id, tenant_id),
+        ).fetchone()
+        if artifact is None:
+            raise FolioError("artifact not found")
+        if artifact["owner_actor_id"] == actor:
+            return
+        grant = db.execute(
+            """
+            SELECT 1 FROM acl_grants
+            WHERE tenant_id = ? AND artifact_id = ?
+              AND subject_type = ? AND subject_id = ?
+              AND action = ? AND status = 'active'
+            LIMIT 1
+            """,
+            (tenant_id, artifact_id, ACL_SUBJECT_TYPE, actor, action),
+        ).fetchone()
+        if grant is None:
+            raise FolioError("artifact not found")
+
+    def _access_clause(
+        self, actor: str | None, action: str, *, artifact_alias: str = "a"
+    ) -> tuple[str, tuple[str, ...]]:
+        if actor is None:
+            return "1 = 1", ()
+        self._validate_text("actor", actor, MAX_NAME_LENGTH)
+        if action not in ACL_ACTIONS:
+            raise FolioError("unknown authorization action")
+        return (
+            f"({artifact_alias}.owner_actor_id = ? OR EXISTS ("
+            "SELECT 1 FROM acl_grants g "
+            f"WHERE g.tenant_id = {artifact_alias}.tenant_id "
+            f"AND g.artifact_id = {artifact_alias}.id "
+            "AND g.subject_type = ? AND g.subject_id = ? "
+            "AND g.action = ? AND g.status = 'active'))",
+            (actor, ACL_SUBJECT_TYPE, actor, action),
+        )
+
+    @staticmethod
+    def _grant_dict(row: sqlite3.Row) -> dict[str, Any]:
+        return dict(row)
 
     def _blob_path(self, blob_hash: str) -> Path:
         return self.blob_root / blob_hash[:2] / blob_hash
@@ -261,9 +394,29 @@ class FolioLattice:
             db.execute("BEGIN IMMEDIATE")
             self._ensure_tenant(db, tenant_id)
             db.execute(
-                "INSERT INTO artifacts(id, tenant_id, name, media_type, created_at) VALUES (?, ?, ?, ?, ?)",
-                (artifact_id, tenant_id, name, resolved_type, utc_now()),
+                "INSERT INTO artifacts(id, tenant_id, owner_actor_id, name, media_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (artifact_id, tenant_id, actor, name, resolved_type, utc_now()),
             )
+            for action in ACL_ACTIONS:
+                db.execute(
+                    """
+                    INSERT INTO acl_grants(
+                        id, tenant_id, artifact_id, subject_type, subject_id,
+                        action, status, created_by, created_at, reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                    """,
+                    (
+                        f"owner_{artifact_id}_{action}",
+                        tenant_id,
+                        artifact_id,
+                        ACL_SUBJECT_TYPE,
+                        actor,
+                        action,
+                        actor,
+                        utc_now(),
+                        "artifact owner",
+                    ),
+                )
             version_id = self._insert_version(
                 db,
                 tenant_id=tenant_id,
@@ -276,19 +429,29 @@ class FolioLattice:
                 parent_version_id=None,
             )
         return {
-            "artifact": self.get_artifact(tenant_id, artifact_id),
-            "version": self.version_metadata(tenant_id, version_id),
+            "artifact": self.get_artifact(tenant_id, artifact_id, actor=actor),
+            "version": self.version_metadata(tenant_id, version_id, actor=actor),
         }
 
-    def get_artifact(self, tenant_id: str, artifact_id: str) -> dict[str, Any]:
+    def get_artifact(
+        self,
+        tenant_id: str,
+        artifact_id: str,
+        *,
+        actor: str | None = None,
+        action: str = "read",
+    ) -> dict[str, Any]:
         with self.connect() as db:
             artifact = db.execute(
-                "SELECT id, tenant_id, name, media_type, current_version_id, created_at FROM artifacts WHERE id = ? AND tenant_id = ?",
+                "SELECT id, tenant_id, owner_actor_id, name, media_type, current_version_id, created_at FROM artifacts WHERE id = ? AND tenant_id = ?",
                 (artifact_id, tenant_id),
             ).fetchone()
             if artifact is None:
                 raise FolioError("artifact not found")
-        return dict(artifact)
+            self._authorize(db, tenant_id, artifact_id, actor, action)
+        result = dict(artifact)
+        result.pop("owner_actor_id", None)
+        return result
 
     def write_version(
         self,
@@ -301,6 +464,7 @@ class FolioLattice:
         reason: str,
         source_context: dict[str, Any],
         parent_version_id: str | None,
+        authorization_actor: str | None | _UseCallerActor = _USE_CALLER_ACTOR,
     ) -> dict[str, Any]:
         source_context_json = self._validate_version_input(
             data=data,
@@ -311,6 +475,10 @@ class FolioLattice:
         )
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            request_actor = (
+                actor if isinstance(authorization_actor, _UseCallerActor) else authorization_actor
+            )
+            self._authorize(db, tenant_id, artifact_id, request_actor, "write")
             version_id = self._insert_version(
                 db,
                 tenant_id=tenant_id,
@@ -322,7 +490,7 @@ class FolioLattice:
                 source_context_json=source_context_json,
                 parent_version_id=parent_version_id,
             )
-        return self.version_metadata(tenant_id, version_id)
+        return self.version_metadata(tenant_id, version_id, actor=request_actor, action="write")
 
     def _insert_version(
         self,
@@ -406,7 +574,14 @@ class FolioLattice:
         )
         return version_id
 
-    def version_metadata(self, tenant_id: str, version_id: str) -> dict[str, Any]:
+    def version_metadata(
+        self,
+        tenant_id: str,
+        version_id: str,
+        *,
+        actor: str | None = None,
+        action: str = "read",
+    ) -> dict[str, Any]:
         with self.connect() as db:
             row = db.execute(
                 """
@@ -416,33 +591,39 @@ class FolioLattice:
                 """,
                 (version_id, tenant_id),
             ).fetchone()
-        if row is None:
-            raise FolioError("version not found")
+            if row is None:
+                raise FolioError("version not found")
+            self._authorize(db, tenant_id, row["artifact_id"], actor, action)
         result = dict(row)
         result["source_context"] = json.loads(result["source_context"])
         return result
 
-    def _version_bytes(self, tenant_id: str, version_id: str) -> bytes:
-        metadata = self.version_metadata(tenant_id, version_id)
+    def _version_bytes(self, tenant_id: str, version_id: str, *, actor: str | None = None) -> bytes:
+        metadata = self.version_metadata(tenant_id, version_id, actor=actor)
         path = self._blob_path(metadata["blob_hash"])
         if not path.exists():
             raise FolioError("version blob missing")
         return path.read_bytes()
 
     def read_artifact(
-        self, tenant_id: str, artifact_id: str, version_id: str | None = None
+        self,
+        tenant_id: str,
+        artifact_id: str,
+        version_id: str | None = None,
+        *,
+        actor: str | None = None,
     ) -> dict[str, Any]:
-        artifact = self.get_artifact(tenant_id, artifact_id)
+        artifact = self.get_artifact(tenant_id, artifact_id, actor=actor)
         if version_id is None:
             version_id = artifact["current_version_id"]
-        metadata = self.version_metadata(tenant_id, version_id)
+        metadata = self.version_metadata(tenant_id, version_id, actor=actor)
         if metadata["artifact_id"] != artifact_id:
             raise FolioError("version does not belong to artifact")
-        data = self._version_bytes(tenant_id, version_id)
+        data = self._version_bytes(tenant_id, version_id, actor=actor)
         result = {
             "artifact": artifact,
             "version": metadata,
-            "chunks": self.chunk_descriptors(tenant_id, artifact_id, version_id),
+            "chunks": self.chunk_descriptors(tenant_id, artifact_id, version_id, actor=actor),
             "content_base64": base64.b64encode(data).decode("ascii"),
         }
         text = self._text_for(data, metadata["media_type"])
@@ -451,9 +632,15 @@ class FolioLattice:
         return result
 
     def chunk_descriptors(
-        self, tenant_id: str, artifact_id: str, version_id: str
+        self,
+        tenant_id: str,
+        artifact_id: str,
+        version_id: str,
+        *,
+        actor: str | None = None,
     ) -> list[dict[str, Any]]:
         with self.connect() as db:
+            self._authorize(db, tenant_id, artifact_id, actor, "read")
             rows = db.execute(
                 """
                 SELECT id, artifact_id, version_id, ordinal, start_offset, end_offset
@@ -465,7 +652,9 @@ class FolioLattice:
             ).fetchall()
         return [{**dict(row), "offset_unit": "unicode_code_points"} for row in rows]
 
-    def read_chunk(self, tenant_id: str, chunk_id: str) -> dict[str, Any]:
+    def read_chunk(
+        self, tenant_id: str, chunk_id: str, *, actor: str | None = None
+    ) -> dict[str, Any]:
         with self.connect() as db:
             row = db.execute(
                 """
@@ -474,13 +663,16 @@ class FolioLattice:
                 """,
                 (chunk_id, tenant_id),
             ).fetchone()
-        if row is None:
-            raise FolioError("chunk not found")
+            if row is None:
+                raise FolioError("chunk not found")
+            self._authorize(db, tenant_id, row["artifact_id"], actor, "read")
         result = dict(row)
         result["offset_unit"] = "unicode_code_points"
         return result
 
-    def search(self, tenant_id: str, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    def search(
+        self, tenant_id: str, query: str, limit: int = 20, *, actor: str | None = None
+    ) -> list[dict[str, Any]]:
         query = query.strip()
         if not query:
             return []
@@ -489,41 +681,49 @@ class FolioLattice:
         match_query = '"' + query.replace('"', '""') + '"'
         try:
             with self.connect() as db:
+                access_sql, access_params = self._access_clause(actor, "read")
                 rows = db.execute(
                     """
                     SELECT chunk_fts.chunk_id, chunk_fts.artifact_id, chunk_fts.version_id,
-                           artifacts.name AS artifact_name,
+                           a.name AS artifact_name,
                            snippet(chunk_fts, 4, '[', ']', '…', 18) AS snippet,
                            bm25(chunk_fts) AS score
-                    FROM chunk_fts JOIN artifacts
-                      ON artifacts.id = chunk_fts.artifact_id
-                     AND artifacts.tenant_id = chunk_fts.tenant_id
+                    FROM chunk_fts
+                    JOIN artifacts a ON a.id = chunk_fts.artifact_id
+                     AND a.tenant_id = chunk_fts.tenant_id
                     WHERE chunk_fts.tenant_id = ? AND chunk_fts MATCH ?
+                      AND """
+                    + access_sql
+                    + """
                     ORDER BY score
                     LIMIT ?
                     """,
-                    (tenant_id, match_query, max(1, min(limit, 100))),
+                    (tenant_id, match_query, *access_params, max(1, min(limit, 100))),
                 ).fetchall()
         except sqlite3.OperationalError as exc:
             raise FolioError("invalid search query") from exc
         return [dict(row) for row in rows]
 
-    def grep(self, tenant_id: str, pattern: str, limit: int = 100) -> list[dict[str, Any]]:
+    def grep(
+        self, tenant_id: str, pattern: str, limit: int = 100, *, actor: str | None = None
+    ) -> list[dict[str, Any]]:
         if not pattern:
             return []
         if len(pattern) > MAX_QUERY_LENGTH:
             raise FolioError(f"pattern exceeds {MAX_QUERY_LENGTH} characters")
         with self.connect() as db:
+            access_sql, access_params = self._access_clause(actor, "read")
             rows = db.execute(
-                """SELECT chunks.id, chunks.artifact_id, chunks.version_id, chunks.ordinal,
-                          chunks.start_offset, chunks.end_offset, chunks.content,
-                          artifacts.name AS artifact_name
-                   FROM chunks JOIN artifacts
-                     ON artifacts.id = chunks.artifact_id
-                    AND artifacts.tenant_id = chunks.tenant_id
-                   WHERE chunks.tenant_id = ?
-                   ORDER BY chunks.artifact_id, chunks.version_id, chunks.ordinal""",
-                (tenant_id,),
+                """
+                SELECT c.id, c.artifact_id, c.version_id, c.ordinal,
+                       c.start_offset, c.end_offset, c.content,
+                       a.name AS artifact_name
+                FROM chunks c
+                JOIN artifacts a ON a.id = c.artifact_id
+                WHERE c.tenant_id = ? AND """
+                + access_sql
+                + " ORDER BY c.artifact_id, c.version_id, c.ordinal",
+                (tenant_id, *access_params),
             ).fetchall()
         matches: list[dict[str, Any]] = []
         for row in rows:
@@ -545,6 +745,8 @@ class FolioLattice:
         target_artifact_id: str,
         edge_type: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        actor: str | None = None,
     ) -> dict[str, Any]:
         if source_artifact_id == target_artifact_id:
             raise FolioError("self-links are not allowed")
@@ -561,6 +763,7 @@ class FolioLattice:
                     is None
                 ):
                     raise FolioError("artifact not found")
+                self._authorize(db, tenant_id, artifact_id, actor, "write")
             existing = db.execute(
                 """
                 SELECT id, source_artifact_id, target_artifact_id, edge_type,
@@ -608,12 +811,18 @@ class FolioLattice:
         return result
 
     def traverse(
-        self, tenant_id: str, start_artifact_id: str, max_depth: int = 2, limit: int = 100
+        self,
+        tenant_id: str,
+        start_artifact_id: str,
+        max_depth: int = 2,
+        limit: int = 100,
+        *,
+        actor: str | None = None,
     ) -> list[dict[str, Any]]:
         if max_depth < 0 or max_depth > 10:
             raise FolioError("max_depth must be between 0 and 10")
         limit = max(1, min(limit, 500))
-        self.get_artifact(tenant_id, start_artifact_id)
+        self.get_artifact(tenant_id, start_artifact_id, actor=actor)
         seen = {start_artifact_id}
         queue = deque([(start_artifact_id, 0)])
         results: list[dict[str, Any]] = []
@@ -624,16 +833,22 @@ class FolioLattice:
                     continue
                 rows = db.execute(
                     """
-                    SELECT edges.id, edges.source_artifact_id, edges.target_artifact_id,
-                           edges.edge_type, edges.metadata_json,
-                           artifacts.name AS target_artifact_name
-                    FROM edges JOIN artifacts
-                      ON artifacts.id = edges.target_artifact_id
-                     AND artifacts.tenant_id = edges.tenant_id
-                    WHERE edges.tenant_id = ? AND edges.source_artifact_id = ?
-                    ORDER BY edges.created_at, edges.id
+                    SELECT e.id, e.source_artifact_id, e.target_artifact_id,
+                           e.edge_type, e.metadata_json,
+                           a.name AS target_artifact_name
+                    FROM edges e
+                    JOIN artifacts a ON a.id = e.target_artifact_id
+                    WHERE e.tenant_id = ? AND e.source_artifact_id = ?
+                      AND """
+                    + self._access_clause(actor, "read")[0]
+                    + """
+                    ORDER BY e.created_at, e.id
                     """,
-                    (tenant_id, current),
+                    (
+                        tenant_id,
+                        current,
+                        *self._access_clause(actor, "read")[1],
+                    ),
                 ).fetchall()
                 for row in rows:
                     target = row["target_artifact_id"]
@@ -648,8 +863,15 @@ class FolioLattice:
                         break
         return results
 
-    def versions(self, tenant_id: str, artifact_id: str, limit: int = 100) -> list[dict[str, Any]]:
-        self.get_artifact(tenant_id, artifact_id)
+    def versions(
+        self,
+        tenant_id: str,
+        artifact_id: str,
+        limit: int = 100,
+        *,
+        actor: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.get_artifact(tenant_id, artifact_id, actor=actor)
         with self.connect() as db:
             rows = db.execute(
                 "SELECT id, artifact_id, parent_version_id, blob_hash, media_type, byte_size, actor, reason, source_context, created_at FROM versions WHERE tenant_id = ? AND artifact_id = ? ORDER BY created_at, id LIMIT ?",
@@ -661,6 +883,174 @@ class FolioLattice:
             item["source_context"] = json.loads(item["source_context"])
             result.append(item)
         return result
+
+    def share_artifact(
+        self,
+        tenant_id: str,
+        artifact_id: str,
+        *,
+        actor: str,
+        subject_actor_id: str,
+        action: str = "read",
+        reason: str = "shared artifact",
+        authorization_actor: str | None | _UseCallerActor = _USE_CALLER_ACTOR,
+    ) -> dict[str, Any]:
+        self._validate_text("subject_actor_id", subject_actor_id, MAX_NAME_LENGTH)
+        self._validate_text("reason", reason, MAX_REASON_LENGTH)
+        if action not in ACL_ACTIONS:
+            raise FolioError("share action is invalid")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            request_actor = (
+                actor if isinstance(authorization_actor, _UseCallerActor) else authorization_actor
+            )
+            self._authorize(db, tenant_id, artifact_id, request_actor, "share")
+            membership_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'oidc_memberships'"
+            ).fetchone()
+            if (
+                membership_table is not None
+                and db.execute(
+                    """
+                SELECT 1 FROM oidc_memberships
+                WHERE tenant_id = ? AND actor_id = ? AND status = 'active'
+                LIMIT 1
+                """,
+                    (tenant_id, subject_actor_id),
+                ).fetchone()
+                is None
+            ):
+                raise FolioError("share target is not an active tenant member")
+            existing = db.execute(
+                """
+                SELECT id, tenant_id, artifact_id, subject_type, subject_id,
+                       action, status, created_by, created_at, reason,
+                       revoked_by, revoked_at, revocation_reason
+                FROM acl_grants
+                WHERE tenant_id = ? AND artifact_id = ?
+                  AND subject_type = ? AND subject_id = ?
+                  AND action = ? AND status = 'active'
+                """,
+                (
+                    tenant_id,
+                    artifact_id,
+                    ACL_SUBJECT_TYPE,
+                    subject_actor_id,
+                    action,
+                ),
+            ).fetchone()
+            if existing is not None:
+                return self._grant_dict(existing)
+            grant_id = new_id("grt")
+            db.execute(
+                """
+                INSERT INTO acl_grants(
+                    id, tenant_id, artifact_id, subject_type, subject_id,
+                           action, status, created_by, created_at, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                """,
+                (
+                    grant_id,
+                    tenant_id,
+                    artifact_id,
+                    ACL_SUBJECT_TYPE,
+                    subject_actor_id,
+                    action,
+                    actor,
+                    utc_now(),
+                    reason,
+                ),
+            )
+            row = db.execute(
+                """
+                SELECT id, tenant_id, artifact_id, subject_type, subject_id,
+                       action, status, created_by, created_at, reason,
+                       revoked_by, revoked_at, revocation_reason
+                FROM acl_grants WHERE id = ?
+                """,
+                (grant_id,),
+            ).fetchone()
+        assert row is not None
+        return self._grant_dict(row)
+
+    def revoke_share(
+        self,
+        tenant_id: str,
+        artifact_id: str,
+        *,
+        actor: str,
+        grant_id: str,
+        reason: str = "revoked share",
+        authorization_actor: str | None | _UseCallerActor = _USE_CALLER_ACTOR,
+    ) -> dict[str, Any]:
+        self._validate_text("grant_id", grant_id, MAX_NAME_LENGTH)
+        self._validate_text("reason", reason, MAX_REASON_LENGTH)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            request_actor = (
+                actor if isinstance(authorization_actor, _UseCallerActor) else authorization_actor
+            )
+            self._authorize(db, tenant_id, artifact_id, request_actor, "share")
+            row = db.execute(
+                """
+                SELECT id, tenant_id, artifact_id, subject_type, subject_id,
+                       action, status, created_by, created_at, reason,
+                       revoked_by, revoked_at, revocation_reason
+                FROM acl_grants
+                WHERE id = ? AND tenant_id = ? AND artifact_id = ?
+                """,
+                (grant_id, tenant_id, artifact_id),
+            ).fetchone()
+            if row is None:
+                raise FolioError("grant not found")
+            if row["reason"] == "artifact owner":
+                raise FolioError("artifact owner grant cannot be revoked")
+            if row["status"] == "active":
+                db.execute(
+                    """
+                    UPDATE acl_grants
+                    SET status = 'revoked', revoked_by = ?, revoked_at = ?, revocation_reason = ?
+                    WHERE id = ? AND status = 'active'
+                    """,
+                    (actor, utc_now(), reason, grant_id),
+                )
+            row = db.execute(
+                """
+                SELECT id, tenant_id, artifact_id, subject_type, subject_id,
+                       action, status, created_by, created_at, reason,
+                       revoked_by, revoked_at, revocation_reason
+                FROM acl_grants WHERE id = ?
+                """,
+                (grant_id,),
+            ).fetchone()
+        assert row is not None
+        return self._grant_dict(row)
+
+    def artifact_acl(
+        self,
+        tenant_id: str,
+        artifact_id: str,
+        *,
+        actor: str,
+        authorization_actor: str | None | _UseCallerActor = _USE_CALLER_ACTOR,
+    ) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            request_actor = (
+                actor if isinstance(authorization_actor, _UseCallerActor) else authorization_actor
+            )
+            self._authorize(db, tenant_id, artifact_id, request_actor, "share")
+            rows = db.execute(
+                """
+                SELECT id, artifact_id, subject_type, subject_id, action, status,
+                       created_by, created_at, reason, revoked_by, revoked_at
+                       , revocation_reason
+                FROM acl_grants
+                WHERE tenant_id = ? AND artifact_id = ?
+                ORDER BY created_at, id
+                """,
+                (tenant_id, artifact_id),
+            ).fetchall()
+        return [self._grant_dict(row) for row in rows]
 
     def health(self) -> dict[str, Any]:
         """Check persistent state without exposing tenant data."""
