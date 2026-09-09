@@ -48,10 +48,10 @@ html { scroll-behavior: smooth; }
 body { min-width: 320px; margin: 0; background: var(--canvas); color: var(--ink); }
 a { color: var(--blue); }
 a:hover { color: var(--blue-dark); }
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: wait; opacity: .58; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, iframe:focus-visible, a:focus-visible, summary:focus-visible {
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, iframe:focus-visible, a:focus-visible, summary:focus-visible {
   outline: 3px solid #8ca9ff; outline-offset: 3px;
 }
 button[type="submit"] {
@@ -63,7 +63,7 @@ button[type="submit"] {
   font-weight: 700;
 }
 button[type="submit"]:hover:not(:disabled) { background: var(--blue-dark); }
-input, textarea {
+input, textarea, select {
   display: block;
   width: 100%;
   border: 1px solid var(--line-strong);
@@ -76,7 +76,7 @@ input, textarea {
 input::placeholder { color: #8b97a6; }
 textarea { min-height: 17rem; resize: vertical; font: .88rem/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
 label { display: block; color: #3d4a5b; font-size: .83rem; font-weight: 700; letter-spacing: .01em; }
-label > input, label > textarea { margin-top: .35rem; font-weight: 400; }
+label > input, label > textarea, label > select { margin-top: .35rem; font-weight: 400; }
 ul { margin: 0; padding: 0; list-style: none; }
 li { margin: 0; }
 pre { overflow: auto; max-height: 15rem; margin: .75rem 0 0; border: 1px solid var(--line); border-radius: 8px; padding: .85rem; background: #f7f9fb; color: #334258; white-space: pre-wrap; }
@@ -193,7 +193,12 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .resource-list { border-top: 1px solid var(--line); }
 .resource-item, .history-item, .graph-item { border-bottom: 1px solid var(--line); padding: .6rem 0; color: #47566b; font-size: .8rem; }
 .resource-item .inline-action, .history-item .inline-action { width: 100%; }
-.graph-card, .preview-card { padding: 1.25rem; }
+.graph-card, .preview-card, .access-card { padding: 1.25rem; }
+.access-list { margin: .9rem 0 1rem; border-top: 1px solid var(--line); }
+.access-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.access-row span { overflow-wrap: anywhere; }
+.access-row button { border: 0; padding: .25rem 0; background: transparent; color: var(--blue); font-weight: 700; }
+.privacy-line { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .8rem; }
 .graph-card > p, .preview-card > p { color: var(--muted); font-size: .8rem; }
 .graph-list { margin: .9rem 0 1rem; border-top: 1px solid var(--line); }
 .graph-item { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
@@ -233,7 +238,7 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
     --amber-soft: #3b2b18;
     --shadow: 0 12px 32px rgb(0 0 0 / 22%);
   }
-  input, textarea, pre, .search-form, .preview-card { background: #111a26; color: var(--ink); }
+  input, textarea, select, pre, .search-form, .preview-card { background: #111a26; color: var(--ink); }
   .topbar-open button, .button-secondary { background: var(--surface); color: var(--ink); }
   .feature-list li, .metadata-grid dd, .resource-item, .history-item, .graph-item { color: #c3cedc; }
   .capability, #bridge-status { background: #253247; color: #c9d5e5; }
@@ -286,6 +291,7 @@ function hideProtectedView() {
   byId('chunks').replaceChildren();
   byId('versions').replaceChildren();
   byId('graph').replaceChildren();
+  byId('people-with-access').replaceChildren();
   byId('chunk-content').textContent = '';
   byId('readable-content').textContent = '';
   byId('results').replaceChildren();
@@ -445,10 +451,11 @@ async function loadArtifact(versionId = null) {
   byId('welcome').hidden = true;
   byId('artifact-id').value = artifactId; status('Loading artifact…');
   const args = {artifact_id: artifactId}; if (versionId) args.version_id = versionId;
-  const [read, versions, graph] = await Promise.all([
+  const [read, versions, graph, grants] = await Promise.all([
     call('artifact_read', args),
     call('artifact_versions', {artifact_id: artifactId, limit: 100}),
     call('graph_traverse', {start_artifact_id: artifactId, max_depth: 2, limit: 100}),
+    call('artifact_acl', {artifact_id: artifactId}),
   ]);
   byId('workspace').hidden = false; showRead(read);
   list('versions', versions, (version) => {
@@ -466,6 +473,20 @@ async function loadArtifact(versionId = null) {
       location.assign(`/inspect/${encodeURIComponent(edge.target_artifact_id)}`);
     })); return li;
   }, 'No relationships.');
+  list('people-with-access', grants.filter((grant) =>
+    grant.status === 'active' && grant.reason !== 'artifact owner'), (grant) => {
+    const li = document.createElement('li'); li.className = 'resource-item access-row';
+    const role = grant.action === 'read' ? 'Can view' : grant.action === 'write' ? 'Can edit' : 'Can manage';
+    const label = document.createElement('span'); label.textContent = `${grant.subject_id} — ${role}`;
+    const remove = button('Remove access', async () => {
+      try {
+        await call('artifact_revoke', {artifact_id: artifactId, grant_id: grant.id,
+          reason: 'removed in inspection UI'});
+        await loadArtifact(); status(`Removed access for ${grant.subject_id}.`);
+      } catch (error) { handleFailure(error); }
+    });
+    li.append(label, remove); return li;
+  }, 'No one else has access.');
   status(new URLSearchParams(location.search).has('created')
     ? `Created ${read.artifact.name}. Version 1 saved.`
     : `Loaded ${read.artifact.name}.`);
@@ -539,6 +560,16 @@ byId('link').addEventListener('submit', async (event) => {
       target_artifact_id: byId('target-id').value, edge_type: byId('edge-type').value,
       metadata: {}});
     await loadArtifact(); status('Relationship created.');
+  } catch (error) { handleFailure(error); }
+});
+byId('share').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    const subject = byId('share-recipient').value.trim();
+    await call('artifact_share', {artifact_id: artifactId, subject_actor_id: subject,
+      action: byId('share-role').value, reason: 'shared in inspection UI'});
+    byId('share-recipient').value = '';
+    await loadArtifact(); status(`Shared with ${subject}.`);
   } catch (error) { handleFailure(error); }
 });
 addEventListener('message', async (event) => {
@@ -626,6 +657,7 @@ def ui_html(
       <section id="history" class="utility-grid" aria-label="Artifact history"><div class="surface utility-card"><p class="eyebrow">CONTENT</p><h2>Chunks</h2><ul id="chunks" class="resource-list"></ul><pre id="chunk-content">Choose a chunk.</pre></div><div class="surface utility-card"><p class="eyebrow">HISTORY</p><h2>Versions</h2><ul id="versions" class="resource-list"></ul></div></section>
       <section id="details" class="surface card-pad" aria-labelledby="details-title"><div class="card-heading"><div><p class="eyebrow">DETAILS</p><h2 id="details-title">Artifact details</h2></div><span class="state-pill">Current version</span></div><dl id="artifact-details" class="metadata-grid"></dl></section>
     </div><aside class="secondary-column">
+      <section id="sharing" class="surface access-card" aria-labelledby="sharing-title"><div class="card-heading"><div><p class="eyebrow">ACCESS</p><h2 id="sharing-title">People with access</h2></div><span id="privacy-status" class="state-pill">Private</span></div><p class="privacy-line">Only people you add can open this artifact.</p><ul id="people-with-access" class="access-list"><li class="muted">Loading access…</li></ul><form id="share" class="link-form"><label for="share-recipient">Person identifier<input id="share-recipient" required maxlength="255" placeholder="person-id"></label><label for="share-role">Access<select id="share-role"><option value="read">Can view</option><option value="write">Can edit</option></select></label><button type="submit">Share</button></form></section>
       <section id="graph-context" class="surface graph-card" aria-labelledby="graph-title"><div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">Relationships</h2></div></div><ul id="graph" class="graph-list"></ul><form id="link" class="link-form"><div class="row"><label>Target artifact identifier<input id="target-id" required maxlength="255" placeholder="art_…"></label><label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label></div><button type="submit">Create relationship</button></form></section>
       <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Sandboxed preview</h2></div></div><p>Network and host access are blocked.</p><div class="capability-list" aria-label="Preview capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div><p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p><div class="preview-actions"><button id="fullscreen-preview" class="button-secondary" type="button">Open full screen</button></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div></section>
     </aside></div>

@@ -18,6 +18,9 @@ PUBLIC_TOOLS = frozenset(
         "graph_link",
         "graph_traverse",
         "artifact_versions",
+        "artifact_share",
+        "artifact_revoke",
+        "artifact_acl",
     }
 )
 

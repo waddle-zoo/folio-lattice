@@ -774,6 +774,9 @@ document.querySelector('#create').requestSubmit();
                     "Sandboxed preview",
                     "Sandboxed artifact preview",
                     "Open full screen",
+                    "People with access",
+                    "Private",
+                    "Share",
                 ):
                     self.assertIn(expected_name, artifact_names)
                 self.assertIn(
@@ -790,6 +793,46 @@ document.querySelector('#create').requestSubmit();
                 self.assertIn("did not run", bridge_status)
                 self.assertNotIn("Denied or failed", bridge_status)
                 self.assertNotIn("artifact_write", bridge_status)
+
+                chrome.evaluate("""
+document.querySelector('#share-recipient').value = 'browser-reader';
+document.querySelector('#share-role').value = 'read';
+document.querySelector('#share').requestSubmit();
+""")
+                chrome.wait(
+                    "document.querySelector('#people-with-access').textContent.includes('browser-reader')"
+                )
+                self.assertIn(
+                    "Can view",
+                    chrome.evaluate("document.querySelector('#people-with-access').textContent"),
+                )
+                chrome.evaluate("document.querySelector('#people-with-access button').click()")
+                chrome.wait(
+                    "document.querySelector('#status').textContent.includes('Removed access for browser-reader')"
+                )
+                chrome.wait(
+                    "document.querySelector('#people-with-access').textContent.includes('No one else has access')"
+                )
+
+                chrome.evaluate("""
+window.__folioAccessFetch = window.fetch;
+window.fetch = (url, options) => {
+  const payload = JSON.parse(options?.body || '{}');
+  if (payload.tool === 'artifact_share') return Promise.resolve(new Response(
+    JSON.stringify({error: 'This document is not available to you.'}),
+    {status: 403, headers: {'Content-Type': 'application/json'}}));
+  return window.__folioAccessFetch(url, options);
+};
+document.querySelector('#share-recipient').value = 'denied-reader';
+document.querySelector('#share').requestSubmit();
+""")
+                chrome.wait(
+                    "document.querySelector('#error').textContent === 'This document is not available to you.'"
+                )
+                self.assertTrue(chrome.evaluate("document.querySelector('#workspace').hidden"))
+                chrome.evaluate("window.fetch = window.__folioAccessFetch")
+                chrome.command("Page.navigate", {"url": f"{control_origin}/inspect/{artifact_id}"})
+                chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
 
                 chrome.evaluate("""
 window.__folioFetch = window.fetch;

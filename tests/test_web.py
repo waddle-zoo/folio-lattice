@@ -247,6 +247,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="link"',
             b'id="preview"',
             b'id="bridge-status"',
+            b'id="sharing"',
+            b'id="people-with-access"',
+            b'id="share-recipient"',
             b'aria-live="polite"',
         ):
             self.assertIn(marker, page)
@@ -260,6 +263,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b"artifact_read_chunk",
             b"artifact_write",
             b"artifact_versions",
+            b"artifact_share",
+            b"artifact_revoke",
+            b"artifact_acl",
             b"graph_link",
             b"graph_traverse",
             b"/render/",
