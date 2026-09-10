@@ -178,7 +178,8 @@ class HostedAuthAdversarialTests(unittest.TestCase):
     def test_forged_signature_is_rejected(self) -> None:
         token = self.target.token("A_OWNER")
         header, payload, signature = token.split(".")
-        forged = ".".join((header, payload, ("A" if signature[-1] != "A" else "B") + signature[1:]))
+        replacement = "A" if signature[0] != "A" else "B"
+        forged = ".".join((header, payload, replacement + signature[1:]))
         self.assert_denied(self.target.mcp_probe(forged), forged)
 
     def test_expired_token_is_rejected(self) -> None:

@@ -691,9 +691,7 @@ def ui_html(
         else ""
     )
     debug_workspace_nav = (
-        '<a href="#graph-context">Relationships</a><a href="#details">Details</a>'
-        if debug
-        else ""
+        '<a href="#graph-context">Relationships</a><a href="#details">Details</a>' if debug else ""
     )
     debug_details = (
         '<section id="details" class="surface card-pad" aria-labelledby="details-title">'
@@ -713,7 +711,7 @@ def ui_html(
         '<input id="share-recipient" required maxlength="255" placeholder="person-id"></label>'
         '<label for="share-role">Access<select id="share-role"><option value="read">Can view</option>'
         '<option value="write">Can edit</option></select></label><button type="submit">Share</button>'
-        '</form></section>'
+        "</form></section>"
         if debug
         else ""
     )
@@ -734,7 +732,7 @@ def ui_html(
         else ""
     )
     preview_details = (
-        '<details><summary>Preview capabilities</summary><p>Network and host access are blocked.</p>'
+        "<details><summary>Preview capabilities</summary><p>Network and host access are blocked.</p>"
         '<div class="capability-list" aria-label="Preview capabilities"><span class="capability">Read</span>'
         '<span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></div>'
         '<p id="bridge-status" role="status" aria-live="polite">No attached tool call yet.</p></details>'

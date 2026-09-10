@@ -271,9 +271,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         for forbidden in (b"Traceback", b"content_base64", b"source_context", b"sqlite"):
             self.assertNotIn(forbidden, page)
 
-        debug_page = (await call(
-            self.inspection, "GET", f"/inspect/{self.html['artifact']['id']}"
-        ))[2]
+        debug_page = (
+            await call(self.inspection, "GET", f"/inspect/{self.html['artifact']['id']}")
+        )[2]
         for marker in (
             b'id="open"',
             b'id="artifact-id"',
@@ -284,9 +284,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="fullscreen-preview"',
         ):
             self.assertIn(marker, debug_page)
-        human_page = (await call(
-            self.inspection, "GET", f"/artifacts/{self.html['artifact']['id']}"
-        ))[2]
+        human_page = (
+            await call(self.inspection, "GET", f"/artifacts/{self.html['artifact']['id']}")
+        )[2]
         self.assertNotIn(b'id="artifact-id"', human_page)
         self.assertNotIn(b"People with access", human_page)
         self.assertIn(b'iframe id="preview"', human_page)
