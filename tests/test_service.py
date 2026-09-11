@@ -20,7 +20,7 @@ class ServiceTests(unittest.TestCase):
         first = self.service.create_artifact(
             tenant_id="acme",
             name="one.md",
-            data=b"alpha graph target",
+            data=b"alpha legacy-marker graph target",
             media_type="text/markdown",
             actor="codex",
             reason="seed",
@@ -54,6 +54,8 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(self.service.search("acme", "revised"))
         self.assertTrue(self.service.search("acme", "graph-target"))
         self.assertTrue(self.service.grep("acme", "graph target"))
+        self.assertEqual(self.service.search("acme", "legacy-marker"), [])
+        self.assertEqual(self.service.grep("acme", "legacy-marker"), [])
         self.service.link("acme", artifact_id, second["artifact"]["id"], "references")
         traversal = self.service.traverse("acme", artifact_id, max_depth=1)
         self.assertEqual(traversal[0]["target_artifact_id"], second["artifact"]["id"])
@@ -94,9 +96,7 @@ class ServiceTests(unittest.TestCase):
             actor="owner",
             subject_actor_id="reader",
         )
-        self.service.link(
-            "acme", owned["artifact"]["id"], shared["artifact"]["id"], "references"
-        )
+        self.service.link("acme", owned["artifact"]["id"], shared["artifact"]["id"], "references")
         with self.service.connect() as db:
             for created, updated_at in (
                 (owned, "2026-01-01T00:00:00+00:00"),

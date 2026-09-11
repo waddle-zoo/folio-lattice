@@ -718,6 +718,7 @@ class FolioLattice:
                     JOIN artifacts a ON a.id = chunk_fts.artifact_id
                      AND a.tenant_id = chunk_fts.tenant_id
                     WHERE chunk_fts.tenant_id = ? AND chunk_fts MATCH ?
+                      AND a.current_version_id = chunk_fts.version_id
                       AND """
                     + access_sql
                     + """
@@ -746,7 +747,10 @@ class FolioLattice:
                        a.name AS artifact_name
                 FROM chunks c
                 JOIN artifacts a ON a.id = c.artifact_id
-                WHERE c.tenant_id = ? AND """
+                 AND a.tenant_id = c.tenant_id
+                WHERE c.tenant_id = ?
+                  AND a.current_version_id = c.version_id
+                  AND """
                 + access_sql
                 + " ORDER BY c.artifact_id, c.version_id, c.ordinal",
                 (tenant_id, *access_params),

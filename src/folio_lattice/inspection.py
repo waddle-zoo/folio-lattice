@@ -669,7 +669,8 @@ byId('edit')?.addEventListener('submit', async (event) => {
       content_base64: base64(new TextEncoder().encode(byId('content').value)),
       source_context: {interface: 'inspection-ui'},
     });
-    status(`Saved new version ${written.id}.`); await loadArtifact();
+    history.replaceState(null, '', location.pathname);
+    await loadArtifact(); status(`Saved new version ${written.id}.`);
   } catch (error) {
     if (error.status === 409) failure('A newer version already exists. Refresh before saving again; your edit remains here.');
     else handleFailure(error);
@@ -685,7 +686,8 @@ byId('human-edit')?.addEventListener('submit', async (event) => {
       content_base64: base64(new TextEncoder().encode(byId('human-content').value)),
       source_context: {interface: 'library-ui'},
     });
-    status(`Saved new version ${written.id}.`); await loadArtifact();
+    history.replaceState(null, '', location.pathname);
+    await loadArtifact(); status('Saved a new version.');
   } catch (error) {
     if (error.status === 409) failure('A newer version already exists. Refresh before saving again; your edit remains here.');
     else handleFailure(error);
@@ -835,12 +837,18 @@ def ui_html(
         '<details class="advanced-field"><summary>Advanced fields</summary><div class="stacked-form">'
         '<label for="create-media">Media type<input id="create-media" maxlength="255" placeholder="Inferred from name"></label>'
         '<label for="create-reason">Reason<input id="create-reason" value="inspection UI create" required maxlength="2000"></label>'
-        '</div></details>' if debug else ''
+        "</div></details>"
+        if debug
+        else ""
     )
     workspace_nav = (
         '<a id="back-to-library" class="button-secondary" href="/">Back to library</a>'
         '<a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#graph-context">Graph</a>'
-        + ('<a href="#editor">Edit</a><a href="#history">History</a>' + debug_workspace_nav if debug else '')
+        + (
+            '<a href="#editor">Edit</a><a href="#history">History</a>' + debug_workspace_nav
+            if debug
+            else ""
+        )
     )
     preview_debug = (
         '<button id="fullscreen-preview" class="button-secondary" type="button">Open full screen</button>'
@@ -863,7 +871,7 @@ def ui_html(
 <div class="app-shell">
 <header class="topbar">
   <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">F</span><div><div class="brand-name">Folio Lattice</div><div class="brand-subtitle">Knowledge workspace</div></div></div>
-  <nav class="primary-nav" aria-label="Primary"><a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a><a href="#graphs"><span class="nav-index" aria-hidden="true">02</span>Graphs</a><a href="#find"><span class="nav-index" aria-hidden="true">03</span>Search</a><a href="#new"><span class="nav-index" aria-hidden="true">04</span>New</a></nav>
+  <nav class="primary-nav" aria-label="Primary"><a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a><a href="/#graphs"><span class="nav-index" aria-hidden="true">02</span>Graphs</a><a href="/#find"><span class="nav-index" aria-hidden="true">03</span>Search</a><a href="/#new"><span class="nav-index" aria-hidden="true">04</span>New</a></nav>
 </header>
 {account_surface}
 <main id="main" class="page" aria-busy="false">
@@ -891,7 +899,7 @@ def ui_html(
     </div>
   </section>
   <article id="workspace" class="workspace" hidden>
-    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1>{'<div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div>' if debug else ''}</div></div></div><nav class="workspace-nav" aria-label="Artifact sections">{workspace_nav}</nav></header>
+    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1>{'<div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div>' if debug else ""}</div></div></div><nav class="workspace-nav" aria-label="Artifact sections">{workspace_nav}</nav></header>
     <div class="workspace-layout"><div class="primary-column">
       <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Readable document</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Loading readable content…</p><div id="readable-content" class="document-content">Loading content…</div></section>
       <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div>{preview_debug}</div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>
