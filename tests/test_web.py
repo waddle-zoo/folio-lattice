@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from mcp import Client
 
-from folio_lattice.bridge import AttachedMcpBridge, validate_bridge_request
+from folio_lattice.bridge import AttachedMcpBridge, BridgeRequestError, validate_bridge_request
 from folio_lattice.inspection import InspectionApp, ui_html
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.public_mcp import HttpMcpClient, PublicMcpError
@@ -431,7 +431,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             "artifact_id": artifact_id,
             "attachment": "folio-lattice",
             "tool": "artifact_search",
-            "arguments": {"query": "target marker", "limit": 10},
+            "arguments": {"query": "Page", "limit": 10},
         }
         status, _, body = await call(
             app,
@@ -493,10 +493,107 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                 request_value
             )
         with self.assertRaisesRegex(PublicMcpError, "size limit"):
-            await AttachedMcpBridge(FixedCaller("x" * 100), max_result_bytes=10).call(request_value)
+            await AttachedMcpBridge(
+                FixedCaller([{"artifact_id": "art_x", "snippet": "x" * 100}]),
+                max_result_bytes=10,
+            ).call(request_value)
         oversized = {**base, "arguments": {"query": "x" * (32 * 1024)}}
         with self.assertRaisesRegex(Exception, "too large"):
             validate_bridge_request(oversized)
+
+    async def test_public_bridge_binds_reads_and_traversal_to_attached_artifact(self) -> None:
+        attached_id = self.html["artifact"]["id"]
+        other_id = self.target["artifact"]["id"]
+        with self.assertRaisesRegex(BridgeRequestError, "attached artifact"):
+            await AttachedMcpBridge(self.caller).call(
+                {
+                    "request_id": "raw-read-other",
+                    "artifact_id": attached_id,
+                    "attachment": "folio-lattice",
+                    "tool": "artifact_read",
+                    "arguments": {"artifact_id": other_id},
+                }
+            )
+        for request_id, tool, arguments in (
+            ("read-other", "artifact_read", {"artifact_id": other_id}),
+            ("traverse-other", "graph_traverse", {"start_artifact_id": other_id}),
+        ):
+            payload = {
+                "request_id": request_id,
+                "artifact_id": attached_id,
+                "attachment": "folio-lattice",
+                "tool": tool,
+                "arguments": arguments,
+            }
+            status, _, body = await call(
+                self.inspection,
+                "POST",
+                "/api/bridge",
+                body=json.dumps(payload).encode(),
+                content_type="application/json",
+                origin=CONTROL_ORIGIN,
+            )
+            self.assertEqual(status, 400)
+            self.assertNotIn(other_id.encode(), body)
+            self.assertNotIn(b"target marker", body)
+
+        for request_id, tool, arguments in (
+            ("read-attached", "artifact_read", {"artifact_id": attached_id}),
+            ("traverse-attached", "graph_traverse", {"start_artifact_id": attached_id}),
+        ):
+            payload = {
+                "request_id": request_id,
+                "artifact_id": attached_id,
+                "attachment": "folio-lattice",
+                "tool": tool,
+                "arguments": arguments,
+            }
+            status, _, _ = await call(
+                self.inspection,
+                "POST",
+                "/api/bridge",
+                body=json.dumps(payload).encode(),
+                content_type="application/json",
+                origin=CONTROL_ORIGIN,
+            )
+            self.assertEqual(status, 200)
+
+        search_with_selector = {
+            "request_id": "search-selector",
+            "artifact_id": attached_id,
+            "attachment": "folio-lattice",
+            "tool": "artifact_search",
+            "arguments": {"query": "target marker", "artifact_id": other_id},
+        }
+        status, _, body = await call(
+            self.inspection,
+            "POST",
+            "/api/bridge",
+            body=json.dumps(search_with_selector).encode(),
+            content_type="application/json",
+            origin=CONTROL_ORIGIN,
+        )
+        self.assertEqual(status, 400)
+        self.assertNotIn(other_id.encode(), body)
+
+        cross_artifact_search = {
+            "request_id": "search-other",
+            "artifact_id": attached_id,
+            "attachment": "folio-lattice",
+            "tool": "artifact_search",
+            "arguments": {"query": "target marker"},
+        }
+        status, _, body = await call(
+            self.inspection,
+            "POST",
+            "/api/bridge",
+            body=json.dumps(cross_artifact_search).encode(),
+            content_type="application/json",
+            origin=CONTROL_ORIGIN,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["result"], [])
+        self.assertNotIn(b"target marker", body)
 
     async def test_http_mcp_adapter_bounds_errors_and_readiness(self) -> None:
         successful = SimpleNamespace(

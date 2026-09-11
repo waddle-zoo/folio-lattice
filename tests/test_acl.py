@@ -119,6 +119,41 @@ class AclTests(unittest.TestCase):
                 subject_actor_id="member",
             )
 
+    def test_owner_reason_is_reserved_and_legacy_spoof_is_revokeable(self) -> None:
+        created = self.service.create_artifact(
+            tenant_id="tenant-a", name="x.txt", data=b"x", actor="owner"
+        )
+        artifact_id = created["artifact"]["id"]
+        with self.assertRaisesRegex(FolioError, "share reason is reserved"):
+            self.service.share_artifact(
+                "tenant-a",
+                artifact_id,
+                actor="owner",
+                subject_actor_id="member",
+                reason="  ARtifact OWNER  ",
+            )
+
+        with self.assertRaisesRegex(FolioError, "cannot be revoked"):
+            self.service.revoke_share(
+                "tenant-a",
+                artifact_id,
+                actor="owner",
+                grant_id=f"owner_{artifact_id}_read",
+            )
+
+        grant = self.service.share_artifact(
+            "tenant-a", artifact_id, actor="owner", subject_actor_id="member", reason="review"
+        )
+        with self.service.connect() as db:
+            db.execute(
+                "UPDATE acl_grants SET reason = ? WHERE id = ?",
+                ("artifact owner", grant["id"]),
+            )
+        revoked = self.service.revoke_share(
+            "tenant-a", artifact_id, actor="owner", grant_id=grant["id"]
+        )
+        self.assertEqual(revoked["status"], "revoked")
+
     def test_existing_artifact_migrates_to_owner_grants(self) -> None:
         legacy_db = Path(self.temp.name) / "legacy.db"
         legacy_blobs = Path(self.temp.name) / "legacy-blobs"
@@ -172,6 +207,34 @@ class AclTests(unittest.TestCase):
 
 
 class McpAclTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mcp_rejects_reserved_owner_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = FolioLattice(root / "folio.db", root / "blobs")
+            server = build_mcp_server(service, tenant_id="tenant-a", actor="owner")
+            async with Client(server) as client:
+                created = await client.call_tool(
+                    "artifact_create",
+                    {
+                        "name": "shared.txt",
+                        "content_base64": base64.b64encode(b"shared").decode(),
+                    },
+                )
+                self.assertFalse(created.is_error, created)
+                structured = created.structured_content
+                assert structured is not None
+                artifact_id = structured.get("result", structured)["artifact"]["id"]
+                response = await client.call_tool(
+                    "artifact_share",
+                    {
+                        "artifact_id": artifact_id,
+                        "subject_actor_id": "member",
+                        "reason": "  ARtifact OWNER  ",
+                    },
+                )
+                self.assertTrue(response.is_error)
+                self.assertIn("share reason is reserved", response.content[0].text)
+
     async def test_mcp_share_and_revoke_have_no_caller_identity_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

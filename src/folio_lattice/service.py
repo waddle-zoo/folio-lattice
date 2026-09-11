@@ -36,6 +36,7 @@ MAX_QUERY_LENGTH = 500
 MAX_EDGE_TYPE_LENGTH = 100
 ACL_ACTIONS = frozenset({"read", "write", "share"})
 ACL_SUBJECT_TYPE = "actor"
+OWNER_GRANT_REASON = "artifact owner"
 
 
 class _UseCallerActor:
@@ -241,7 +242,7 @@ class FolioLattice:
                             action,
                             row["owner_actor_id"],
                             utc_now(),
-                            "artifact owner",
+                            OWNER_GRANT_REASON,
                         ),
                     )
 
@@ -414,7 +415,7 @@ class FolioLattice:
                         action,
                         actor,
                         utc_now(),
-                        "artifact owner",
+                        OWNER_GRANT_REASON,
                     ),
                 )
             version_id = self._insert_version(
@@ -919,6 +920,8 @@ class FolioLattice:
     ) -> dict[str, Any]:
         self._validate_text("subject_actor_id", subject_actor_id, MAX_NAME_LENGTH)
         self._validate_text("reason", reason, MAX_REASON_LENGTH)
+        if reason.strip().casefold() == OWNER_GRANT_REASON.casefold():
+            raise FolioError("share reason is reserved")
         if action not in ACL_ACTIONS:
             raise FolioError("share action is invalid")
         with self.connect() as db:
@@ -1025,7 +1028,7 @@ class FolioLattice:
             ).fetchone()
             if row is None:
                 raise FolioError("grant not found")
-            if row["reason"] == "artifact owner":
+            if row["id"] == f"owner_{artifact_id}_{row['action']}":
                 raise FolioError("artifact owner grant cannot be revoked")
             if row["status"] == "active":
                 db.execute(

@@ -46,12 +46,14 @@ def validate_bridge_request(value: Any) -> dict[str, Any]:
         raise BridgeRequestError("arguments must be valid JSON") from exc
     if len(encoded) > MAX_BRIDGE_ARGUMENT_BYTES:
         raise BridgeRequestError("bridge arguments are too large", reason="oversized_arguments")
+    arguments = _validate_tool_arguments(tool, arguments)
+    _require_artifact_binding(tool, artifact_id, arguments)
     return {
         "request_id": request_id,
         "artifact_id": artifact_id,
         "attachment": attachment,
         "tool": tool,
-        "arguments": _validate_tool_arguments(tool, arguments),
+        "arguments": arguments,
     }
 
 
@@ -105,6 +107,30 @@ def _validate_tool_arguments(tool: str, arguments: dict[str, Any]) -> dict[str, 
     return arguments
 
 
+def _require_artifact_binding(tool: str, artifact_id: str, arguments: Mapping[str, Any]) -> None:
+    if tool == "artifact_read":
+        target = arguments.get("artifact_id")
+    elif tool == "graph_traverse":
+        target = arguments.get("start_artifact_id")
+    else:
+        return
+    if target != artifact_id:
+        raise BridgeRequestError(
+            "bridge request does not target its attached artifact",
+            reason="artifact_mismatch",
+        )
+
+
+def _restrict_search_result(result: Any, artifact_id: str) -> list[dict[str, Any]]:
+    if not isinstance(result, list):
+        raise PublicMcpError("MCP search result is invalid")
+    return [
+        dict(item)
+        for item in result
+        if isinstance(item, Mapping) and item.get("artifact_id") == artifact_id
+    ]
+
+
 class AttachedMcpBridge:
     """Authorize and audit one read-only artifact-to-MCP attachment."""
 
@@ -143,6 +169,11 @@ class AttachedMcpBridge:
                 "attached MCP tool is not permitted", reason="capability_not_attached"
             )
         try:
+            _require_artifact_binding(tool, audit["artifact_id"], request["arguments"])
+        except BridgeRequestError as exc:
+            self._audit(audit, "deny", exc.reason, started)
+            raise
+        try:
             async with asyncio.timeout(self.timeout_seconds):
                 result = await self.caller.call(tool, request["arguments"])
         except TimeoutError as exc:
@@ -151,6 +182,8 @@ class AttachedMcpBridge:
         except Exception:
             self._audit(audit, "allow", "tool_error", started)
             raise
+        if tool == "artifact_search":
+            result = _restrict_search_result(result, audit["artifact_id"])
         encoded = json.dumps(result, separators=(",", ":"), allow_nan=False).encode()
         if len(encoded) > self.max_result_bytes:
             self._audit(audit, "allow", "oversized_result", started)
