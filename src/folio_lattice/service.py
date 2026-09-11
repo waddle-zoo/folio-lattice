@@ -462,7 +462,10 @@ class FolioLattice:
             rows = db.execute(
                 """
                 SELECT a.id, a.name, a.media_type, a.created_at,
-                       a.current_version_id, v.created_at AS updated_at
+                       a.current_version_id, v.created_at AS updated_at,
+                       (SELECT COUNT(*) FROM edges e
+                        WHERE e.tenant_id = a.tenant_id
+                          AND (e.source_artifact_id = a.id OR e.target_artifact_id = a.id)) AS graph_edges
                 FROM artifacts a
                 LEFT JOIN versions v
                   ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id

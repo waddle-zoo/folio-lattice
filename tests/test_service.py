@@ -94,6 +94,9 @@ class ServiceTests(unittest.TestCase):
             actor="owner",
             subject_actor_id="reader",
         )
+        self.service.link(
+            "acme", owned["artifact"]["id"], shared["artifact"]["id"], "references"
+        )
         with self.service.connect() as db:
             for created, updated_at in (
                 (owned, "2026-01-01T00:00:00+00:00"),
@@ -111,6 +114,12 @@ class ServiceTests(unittest.TestCase):
             shared["artifact"]["id"],
         )
         self.assertIn("updated_at", listed[0])
+        self.assertEqual(
+            next(item["graph_edges"] for item in listed if item["name"] == "owned.md"), 1
+        )
+        self.assertEqual(
+            next(item["graph_edges"] for item in listed if item["name"] == "shared.md"), 1
+        )
         self.assertNotIn("tenant_id", listed[0])
 
     def test_create_is_atomic_and_inputs_are_bounded(self):

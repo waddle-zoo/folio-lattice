@@ -216,9 +216,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"<h1", page)
         self.assertIn(b"Recent artifacts", page)
-        self.assertIn(b"New document or file", page)
+        self.assertIn(b"New artifact", page)
         self.assertIn(b"Search documents and files", page)
-        self.assertIn(b"Artifact preview", page)
+        self.assertIn(b"Graphs", page)
         for narration in (
             b"Search across the text you have indexed",
             b"Grep checks for an exact substring",
@@ -250,9 +250,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="search"',
             b'id="grep"',
             b'id="workspace"',
-            b'id="content"',
-            b'id="chunks"',
-            b'id="versions"',
+            b'id="readable-content"',
             b'id="preview"',
             b'aria-live="polite"',
         ):
@@ -266,6 +264,11 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="sharing"',
             b'id="bridge-status"',
             b'id="fullscreen-preview"',
+            b'id="content"',
+            b'id="chunks"',
+            b'id="versions"',
+            b'id="create-media"',
+            b'id="create-reason"',
         ):
             self.assertNotIn(forbidden, page)
         for forbidden in (b"Traceback", b"content_base64", b"source_context", b"sqlite"):
@@ -289,6 +292,13 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         )[2]
         self.assertNotIn(b'id="artifact-id"', human_page)
         self.assertNotIn(b"People with access", human_page)
+        self.assertIn(b"Readable document", human_page)
+        self.assertIn(b"Update document", human_page)
+        self.assertIn(b'id="graph-context"', human_page)
+        self.assertIn(b'id="human-edit"', human_page)
+        self.assertNotIn(b'id="content"', human_page)
+        self.assertNotIn(b'id="chunks"', human_page)
+        self.assertNotIn(b'id="versions"', human_page)
         self.assertIn(b'iframe id="preview"', human_page)
         self.assertIn(b'sandbox="allow-scripts"', human_page)
 

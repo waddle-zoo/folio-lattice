@@ -134,6 +134,8 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .library-item { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--line); padding: .85rem .2rem; }
 .library-item .inline-action { font-size: .98rem; font-weight: 800; }
 .library-meta { color: var(--muted); font-size: .76rem; text-align: right; }
+.graph-library { padding: 1.25rem 1.3rem; }
+.graph-library .library-list { margin-top: .75rem; }
 .library-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
 .library-actions > details { min-width: 0; }
 .create-card { padding: 1.25rem 1.3rem 1.35rem; }
@@ -181,12 +183,28 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .workspace-nav a { color: var(--muted); font-size: .78rem; font-weight: 700; text-decoration: none; }
 .workspace-nav a:hover { color: var(--blue); }
 .workspace-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(19rem, .85fr); gap: 1rem; align-items: start; }
-.primary-column, .secondary-column { display: grid; gap: 1rem; min-width: 0; }
+.primary-column { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+.secondary-column { display: grid; gap: 1rem; min-width: 0; }
 .card-pad { padding: 1.25rem; }
 .reader-card { padding: 1.25rem; }
 .reader-card .card-heading { align-items: center; }
 .reader-card .state-pill { background: var(--blue-soft); color: var(--blue); }
 .reader-card pre { min-height: 10rem; max-height: 34rem; margin-top: 0; background: #fbfcfe; font: .9rem/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.document-content { min-height: 10rem; color: var(--ink); font-size: 1rem; line-height: 1.75; }
+.document-content h1, .document-content h2, .document-content h3 { margin: 1.25rem 0 .45rem; }
+.document-content h1:first-child, .document-content h2:first-child, .document-content h3:first-child { margin-top: 0; }
+.document-content p { margin: 0 0 .9rem; white-space: pre-wrap; }
+.document-content ul { margin: 0 0 .9rem 1.3rem; list-style: disc; }
+.document-content li { margin: .25rem 0; }
+.document-content pre { margin: .8rem 0 1rem; }
+.primary-column > #reader { order: 1; }
+.primary-column > #preview-card { order: 2; }
+.workspace.web-first .primary-column > #preview-card { order: 1; }
+.workspace.web-first .primary-column > #reader { order: 2; }
+.workspace.web-first #preview-card { min-height: 34rem; }
+.primary-column > #update { order: 3; }
+.advanced-field { margin-top: .5rem; border-top: 1px solid var(--line); padding-top: .7rem; }
+.advanced-field summary { cursor: pointer; color: var(--muted); font-size: .8rem; }
 .card-heading { display: flex; align-items: start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .card-heading h2 { margin-bottom: 0; }
 .state-pill, .capability { display: inline-flex; align-items: center; border-radius: 999px; padding: .27rem .55rem; background: var(--green-soft); color: var(--green); font-size: .7rem; font-weight: 800; white-space: nowrap; }
@@ -305,19 +323,19 @@ function clearAuthRecovery() {
   byId('auth-action').hidden = true;
 }
 function hideProtectedView() {
-  byId('workspace').hidden = true;
-  byId('welcome').hidden = true;
-  byId('title').textContent = 'Artifact';
+  byId('workspace')?.setAttribute('hidden', '');
+  byId('welcome')?.setAttribute('hidden', '');
+  if (byId('title')) byId('title').textContent = 'Artifact';
   byId('artifact-details')?.replaceChildren();
-  byId('chunks').replaceChildren();
-  byId('versions').replaceChildren();
+  byId('chunks')?.replaceChildren();
+  byId('versions')?.replaceChildren();
   byId('graph')?.replaceChildren();
   byId('people-with-access')?.replaceChildren();
-  byId('chunk-content').textContent = '';
-  byId('readable-content').textContent = '';
-  byId('results').replaceChildren();
-  byId('recent-artifacts').replaceChildren();
-  byId('preview').removeAttribute('src');
+  if (byId('chunk-content')) byId('chunk-content').textContent = '';
+  if (byId('readable-content')) byId('readable-content').replaceChildren();
+  byId('results')?.replaceChildren();
+  byId('recent-artifacts')?.replaceChildren();
+  byId('preview')?.removeAttribute('src');
 }
 function showAuthFailure() {
   const message = wasAuthenticated
@@ -409,11 +427,46 @@ function base64(bytes) {
   }
   return btoa(binary);
 }
+const webMediaTypes = new Set([
+  'text/html', 'application/xhtml+xml', 'text/css', 'application/javascript',
+  'text/javascript', 'application/x-javascript',
+]);
+function isWebArtifact(artifact, version) {
+  return webMediaTypes.has(version.media_type) || /\.(html?|css|m?js)$/i.test(artifact.name);
+}
+function renderMarkdown(markdown) {
+  const root = document.createElement('div'); root.className = 'document-content';
+  let listTarget = null; let codeTarget = null;
+  for (const line of String(markdown || '').split('\n')) {
+    if (line.trim().startsWith('```')) {
+      if (codeTarget) { root.append(codeTarget); codeTarget = null; }
+      else { codeTarget = document.createElement('pre'); codeTarget.append(document.createElement('code')); }
+      listTarget = null; continue;
+    }
+    if (codeTarget) { codeTarget.firstChild.textContent += `${line}\n`; continue; }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      const item = document.createElement(`h${heading[1].length}`); item.textContent = heading[2]; root.append(item);
+      listTarget = null; continue;
+    }
+    const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
+    if (bullet) {
+      listTarget ||= document.createElement('ul');
+      if (!listTarget.parentNode) root.append(listTarget);
+      const item = document.createElement('li'); item.textContent = bullet[1]; listTarget.append(item); continue;
+    }
+    listTarget = null;
+    if (!line.trim()) continue;
+    const paragraph = document.createElement('p'); paragraph.textContent = line; root.append(paragraph);
+  }
+  if (codeTarget) root.append(codeTarget);
+  return root;
+}
 function showRead(read) {
   const artifact = read.artifact; const version = read.version;
   byId('title').textContent = artifact.name;
   byId('artifact-path').textContent = artifact.name;
-  byId('artifact-media').textContent = version.media_type;
+  if (byId('artifact-media')) byId('artifact-media').textContent = version.media_type;
   const details = byId('artifact-details');
   if (details) {
     details.textContent = '';
@@ -429,18 +482,25 @@ function showRead(read) {
     });
   }
   const editable = Object.hasOwn(read, 'text');
-  byId('readable-content').textContent = editable
-    ? read.text ?? ''
-    : 'Binary content is available as metadata only.';
+  const readable = byId('readable-content');
+  readable.replaceChildren();
+  if (!editable) readable.textContent = 'This file opens in its safe preview.';
+  else if (version.media_type === 'text/markdown' || /\.md$/i.test(artifact.name)) readable.append(renderMarkdown(read.text));
+  else readable.textContent = read.text ?? '';
   byId('reader-kind').textContent = editable ? 'Text' : 'Binary';
-  byId('reader-note').textContent = editable
-    ? 'Current version'
-    : 'Binary content cannot be displayed as text.';
-  byId('content').value = read.text ?? '';
-  byId('content').disabled = !editable; byId('save').disabled = !editable;
-  byId('media-type').value = version.media_type;
-  byId('parent-version').value = version.id; byId('binary-note').hidden = editable;
-  list('chunks', read.chunks || [], (chunk) => {
+  byId('reader-note').textContent = editable ? 'Readable document' : 'Safe preview';
+  if (byId('content')) byId('content').value = read.text ?? '';
+  if (byId('save')) byId('save').disabled = !editable;
+  if (byId('media-type')) byId('media-type').value = version.media_type;
+  if (byId('parent-version')) byId('parent-version').value = version.id;
+  if (byId('human-content')) {
+    byId('human-content').value = read.text ?? '';
+    byId('human-content').disabled = !editable;
+  }
+  if (byId('human-parent-version')) byId('human-parent-version').value = version.id;
+  if (byId('human-save')) byId('human-save').disabled = !editable;
+  if (byId('binary-note')) byId('binary-note').hidden = editable;
+  if (byId('chunks')) list('chunks', read.chunks || [], (chunk) => {
     const li = document.createElement('li'); li.className = 'resource-item';
     li.append(button(`Chunk ${chunk.ordinal + 1}: ${chunk.start_offset}–${chunk.end_offset}`, async () => {
       try {
@@ -451,6 +511,9 @@ function showRead(read) {
       } catch (error) { handleFailure(error); }
     })); return li;
   }, 'No chunks.');
+  const web = isWebArtifact(artifact, version);
+  byId('workspace').classList.toggle('web-first', web);
+  if (byId('preview-title')) byId('preview-title').textContent = web ? 'Open this site' : 'Safe preview';
   const query = new URLSearchParams({version_id: version.id});
   byId('preview').src = `${renderOrigin}/render/${encodeURIComponent(artifact.id)}?${query}`;
 }
@@ -475,31 +538,30 @@ async function loadArtifact(versionId = null) {
   byId('welcome').hidden = true;
   status('Loading artifact…');
   const args = {artifact_id: artifactId}; if (versionId) args.version_id = versionId;
-  const graphRequest = debugMode
-    ? call('graph_traverse', {start_artifact_id: artifactId, max_depth: 2, limit: 100})
-    : Promise.resolve([]);
+  const graphRequest = call('graph_traverse', {start_artifact_id: artifactId, max_depth: 2, limit: 100});
   const [read, versions, graph] = await Promise.all([
     call('artifact_read', args),
-    call('artifact_versions', {artifact_id: artifactId, limit: 100}),
+    debugMode ? call('artifact_versions', {artifact_id: artifactId, limit: 100}) : Promise.resolve([]),
     graphRequest,
   ]);
   byId('workspace').hidden = false; showRead(read);
-  list('versions', versions, (version) => {
+  if (debugMode && byId('versions')) list('versions', versions, (version) => {
     const li = document.createElement('li'); li.className = 'history-item';
     const label = `${version.created_at} — ${version.reason}${version.id === read.version.id ? ' (shown)' : ''}`;
     li.append(button(label, () => loadArtifact(version.id).catch(handleFailure)));
     return li;
   }, 'No versions found.');
-  if (debugMode) {
+  if (byId('graph')) {
     list('graph', graph, (edge) => {
       const li = document.createElement('li'); li.className = 'graph-item';
       const edgeType = document.createElement('span'); edgeType.textContent = `${edge.edge_type} → `;
-      const targetLabel = edge.target_artifact_name
-        ? `${edge.target_artifact_id} — ${edge.target_artifact_name}` : edge.target_artifact_id;
+      const targetLabel = edge.target_artifact_name || 'Related artifact';
       li.append(edgeType, button(targetLabel, () => {
-        location.assign(`/inspect/${encodeURIComponent(edge.target_artifact_id)}`);
+        location.assign(artifactPath(edge.target_artifact_id));
       })); return li;
     }, 'No relationships.');
+  }
+  if (debugMode) {
     try {
       const grants = await call('artifact_acl', {artifact_id: artifactId});
       byId('sharing').hidden = false;
@@ -533,15 +595,17 @@ async function loadLibrary() {
   status('Loading recent artifacts…');
   try {
     const artifacts = await call('artifact_list', {limit: 20});
-    list('recent-artifacts', artifacts, (artifact) => {
+    const renderArtifact = (artifact) => {
       const li = document.createElement('li'); li.className = 'library-item';
       const open = button(artifact.name, () => {
         location.assign(artifactPath(artifact.id));
       });
       const meta = document.createElement('span'); meta.className = 'library-meta';
-      meta.textContent = `${artifact.media_type} · Updated ${artifact.updated_at}`;
+      meta.textContent = `Updated ${artifact.updated_at}`;
       li.append(open, meta); return li;
-    }, 'No artifacts yet. Create one to start your library.');
+    };
+    list('recent-artifacts', artifacts, renderArtifact, 'No artifacts yet. Create one to start your library.');
+    list('graph-artifacts', artifacts.filter((artifact) => artifact.graph_edges > 0), renderArtifact, 'No connected artifacts yet.');
     byId('library-count').textContent = `${artifacts.length} recent artifact${artifacts.length === 1 ? '' : 's'}`;
     status('Library ready.');
   } catch (error) { handleFailure(error); }
@@ -554,17 +618,20 @@ byId('open')?.addEventListener('submit', (event) => {
 byId('create-file').addEventListener('change', () => {
   const file = byId('create-file').files[0]; if (!file) return;
   if (!byId('create-name').value) byId('create-name').value = file.name;
-  if (file.type) byId('create-media').value = file.type;
 });
 byId('create').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
+    const name = byId('create-name').value.trim();
     status('Creating the first immutable version…');
     const file = byId('create-file').files[0];
-    const bytes = file ? new Uint8Array(await file.arrayBuffer()) : new TextEncoder().encode(byId('create-text').value);
+    const pasted = byId('create-text').value;
+    if (!file && !pasted.trim()) throw new Error('Add a file or paste some content first.');
+    const bytes = file ? new Uint8Array(await file.arrayBuffer()) : new TextEncoder().encode(pasted);
+    const mediaOverride = byId('create-media')?.value.trim();
     const created = await call('artifact_create', {
-      name: byId('create-name').value, media_type: byId('create-media').value || null,
-      reason: byId('create-reason').value, content_base64: base64(bytes),
+      name, media_type: mediaOverride || file?.type || null,
+      reason: byId('create-reason')?.value || 'library create', content_base64: base64(bytes),
       source_context: {interface: 'inspection-ui'},
     });
     location.assign(`${artifactPath(created.artifact.id)}?created=1`);
@@ -592,7 +659,7 @@ byId('search').addEventListener('submit', (event) => {
 byId('grep').addEventListener('submit', (event) => {
   event.preventDefault(); discover('artifact_grep', 'pattern', 'grep-pattern');
 });
-byId('edit').addEventListener('submit', async (event) => {
+byId('edit')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     status('Saving a new immutable version…');
@@ -601,6 +668,22 @@ byId('edit').addEventListener('submit', async (event) => {
       media_type: byId('media-type').value, reason: byId('reason').value,
       content_base64: base64(new TextEncoder().encode(byId('content').value)),
       source_context: {interface: 'inspection-ui'},
+    });
+    status(`Saved new version ${written.id}.`); await loadArtifact();
+  } catch (error) {
+    if (error.status === 409) failure('A newer version already exists. Refresh before saving again; your edit remains here.');
+    else handleFailure(error);
+  }
+});
+byId('human-edit')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    status('Saving a new version…');
+    const written = await call('artifact_write', {
+      artifact_id: artifactId, parent_version_id: byId('human-parent-version').value,
+      media_type: null, reason: 'library update',
+      content_base64: base64(new TextEncoder().encode(byId('human-content').value)),
+      source_context: {interface: 'library-ui'},
     });
     status(`Saved new version ${written.id}.`); await loadArtifact();
   } catch (error) {
@@ -663,6 +746,7 @@ def ui_html(
     organization: str | None = None,
     actor: str | None = None,
     debug: bool = False,
+    human: bool = False,
 ) -> str:
     origin = escape(render_origin, quote=True)
     state = escape(auth_state, quote=True)
@@ -726,6 +810,38 @@ def ui_html(
         if debug
         else ""
     )
+    human_graph = (
+        '<section id="graph-context" class="surface graph-card" aria-labelledby="graph-title">'
+        '<div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">Related artifacts</h2></div></div>'
+        '<p>Move through connected documents by name.</p><ul id="graph" class="graph-list"></ul></section>'
+        if human and not debug
+        else ""
+    )
+    debug_editor = (
+        '<section id="editor" class="surface editor-card" aria-labelledby="edit-title"><div class="card-heading"><div><p class="eyebrow">CURRENT VERSION</p><h2 id="edit-title">Content</h2></div></div><p id="binary-note" class="binary-note" hidden>Binary content is metadata-only and cannot be edited as text.</p><form id="edit"><input id="parent-version" type="hidden"><label for="content">Content</label><textarea id="content" spellcheck="false"></textarea><div class="row"><label for="media-type">Media type<input id="media-type" required maxlength="255"></label><label for="reason">Reason<input id="reason" value="inspection UI edit" required maxlength="2000"></label></div><p class="field-help">Saving creates a new version.</p><button id="save" type="submit">Save new version</button></form></section>'
+        '<section id="history" class="utility-grid" aria-label="Artifact history"><div class="surface utility-card"><p class="eyebrow">CONTENT</p><h2>Chunks</h2><ul id="chunks" class="resource-list"></ul><pre id="chunk-content">Choose a chunk.</pre></div><div class="surface utility-card"><p class="eyebrow">HISTORY</p><h2>Versions</h2><ul id="versions" class="resource-list"></ul></div></section>'
+        if debug
+        else ""
+    )
+    human_editor = (
+        '<details id="update" class="surface editor-card card-pad"><summary>Update document</summary>'
+        '<form id="human-edit" class="stacked-form"><input id="human-parent-version" type="hidden">'
+        '<label for="human-content">Content<textarea id="human-content" spellcheck="true"></textarea></label>'
+        '<button id="human-save" type="submit">Save new version</button></form></details>'
+        if human and not debug
+        else ""
+    )
+    debug_create_fields = (
+        '<details class="advanced-field"><summary>Advanced fields</summary><div class="stacked-form">'
+        '<label for="create-media">Media type<input id="create-media" maxlength="255" placeholder="Inferred from name"></label>'
+        '<label for="create-reason">Reason<input id="create-reason" value="inspection UI create" required maxlength="2000"></label>'
+        '</div></details>' if debug else ''
+    )
+    workspace_nav = (
+        '<a id="back-to-library" class="button-secondary" href="/">Back to library</a>'
+        '<a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#graph-context">Graph</a>'
+        + ('<a href="#editor">Edit</a><a href="#history">History</a>' + debug_workspace_nav if debug else '')
+    )
     preview_debug = (
         '<button id="fullscreen-preview" class="button-secondary" type="button">Open full screen</button>'
         if debug
@@ -747,7 +863,7 @@ def ui_html(
 <div class="app-shell">
 <header class="topbar">
   <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">F</span><div><div class="brand-name">Folio Lattice</div><div class="brand-subtitle">Knowledge workspace</div></div></div>
-  <nav class="primary-nav" aria-label="Primary"><a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a></nav>
+  <nav class="primary-nav" aria-label="Primary"><a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a><a href="#graphs"><span class="nav-index" aria-hidden="true">02</span>Graphs</a><a href="#find"><span class="nav-index" aria-hidden="true">03</span>Search</a><a href="#new"><span class="nav-index" aria-hidden="true">04</span>New</a></nav>
 </header>
 {account_surface}
 <main id="main" class="page" aria-busy="false">
@@ -759,11 +875,12 @@ def ui_html(
     <div class="welcome-grid">
       <section class="surface library-card" aria-labelledby="recent-title"><div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2 id="recent-title">Recent artifacts</h2></div><p id="library-count">Loading recent artifacts…</p></div><ul id="recent-artifacts" class="library-list"><li class="muted">Loading recent artifacts…</li></ul></section>
       <div class="library-actions">
-        <details class="surface create-card"><summary><span>New document or file</span></summary><form id="create" class="stacked-form">
-          <div class="row"><label for="create-name">Name<input id="create-name" required maxlength="255" placeholder="e.g. launch-notes.txt"></label><label for="create-media">Type<input id="create-media" maxlength="255" placeholder="text/plain"></label></div>
-          <label>File (optional)<input id="create-file" type="file"></label>
-          <label>Content<textarea id="create-text" placeholder="Start writing…"></textarea></label>
-          <label>Reason<input id="create-reason" value="inspection UI create" required maxlength="2000"></label><button type="submit">Create first version</button>
+        <section id="graphs" class="surface graph-library" aria-labelledby="graphs-title"><div class="section-heading"><div><p class="eyebrow">GRAPHS</p><h2 id="graphs-title">Connected artifacts</h2></div><p>Follow named links.</p></div><ul id="graph-artifacts" class="library-list"><li class="muted">Loading graphs…</li></ul></section>
+        <details id="new" class="surface create-card"><summary><span>New artifact</span></summary><form id="create" class="stacked-form">
+          <label for="create-name">Name<input id="create-name" required maxlength="255" placeholder="e.g. launch-notes.md"></label>
+          <label for="create-file">Upload a file<input id="create-file" type="file"></label>
+          <label for="create-text">Or paste content<textarea id="create-text" placeholder="Start writing…"></textarea></label>
+          {debug_create_fields}<button type="submit">Create artifact</button>
         </form></details>
         <details id="find" class="surface create-card"><summary><span>Search library</span></summary><div class="stacked-form"><div class="search-grid">
           <form id="search" class="search-form"><label for="search-query">Search documents and files<input id="search-query" required maxlength="500" placeholder="Phrase or keyword"></label><button type="submit">Search</button></form>
@@ -774,16 +891,17 @@ def ui_html(
     </div>
   </section>
   <article id="workspace" class="workspace" hidden>
-    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1><div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div></div></div></div><nav class="workspace-nav" aria-label="Artifact sections"><a id="back-to-library" class="button-secondary" href="/">Back to library</a><a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#editor">Edit</a><a href="#history">History</a>{debug_workspace_nav}</nav></header>
+    <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1>{'<div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div>' if debug else ''}</div></div></div><nav class="workspace-nav" aria-label="Artifact sections">{workspace_nav}</nav></header>
     <div class="workspace-layout"><div class="primary-column">
-      <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Content</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Current version</p><pre id="readable-content">Loading content…</pre></section>
+      <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Readable document</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Loading readable content…</p><div id="readable-content" class="document-content">Loading content…</div></section>
       <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div>{preview_debug}</div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>
-      <section id="editor" class="surface editor-card" aria-labelledby="edit-title"><div class="card-heading"><div><p class="eyebrow">CURRENT VERSION</p><h2 id="edit-title">Content</h2></div></div><p id="binary-note" class="binary-note" hidden>Binary content is metadata-only and cannot be edited as text.</p><form id="edit"><input id="parent-version" type="hidden"><label for="content">Content</label><textarea id="content" spellcheck="false"></textarea><div class="row"><label>Media type<input id="media-type" required maxlength="255"></label><label>Reason<input id="reason" value="inspection UI edit" required maxlength="2000"></label></div><p class="field-help">Saving creates a new version.</p><button id="save" type="submit">Save new version</button></form></section>
-      <section id="history" class="utility-grid" aria-label="Artifact history"><div class="surface utility-card"><p class="eyebrow">CONTENT</p><h2>Chunks</h2><ul id="chunks" class="resource-list"></ul><pre id="chunk-content">Choose a chunk.</pre></div><div class="surface utility-card"><p class="eyebrow">HISTORY</p><h2>Versions</h2><ul id="versions" class="resource-list"></ul></div></section>
+      {debug_editor}
+      {human_editor}
       {debug_details}
     </div><aside class="secondary-column">
       {debug_access}
       {debug_graph}
+      {human_graph}
     </aside></div>
   </article>
 </main></div><script src="/ui.js"></script></body></html>"""
@@ -879,6 +997,7 @@ class InspectionApp:
                     ),
                     actor=principal.actor_id if principal is not None else self.actor,
                     debug=path.startswith("/inspect/"),
+                    human=path.startswith("/artifacts/"),
                 ),
                 headers=headers,
             )(scope, receive, send)
