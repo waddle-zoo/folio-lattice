@@ -641,7 +641,12 @@ class BrowserSandboxE2ETests(unittest.TestCase):
             chrome: DevTools | None = None
             try:
                 wait_ready(control_origin, control)
-                target = create(control_origin, "decision.txt", b"browser target", "text/plain")
+                target = create(
+                    control_origin,
+                    "decision.md",
+                    b"# Decision\n\n- browser target",
+                    "text/markdown",
+                )
                 javascript = create(
                     control_origin,
                     "browser.js",
@@ -739,69 +744,54 @@ document.querySelector('#create').requestSubmit();
 """)
                 chrome.wait("location.pathname.startsWith('/artifacts/art_')")
                 artifact_id = chrome.evaluate("decodeURIComponent(location.pathname.split('/')[2])")
-                chrome.wait("document.querySelector('#title')?.textContent === 'browser-note.html'")
+                chrome.wait(
+                    "document.querySelector('#human-title')?.textContent === 'browser-note.html' || !document.querySelector('#error').hidden"
+                )
                 self.assertTrue(
-                    chrome.evaluate(
-                        "document.querySelector('#workspace')?.classList.contains('workspace')"
+                    chrome.evaluate("document.querySelector('#error').hidden"),
+                    chrome.evaluate("document.querySelector('#error').textContent"),
+                )
+                chrome.wait("document.querySelector('#human-preview')?.src.includes('/render/')")
+                for selector in (
+                    "#workspace",
+                    "#reader",
+                    "#preview-card",
+                    "#artifact-details",
+                    "#sharing",
+                    "#graph-context",
+                    "#human-edit",
+                    "#bridge-status",
+                    "#fullscreen-preview",
+                ):
+                    self.assertFalse(
+                        chrome.evaluate(f"Boolean(document.querySelector({selector!r}))")
                     )
-                )
-                self.assertFalse(
-                    chrome.evaluate("Boolean(document.querySelector('#artifact-details'))")
-                )
-                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#sharing'))"))
-                self.assertTrue(
-                    chrome.evaluate("Boolean(document.querySelector('#graph-context'))")
-                )
-                self.assertTrue(chrome.evaluate("Boolean(document.querySelector('#human-edit'))"))
-                self.assertFalse(
-                    chrome.evaluate("Boolean(document.querySelector('#bridge-status'))")
-                )
-                self.assertFalse(
-                    chrome.evaluate("Boolean(document.querySelector('#fullscreen-preview'))")
-                )
-                self.assertTrue(
-                    chrome.evaluate(
-                        "Boolean(document.querySelector('#reader').compareDocumentPosition(document.querySelector('#preview-card')) & Node.DOCUMENT_POSITION_FOLLOWING)"
-                    )
-                )
-                self.assertEqual(
-                    chrome.evaluate(
-                        "getComputedStyle(document.querySelector('#preview-card')).order"
-                    ),
-                    "1",
-                )
-                self.assertEqual(
-                    chrome.evaluate("getComputedStyle(document.querySelector('#reader')).order"),
-                    "2",
-                )
                 self.assertIn(
                     "Version 1 saved",
                     chrome.evaluate("document.querySelector('#status').textContent"),
                 )
-                first_version = chrome.evaluate(
-                    "document.querySelector('#human-parent-version').value"
-                )
-                chrome.evaluate(
-                    "document.querySelector('#update').open = true; document.querySelector('#human-content').value += '\\nhuman update'; document.querySelector('#human-edit').requestSubmit()"
-                )
-                chrome.wait(
-                    f"document.querySelector('#human-parent-version').value !== {json.dumps(first_version)}"
-                )
-                self.assertNotEqual(
-                    first_version,
-                    chrome.evaluate("document.querySelector('#human-parent-version').value"),
-                )
                 self.assertEqual(
-                    chrome.evaluate("document.querySelector('#status').textContent"),
-                    "Saved a new version.",
-                )
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#preview').getAttribute('sandbox')"),
+                    chrome.evaluate(
+                        "document.querySelector('#human-preview').getAttribute('sandbox')"
+                    ),
                     "allow-scripts",
+                )
+                self.assertGreaterEqual(
+                    chrome.evaluate("document.querySelector('#human-preview').clientHeight"),
+                    chrome.evaluate(
+                        "window.innerHeight - document.querySelector('.topbar').offsetHeight - 2"
+                    ),
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#back-to-library').getAttribute('href')"
+                    ),
+                    "/",
                 )
                 chrome.command("Page.navigate", {"url": f"{control_origin}/inspect/{artifact_id}"})
                 chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
-                chrome.wait("document.querySelectorAll('#versions li').length === 2")
+                chrome.wait("document.querySelectorAll('#versions li').length === 1")
+                first_version = chrome.evaluate("document.querySelector('#parent-version').value")
                 self.assertTrue(
                     chrome.evaluate("Boolean(document.querySelector('#graph-context'))")
                 )
@@ -878,9 +868,6 @@ loadArtifact();
                     "window.fetch = window.__folioAclFetch; document.querySelector('#bridge-status').textContent = 'Waiting for attached request.'; loadArtifact()"
                 )
                 chrome.wait("!document.querySelector('#sharing').hidden")
-                chrome.wait(
-                    "document.querySelector('#bridge-status').textContent.includes('requested')"
-                )
                 chrome.wait(
                     "document.querySelector('#bridge-status').textContent.includes('did not run')"
                 )
@@ -988,13 +975,13 @@ document.querySelector('#search').requestSubmit();
                 )
                 chrome.wait("document.querySelector('#graph').textContent.includes('supports')")
                 self.assertIn(
-                    "decision.txt",
+                    "decision.md",
                     chrome.evaluate("document.querySelector('#graph button')?.textContent"),
                 )
                 chrome.evaluate(
                     "document.querySelector('#content').value += '\\nupdated'; document.querySelector('#reason').value='Morgan edit'; document.querySelector('#edit').requestSubmit()"
                 )
-                chrome.wait("document.querySelectorAll('#versions li').length === 3")
+                chrome.wait("document.querySelectorAll('#versions li').length === 2")
                 second_version = chrome.evaluate("document.querySelector('#parent-version').value")
                 self.assertNotEqual(first_version, second_version)
                 chrome.evaluate("document.querySelector('#versions button').click()")
@@ -1040,21 +1027,38 @@ document.querySelector('#search').requestSubmit();
                 )
                 chrome.key("Enter", "Enter", 13)
                 chrome.wait("location.pathname.startsWith('/artifacts/art_')")
-                chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
-                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#sharing'))"))
-                self.assertFalse(
-                    chrome.evaluate("Boolean(document.querySelector('#bridge-status'))")
-                )
-                chrome.wait("document.querySelector('#graph').textContent.includes('supports')")
-                self.assertIn(
-                    "decision.txt",
-                    chrome.evaluate("document.querySelector('#graph button')?.textContent"),
-                )
-                chrome.evaluate("document.querySelector('#graph button').click()")
                 chrome.wait(
-                    "location.pathname.startsWith('/artifacts/art_') && document.querySelector('#title').textContent === 'decision.txt'"
+                    "document.querySelector('#human-title').textContent === 'browser-note.html'"
                 )
-                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('#sharing'))"))
+                self.assertTrue(
+                    chrome.evaluate("Boolean(document.querySelector('#human-preview'))")
+                )
+                for selector in ("#workspace", "#sharing", "#bridge-status", "#graph"):
+                    self.assertFalse(
+                        chrome.evaluate(f"Boolean(document.querySelector({selector!r}))")
+                    )
+                chrome.evaluate("document.querySelector('#back-to-library').click()")
+                chrome.wait(
+                    "location.pathname === '/' && document.querySelector('#status').textContent === 'Library ready.'"
+                )
+                chrome.command(
+                    "Page.navigate",
+                    {"url": f"{control_origin}/artifacts/{target['artifact']['id']}"},
+                )
+                chrome.wait("document.querySelector('#human-title').textContent === 'decision.md'")
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#human-document-body h1').textContent"
+                    ),
+                    "Decision",
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#human-document-body li').textContent"
+                    ),
+                    "browser target",
+                )
+                self.assertFalse(chrome.evaluate("!document.querySelector('#human-site').hidden"))
                 chrome.command("Page.navigate", {"url": f"{control_origin}/inspect/{artifact_id}"})
                 chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
                 chrome.wait(
@@ -1062,7 +1066,7 @@ document.querySelector('#search').requestSubmit();
                 )
                 chrome.wait("document.querySelector('#graph').textContent.includes('supports')")
                 chrome.evaluate("document.querySelector('#graph button').click()")
-                chrome.wait("document.querySelector('#title').textContent === 'decision.txt'")
+                chrome.wait("document.querySelector('#title').textContent === 'decision.md'")
                 chrome.command("Page.navigate", {"url": f"{control_origin}/inspect/{artifact_id}"})
                 chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
 

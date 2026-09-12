@@ -247,6 +247,24 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 #bridge-status { min-height: 2.3rem; margin: .7rem 0; border-radius: 7px; padding: .55rem .65rem; background: #f0f3f8; color: #526176; font-size: .76rem; }
 .preview-frame { overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; background: white; }
 iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: white; }
+.human-route { overflow: hidden; }
+.human-route .app-shell { min-height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.human-route .topbar { height: 3.6rem; min-height: 3.6rem; flex-wrap: nowrap; padding-block: .65rem; }
+.human-route .page { width: 100%; max-width: none; height: calc(100vh - 3.6rem); min-height: 0; padding: 0; }
+.human-route #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.human-route .error, .human-route .auth-recovery { margin: 1rem; }
+.human-viewer { height: 100%; min-height: 0; }
+.human-viewer-site, .human-viewer-site iframe { width: 100%; height: 100%; min-height: 0; }
+.human-viewer-site iframe { display: block; border: 0; background: white; }
+.human-document { height: 100%; overflow: auto; background: var(--surface); }
+.human-document-body { width: min(48rem, calc(100% - 2rem)); margin: 0 auto; padding: clamp(2rem, 7vw, 5.5rem) 0 6rem; color: var(--ink); font-size: 1.05rem; line-height: 1.75; }
+.human-document-body > :first-child { margin-top: 0; }
+.human-document-body h1 { font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.08; letter-spacing: -.04em; }
+.human-document-body h2 { margin-top: 2.4rem; font-size: 1.55rem; }
+.human-document-body pre { overflow: auto; padding: 1rem; border-radius: 8px; background: var(--canvas); }
+.human-document-body.plain-text { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.human-viewer-title { min-width: 0; margin: 0 auto 0 0; overflow: hidden; color: var(--muted); font-size: .9rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.library-action { color: var(--blue); font-size: .76rem; font-weight: 800; }
 [hidden] { display: none !important; }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -325,6 +343,7 @@ function clearAuthRecovery() {
 function hideProtectedView() {
   byId('workspace')?.setAttribute('hidden', '');
   byId('welcome')?.setAttribute('hidden', '');
+  byId('human-viewer')?.setAttribute('hidden', '');
   if (byId('title')) byId('title').textContent = 'Artifact';
   byId('artifact-details')?.replaceChildren();
   byId('chunks')?.replaceChildren();
@@ -336,6 +355,7 @@ function hideProtectedView() {
   byId('results')?.replaceChildren();
   byId('recent-artifacts')?.replaceChildren();
   byId('preview')?.removeAttribute('src');
+  byId('human-preview')?.removeAttribute('src');
 }
 function showAuthFailure() {
   const message = wasAuthenticated
@@ -517,6 +537,31 @@ function showRead(read) {
   const query = new URLSearchParams({version_id: version.id});
   byId('preview').src = `${renderOrigin}/render/${encodeURIComponent(artifact.id)}?${query}`;
 }
+function showHumanRead(read) {
+  const artifact = read.artifact; const version = read.version;
+  const web = isWebArtifact(artifact, version);
+  byId('human-title').textContent = artifact.name;
+  document.title = `${artifact.name} — Folio Lattice`;
+  byId('human-viewer').hidden = false;
+  byId('human-site').hidden = !web;
+  byId('human-document').hidden = web;
+  if (web) {
+    const query = new URLSearchParams({version_id: version.id});
+    byId('human-preview').title = artifact.name;
+    byId('human-preview').src = `${renderOrigin}/render/${encodeURIComponent(artifact.id)}?${query}`;
+    return;
+  }
+  const documentBody = byId('human-document-body');
+  documentBody.replaceChildren();
+  const markdown = version.media_type === 'text/markdown' || /\.md$/i.test(artifact.name);
+  documentBody.classList.toggle('plain-text', !markdown);
+  if (!Object.hasOwn(read, 'text')) {
+    const message = document.createElement('p');
+    message.textContent = 'This file type can be examined in the Inspector.';
+    documentBody.append(message);
+  } else if (markdown) documentBody.append(renderMarkdown(read.text));
+  else documentBody.textContent = read.text ?? '';
+}
 async function togglePreviewFullscreen() {
   const panel = byId('preview-card');
   try {
@@ -535,9 +580,17 @@ async function loadArtifact(versionId = null) {
   if (!artifactId) {
     await loadLibrary(); return;
   }
-  byId('welcome').hidden = true;
+  byId('welcome')?.setAttribute('hidden', '');
   status('Loading artifact…');
   const args = {artifact_id: artifactId}; if (versionId) args.version_id = versionId;
+  if (humanArtifactMode) {
+    const read = await call('artifact_read', args);
+    showHumanRead(read);
+    status(new URLSearchParams(location.search).has('created')
+      ? `Created ${read.artifact.name}. Version 1 saved.`
+      : `Opened ${read.artifact.name}.`);
+    return;
+  }
   const graphRequest = call('graph_traverse', {start_artifact_id: artifactId, max_depth: 2, limit: 100});
   const [read, versions, graph] = await Promise.all([
     call('artifact_read', args),
@@ -600,9 +653,14 @@ async function loadLibrary() {
       const open = button(artifact.name, () => {
         location.assign(artifactPath(artifact.id));
       });
+      if (isWebArtifact(artifact, {media_type: artifact.media_type})) {
+        open.setAttribute('aria-label', `Open site ${artifact.name}`);
+        const action = document.createElement('span'); action.className = 'library-action';
+        action.textContent = 'Open site'; li.append(open, action);
+      } else li.append(open);
       const meta = document.createElement('span'); meta.className = 'library-meta';
       meta.textContent = `Updated ${artifact.updated_at}`;
-      li.append(open, meta); return li;
+      li.append(meta); return li;
     };
     list('recent-artifacts', artifacts, renderArtifact, 'No artifacts yet. Create one to start your library.');
     list('graph-artifacts', artifacts.filter((artifact) => artifact.graph_edges > 0), renderArtifact, 'No connected artifacts yet.');
@@ -615,11 +673,11 @@ byId('open')?.addEventListener('submit', (event) => {
   event.preventDefault(); const id = byId('artifact-id').value.trim();
   if (id) location.assign(`/inspect/${encodeURIComponent(id)}`);
 });
-byId('create-file').addEventListener('change', () => {
+byId('create-file')?.addEventListener('change', () => {
   const file = byId('create-file').files[0]; if (!file) return;
   if (!byId('create-name').value) byId('create-name').value = file.name;
 });
-byId('create').addEventListener('submit', async (event) => {
+byId('create')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     const name = byId('create-name').value.trim();
@@ -653,10 +711,10 @@ async function discover(tool, field, inputId) {
     }, 'No results.'); status(`${results.length} result${results.length === 1 ? '' : 's'}.`);
   } catch (error) { handleFailure(error); }
 }
-byId('search').addEventListener('submit', (event) => {
+byId('search')?.addEventListener('submit', (event) => {
   event.preventDefault(); discover('artifact_search', 'query', 'search-query');
 });
-byId('grep').addEventListener('submit', (event) => {
+byId('grep')?.addEventListener('submit', (event) => {
   event.preventDefault(); discover('artifact_grep', 'pattern', 'grep-pattern');
 });
 byId('edit')?.addEventListener('submit', async (event) => {
@@ -714,7 +772,7 @@ byId('share')?.addEventListener('submit', async (event) => {
   } catch (error) { handleFailure(error); }
 });
 addEventListener('message', async (event) => {
-  const frame = byId('preview');
+  const frame = byId('human-preview') || byId('preview');
   if (event.origin !== 'null' || event.source !== frame.contentWindow) return;
   const value = event.data;
   if (!value || typeof value !== 'object' || value.type !== 'folio.mcp.request' ||
@@ -752,6 +810,22 @@ def ui_html(
 ) -> str:
     origin = escape(render_origin, quote=True)
     state = escape(auth_state, quote=True)
+    if human and not debug:
+        return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Artifact — Folio Lattice</title><link rel="stylesheet" href="/ui.css"></head>
+<body class="human-route" data-render-origin="{origin}" data-auth-state="{state}">
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="app-shell">
+<header class="topbar"><a id="back-to-library" class="button-secondary" href="/">← Library</a><h1 id="human-title" class="human-viewer-title">Opening artifact…</h1></header>
+<main id="main" class="page" aria-busy="false">
+  <div class="live-region"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
+  <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
+  <article id="human-viewer" class="human-viewer" hidden>
+    <section id="human-site" class="human-viewer-site" aria-label="Website" hidden><iframe id="human-preview" title="Artifact site" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></section>
+    <article id="human-document" class="human-document" aria-label="Document" hidden><div id="human-document-body" class="human-document-body"></div></article>
+  </article>
+</main></div><script src="/ui.js"></script></body></html>"""
     organization_value = escape(organization or "Unavailable", quote=True)
     actor_value = escape(actor or "Unavailable", quote=True)
     auth_context_hidden = " hidden" if not organization and not actor else ""

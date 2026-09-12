@@ -188,7 +188,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
     async def test_static_ui_is_bounded_accessible_and_strictly_sandboxed(self) -> None:
         for path, expected in (
             ("/", b"Recent artifacts"),
-            (f"/artifacts/{self.html['artifact']['id']}", b"Back to library"),
+            (f"/artifacts/{self.html['artifact']['id']}", b'id="back-to-library"'),
             (f"/inspect/{self.html['artifact']['id']}", b'sandbox="allow-scripts"'),
             ("/ui.css", b"focus-visible"),
             ("/ui.js", b"event.origin !== 'null' || event.source !== frame.contentWindow"),
@@ -290,16 +290,30 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         human_page = (
             await call(self.inspection, "GET", f"/artifacts/{self.html['artifact']['id']}")
         )[2]
-        self.assertNotIn(b'id="artifact-id"', human_page)
-        self.assertNotIn(b"People with access", human_page)
-        self.assertIn(b"Readable document", human_page)
-        self.assertIn(b"Update document", human_page)
-        self.assertIn(b'id="graph-context"', human_page)
-        self.assertIn(b'id="human-edit"', human_page)
-        self.assertNotIn(b'id="content"', human_page)
-        self.assertNotIn(b'id="chunks"', human_page)
-        self.assertNotIn(b'id="versions"', human_page)
-        self.assertIn(b'iframe id="preview"', human_page)
+        for marker in (
+            b'id="back-to-library"',
+            b'id="human-title"',
+            b'id="human-viewer"',
+            b'id="human-document"',
+            b'id="human-preview"',
+        ):
+            self.assertIn(marker, human_page)
+        for forbidden in (
+            b'id="workspace"',
+            b'id="artifact-id"',
+            b"People with access",
+            b"Readable document",
+            b"Artifact preview",
+            b"Update document",
+            b'id="graph-context"',
+            b'id="human-edit"',
+            b'id="content"',
+            b'id="chunks"',
+            b'id="versions"',
+            b'id="bridge-status"',
+            b'id="fullscreen-preview"',
+        ):
+            self.assertNotIn(forbidden, human_page)
         self.assertIn(b'sandbox="allow-scripts"', human_page)
 
         status, _, script = await call(self.inspection, "GET", "/ui.js")
