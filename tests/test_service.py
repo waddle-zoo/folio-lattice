@@ -177,6 +177,31 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.service.search("acme", "   "), [])
         self.assertEqual(self.service.read_artifact("acme", artifact_id)["text"], "")
 
+    def test_acl_defaults_private_and_revoke_is_durable(self):
+        created = self.service.create_artifact(
+            tenant_id="acme", name="private.txt", data=b"private marker", actor="owner"
+        )
+        artifact_id = created["artifact"]["id"]
+
+        with self.assertRaisesRegex(FolioError, "artifact not found"):
+            self.service.read_artifact("acme", artifact_id, actor="member")
+        self.assertEqual(self.service.search("acme", "private", actor="member"), [])
+        self.assertEqual(self.service.grep("acme", "marker", actor="member"), [])
+
+        grant = self.service.share_artifact(
+            "acme", artifact_id, actor="owner", subject_actor_id="member", reason="review"
+        )
+        self.assertEqual(
+            self.service.read_artifact("acme", artifact_id, actor="member")["text"],
+            "private marker",
+        )
+        revoked = self.service.revoke_share(
+            "acme", artifact_id, actor="owner", grant_id=grant["id"], reason="done"
+        )
+        self.assertEqual(revoked["status"], "revoked")
+        with self.assertRaisesRegex(FolioError, "artifact not found"):
+            self.service.read_artifact("acme", artifact_id, actor="member")
+
 
 if __name__ == "__main__":
     unittest.main()

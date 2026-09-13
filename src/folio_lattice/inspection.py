@@ -527,10 +527,10 @@ function showRead(read) {
         status('Reading chunk…');
         const value = await call('artifact_read_chunk', {chunk_id: chunk.id});
         byId('chunk-content').textContent = value.content;
-        status(`Read chunk ${chunk.ordinal + 1}.`);
+        status(`Read chunk ${chunk.ordinal + 1}; offsets are Unicode code points.`);
       } catch (error) { handleFailure(error); }
     })); return li;
-  }, 'No chunks.');
+  }, 'No text chunks for this version.');
   const web = isWebArtifact(artifact, version);
   byId('workspace').classList.toggle('web-first', web);
   if (byId('preview-title')) byId('preview-title').textContent = web ? 'Open this site' : 'Safe preview';
@@ -758,7 +758,7 @@ byId('link')?.addEventListener('submit', async (event) => {
     await call('graph_link', {source_artifact_id: artifactId,
       target_artifact_id: byId('target-id').value, edge_type: byId('edge-type').value,
       metadata: {}});
-    await loadArtifact(); status('Relationship created.');
+    await loadArtifact(); status('Relationship created. Traversal follows outgoing edges only.');
   } catch (error) { handleFailure(error); }
 });
 byId('share')?.addEventListener('submit', async (event) => {
