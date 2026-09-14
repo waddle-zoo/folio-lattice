@@ -136,6 +136,10 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .library-meta { color: var(--muted); font-size: .76rem; text-align: right; }
 .graph-library { padding: 1.25rem 1.3rem; }
 .graph-library .library-list { margin-top: .75rem; }
+.graph-picker-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
+.graph-picker-card { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: .8rem; background: #fbfcff; }
+.graph-picker-card .inline-action { display: block; width: 100%; font-size: .95rem; font-weight: 800; overflow-wrap: anywhere; }
+.graph-picker-card .library-meta { display: block; margin-top: .35rem; text-align: left; }
 .library-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
 .library-actions > details { min-width: 0; }
 .create-card { padding: 1.25rem 1.3rem 1.35rem; }
@@ -183,6 +187,29 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .workspace-nav a { color: var(--muted); font-size: .78rem; font-weight: 700; text-decoration: none; }
 .workspace-nav a:hover { color: var(--blue); }
 .workspace-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(19rem, .85fr); gap: 1rem; align-items: start; }
+.workspace.has-tree { margin-top: 0; }
+.workspace.has-tree .workspace-layout { grid-template-columns: minmax(13rem, .32fr) minmax(0, 1fr); }
+.workspace.has-tree .primary-column, .workspace.has-tree .secondary-column { grid-column: 2; }
+.workspace.has-tree .primary-column > .surface, .workspace.has-tree .secondary-column > .surface { border: 0; border-radius: 0; box-shadow: none; }
+.tree-panel { min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 1rem; background: var(--surface); box-shadow: var(--shadow); }
+.tree-heading { border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
+.tree-heading h2 { margin-bottom: .2rem; font-size: .95rem; }
+.tree-breadcrumb { overflow-wrap: anywhere; margin: 0; color: var(--muted); font-size: .72rem; }
+.artifact-tree { margin-top: .75rem; }
+.artifact-tree ul { margin: 0; padding-left: .9rem; list-style: none; }
+.artifact-tree > ul { padding-left: 0; }
+.artifact-tree li { margin: .15rem 0; }
+.artifact-tree details > summary { cursor: pointer; padding: .25rem 0; color: #46556b; font-size: .8rem; font-weight: 700; }
+.artifact-tree details > summary::marker { color: var(--blue); }
+.tree-file { width: 100%; padding: .3rem .25rem; overflow-wrap: anywhere; font-size: .8rem; }
+.tree-file[aria-current="page"] { border-radius: 5px; background: var(--blue-soft); color: var(--blue-dark); }
+.view-switch { display: inline-flex; gap: .15rem; border: 1px solid var(--line-strong); border-radius: 8px; padding: .15rem; background: var(--surface); }
+.view-switch button { border: 0; border-radius: 6px; padding: .45rem .7rem; background: transparent; color: var(--muted); font-size: .78rem; font-weight: 800; }
+.view-switch button.is-active { background: var(--blue-soft); color: var(--blue-dark); }
+.workspace-actions { display: flex; gap: .5rem; margin-left: auto; }
+.workspace-actions a { border: 1px solid var(--line-strong); border-radius: 7px; padding: .52rem .7rem; color: #39485d; font-size: .78rem; font-weight: 700; text-decoration: none; }
+.workspace-actions a:hover { border-color: #a9b7c7; background: #f8fafc; }
+.workspace.has-tree.graph-mode .tree-panel { position: sticky; top: 1rem; }
 .primary-column { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 .secondary-column { display: grid; gap: 1rem; min-width: 0; }
 .card-pad { padding: 1.25rem; }
@@ -233,6 +260,13 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .graph-item { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
 .graph-item::before { content: "↳"; color: var(--blue); font-weight: 800; }
 .graph-item .inline-action { overflow-wrap: anywhere; }
+.graph-map { display: grid; gap: 1rem; margin: .9rem 0 1rem; border: 1px solid var(--line); border-radius: 10px; padding: 1rem; background: #fbfcff; }
+.graph-source { justify-self: center; border-color: var(--blue); background: var(--blue-soft); color: var(--blue-dark); }
+.graph-links { display: grid; gap: .65rem; }
+.graph-link { display: grid; grid-template-columns: minmax(5rem, .35fr) minmax(0, 1fr); align-items: center; gap: .6rem; }
+.graph-edge-label { color: var(--muted); font-size: .72rem; font-weight: 800; text-align: right; }
+.graph-node { border: 1px solid var(--line-strong); border-radius: 8px; padding: .55rem .7rem; background: var(--surface); color: var(--blue); font-size: .8rem; font-weight: 800; text-align: left; overflow-wrap: anywhere; }
+.graph-target:hover { border-color: var(--blue); background: var(--blue-soft); }
 .link-form { display: grid; gap: .75rem; border-top: 1px solid var(--line); padding-top: 1rem; }
 .preview-card { background: #fbfcff; }
 .preview-card .card-heading { align-items: center; }
@@ -251,6 +285,7 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
 .human-route .app-shell { min-height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .human-route .topbar { height: 3.6rem; min-height: 3.6rem; flex-wrap: nowrap; padding-block: .65rem; }
 .human-route .page { width: 100%; max-width: none; height: calc(100vh - 3.6rem); min-height: 0; padding: 0; }
+.standalone-route .page { height: 100vh; }
 .human-route #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .human-route .error, .human-route .auth-recovery { margin: 1rem; }
 .human-viewer { height: 100%; min-height: 0; }
@@ -295,6 +330,8 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
   .topbar-open { order: 3; width: 100%; }
   .workspace-heading { align-items: start; flex-direction: column; }
   .workspace-layout { grid-template-columns: 1fr; }
+  .workspace.has-tree .workspace-layout { grid-template-columns: 1fr; }
+  .workspace.has-tree .primary-column, .workspace.has-tree .secondary-column { grid-column: auto; }
   .library-actions { grid-template-columns: 1fr; }
   .secondary-column { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 }
@@ -319,19 +356,29 @@ UI_JS = r"""
 const byId = (id) => document.getElementById(id);
 const parts = location.pathname.split('/').filter(Boolean);
 const debugMode = parts[0] === 'inspect';
-const humanArtifactMode = parts[0] === 'artifacts';
+const workspaceMode = parts[0] === 'workspace';
+const standaloneMode = parts[0] === 'standalone';
+const humanArtifactMode = parts[0] === 'artifacts' || standaloneMode || workspaceMode;
 const artifactId = debugMode || humanArtifactMode ? decodeURIComponent(parts[1] || '') : '';
 const renderOrigin = document.body.dataset.renderOrigin;
 let wasAuthenticated = document.body.dataset.authState === 'authenticated';
 let activeRequests = 0;
+let workspaceWeb = false;
 
 function artifactPath(id) {
-  return `/${debugMode ? 'inspect' : 'artifacts'}/${encodeURIComponent(id)}`;
+  const prefix = debugMode ? 'inspect' : workspaceMode ? 'workspace' : 'artifacts';
+  return `/${prefix}/${encodeURIComponent(id)}`;
+}
+function workspacePath(id) {
+  return `/${debugMode ? 'inspect' : 'workspace'}/${encodeURIComponent(id)}`;
+}
+function standalonePath(id) {
+  return `/standalone/${encodeURIComponent(id)}`;
 }
 
 function safeReturnPath() {
   const path = location.pathname;
-  return path === '/' || /^\/(?:inspect|artifacts)\/[^/]+$/.test(path) ? path : '/';
+  return path === '/' || /^\/(?:inspect|artifacts|standalone|workspace)\/[^/]+$/.test(path) ? path : '/';
 }
 function authLink(path = safeReturnPath()) {
   return `/sign-in?return_to=${encodeURIComponent(path)}`;
@@ -354,6 +401,7 @@ function hideProtectedView() {
   if (byId('readable-content')) byId('readable-content').replaceChildren();
   byId('results')?.replaceChildren();
   byId('recent-artifacts')?.replaceChildren();
+  byId('artifact-tree')?.replaceChildren();
   byId('preview')?.removeAttribute('src');
   byId('human-preview')?.removeAttribute('src');
 }
@@ -428,7 +476,8 @@ async function call(tool, args, endpoint = '/api/mcp') {
   } finally { busy(false); }
 }
 function list(id, items, render, empty) {
-  const target = byId(id); target.replaceChildren();
+  const target = byId(id); if (!target) return;
+  target.replaceChildren();
   if (!items.length) {
     const item = document.createElement('li'); item.className = 'muted';
     item.textContent = empty; target.append(item); return;
@@ -439,6 +488,87 @@ function button(label, action) {
   const value = document.createElement('button'); value.type = 'button';
   value.className = 'inline-action';
   value.textContent = label; value.addEventListener('click', action); return value;
+}
+function setWorkspaceMode(mode, persist = true) {
+  const graph = mode === 'graph';
+  byId('read-mode')?.classList.toggle('is-active', !graph);
+  byId('graph-mode')?.classList.toggle('is-active', graph);
+  byId('read-mode')?.setAttribute('aria-selected', String(!graph));
+  byId('graph-mode')?.setAttribute('aria-selected', String(graph));
+  byId('reader')?.toggleAttribute('hidden', graph || workspaceWeb);
+  byId('preview-card')?.toggleAttribute('hidden', graph || !workspaceWeb);
+  ['update', 'workspace-share'].forEach((id) => byId(id)?.toggleAttribute('hidden', graph));
+  byId('graph-context')?.toggleAttribute('hidden', !graph);
+  byId('workspace')?.classList.toggle('graph-mode', graph);
+  if (workspaceMode && persist) {
+    const query = new URLSearchParams(location.search);
+    if (graph) query.set('view', 'graph'); else query.delete('view');
+    const suffix = query.toString();
+    history.replaceState(null, '', `${location.pathname}${suffix ? `?${suffix}` : ''}`);
+  }
+}
+byId('read-mode')?.addEventListener('click', () => setWorkspaceMode('read'));
+byId('graph-mode')?.addEventListener('click', () => setWorkspaceMode('graph'));
+
+function renderArtifactTree(artifacts) {
+  const target = byId('artifact-tree');
+  if (!target) return;
+  target.replaceChildren();
+  if (!artifacts.length) {
+    const empty = document.createElement('p'); empty.className = 'muted';
+    empty.textContent = 'No artifacts yet.'; target.append(empty); return;
+  }
+  const root = {folders: new Map(), files: []};
+  artifacts.forEach((artifact) => {
+    const parts = String(artifact.name || artifact.id).split('/').filter(Boolean);
+    let node = root;
+    parts.forEach((part, index) => {
+      if (index === parts.length - 1) { node.files.push({name: part, artifact}); return; }
+      if (!node.folders.has(part)) node.folders.set(part, {folders: new Map(), files: []});
+      node = node.folders.get(part);
+    });
+  });
+  const renderNode = (node) => {
+    const list = document.createElement('ul');
+    [...node.folders.entries()].sort(([left], [right]) => left.localeCompare(right)).forEach(([name, child]) => {
+      const item = document.createElement('li');
+      const details = document.createElement('details'); details.open = true;
+      const summary = document.createElement('summary'); summary.textContent = name;
+      details.append(summary, renderNode(child)); item.append(details); list.append(item);
+    });
+    [...node.files].sort((left, right) => left.name.localeCompare(right.name)).forEach(({name, artifact}) => {
+      const item = document.createElement('li');
+      const open = button(name, () => location.assign(workspacePath(artifact.id)));
+      open.classList.add('tree-file'); open.setAttribute('aria-label', `Open ${artifact.name}`);
+      if (artifact.id === artifactId) open.setAttribute('aria-current', 'page');
+      item.append(open); list.append(item);
+    });
+    return list;
+  };
+  target.append(renderNode(root));
+}
+function renderGraphMap(edges) {
+  const map = byId('graph-map');
+  if (!map) return;
+  map.replaceChildren();
+  const source = document.createElement('div'); source.className = 'graph-node graph-source';
+  source.textContent = byId('title')?.textContent || 'Current artifact'; map.append(source);
+  if (!edges.length) {
+    const empty = document.createElement('p'); empty.className = 'muted';
+    empty.textContent = 'No connected artifacts.'; map.append(empty); return;
+  }
+  const links = document.createElement('div'); links.className = 'graph-links';
+  edges.forEach((edge) => {
+    const target = edge.target_artifact_name || 'Related artifact';
+    const link = button(target, () => location.assign(workspacePath(edge.target_artifact_id)));
+    link.classList.add('graph-node', 'graph-target');
+    link.setAttribute('aria-label', `${edge.edge_type}: ${target}`);
+    const edgeLabel = document.createElement('span'); edgeLabel.className = 'graph-edge-label';
+    edgeLabel.textContent = edge.edge_type;
+    const item = document.createElement('div'); item.className = 'graph-link';
+    item.append(edgeLabel, link); links.append(item);
+  });
+  map.append(links);
 }
 function base64(bytes) {
   let binary = '';
@@ -486,6 +616,7 @@ function showRead(read) {
   const artifact = read.artifact; const version = read.version;
   byId('title').textContent = artifact.name;
   byId('artifact-path').textContent = artifact.name;
+  if (byId('tree-breadcrumb')) byId('tree-breadcrumb').textContent = `Library / ${artifact.name}`;
   if (byId('artifact-media')) byId('artifact-media').textContent = version.media_type;
   const details = byId('artifact-details');
   if (details) {
@@ -532,15 +663,27 @@ function showRead(read) {
     })); return li;
   }, 'No text chunks for this version.');
   const web = isWebArtifact(artifact, version);
+  workspaceWeb = web;
   byId('workspace').classList.toggle('web-first', web);
+  if (workspaceMode) {
+    byId('reader')?.toggleAttribute('hidden', web);
+    byId('preview-card')?.toggleAttribute('hidden', !web);
+  }
   if (byId('preview-title')) byId('preview-title').textContent = web ? 'Open this site' : 'Safe preview';
+  const standalone = byId('standalone-link');
+  if (standalone) {
+    standalone.href = standalonePath(artifact.id);
+    standalone.toggleAttribute('hidden', !web);
+  }
   const query = new URLSearchParams({version_id: version.id});
-  byId('preview').src = `${renderOrigin}/render/${encodeURIComponent(artifact.id)}?${query}`;
+  const preview = byId('preview');
+  const previewSource = `${renderOrigin}/render/${encodeURIComponent(artifact.id)}?${query}`;
+  if (preview && preview.getAttribute('src') !== previewSource) preview.src = previewSource;
 }
 function showHumanRead(read) {
   const artifact = read.artifact; const version = read.version;
   const web = isWebArtifact(artifact, version);
-  byId('human-title').textContent = artifact.name;
+  if (byId('human-title')) byId('human-title').textContent = artifact.name;
   document.title = `${artifact.name} — Folio Lattice`;
   byId('human-viewer').hidden = false;
   byId('human-site').hidden = !web;
@@ -548,7 +691,10 @@ function showHumanRead(read) {
   if (web) {
     const query = new URLSearchParams({version_id: version.id});
     byId('human-preview').title = artifact.name;
-    byId('human-preview').src = `${renderOrigin}/render/${encodeURIComponent(artifact.id)}?${query}`;
+    const previewSource = `${renderOrigin}/render/${encodeURIComponent(artifact.id)}?${query}`;
+    if (byId('human-preview').getAttribute('src') !== previewSource) {
+      byId('human-preview').src = previewSource;
+    }
     return;
   }
   const documentBody = byId('human-document-body');
@@ -583,7 +729,7 @@ async function loadArtifact(versionId = null) {
   byId('welcome')?.setAttribute('hidden', '');
   status('Loading artifact…');
   const args = {artifact_id: artifactId}; if (versionId) args.version_id = versionId;
-  if (humanArtifactMode) {
+  if (humanArtifactMode && !workspaceMode) {
     const read = await call('artifact_read', args);
     showHumanRead(read);
     status(new URLSearchParams(location.search).has('created')
@@ -592,12 +738,20 @@ async function loadArtifact(versionId = null) {
     return;
   }
   const graphRequest = call('graph_traverse', {start_artifact_id: artifactId, max_depth: 2, limit: 100});
-  const [read, versions, graph] = await Promise.all([
+  const treeRequest = workspaceMode ? call('artifact_list', {limit: 100}) : Promise.resolve([]);
+  const [read, versions, graph, tree] = await Promise.all([
     call('artifact_read', args),
     debugMode ? call('artifact_versions', {artifact_id: artifactId, limit: 100}) : Promise.resolve([]),
     graphRequest,
+    treeRequest,
   ]);
   byId('workspace').hidden = false; showRead(read);
+  if (workspaceMode) {
+    const graphIds = new Set([artifactId, ...graph.map((edge) => edge.target_artifact_id)]);
+    renderArtifactTree(tree.filter((artifact) => graphIds.has(artifact.id)));
+    renderGraphMap(graph);
+    setWorkspaceMode(new URLSearchParams(location.search).get('view') === 'graph' ? 'graph' : 'read', false);
+  }
   if (debugMode && byId('versions')) list('versions', versions, (version) => {
     const li = document.createElement('li'); li.className = 'history-item';
     const label = `${version.created_at} — ${version.reason}${version.id === read.version.id ? ' (shown)' : ''}`;
@@ -610,9 +764,10 @@ async function loadArtifact(versionId = null) {
       const edgeType = document.createElement('span'); edgeType.textContent = `${edge.edge_type} → `;
       const targetLabel = edge.target_artifact_name || 'Related artifact';
       li.append(edgeType, button(targetLabel, () => {
-        location.assign(artifactPath(edge.target_artifact_id));
+        location.assign(workspacePath(edge.target_artifact_id));
       })); return li;
     }, 'No relationships.');
+    renderGraphMap(graph);
   }
   if (debugMode) {
     try {
@@ -648,10 +803,10 @@ async function loadLibrary() {
   status('Loading recent artifacts…');
   try {
     const artifacts = await call('artifact_list', {limit: 20});
-    const renderArtifact = (artifact) => {
+    const renderArtifact = (artifact, destination = artifactPath) => {
       const li = document.createElement('li'); li.className = 'library-item';
       const open = button(artifact.name, () => {
-        location.assign(artifactPath(artifact.id));
+        location.assign(destination(artifact.id));
       });
       if (isWebArtifact(artifact, {media_type: artifact.media_type})) {
         open.setAttribute('aria-label', `Open site ${artifact.name}`);
@@ -662,9 +817,16 @@ async function loadLibrary() {
       meta.textContent = `Updated ${artifact.updated_at}`;
       li.append(meta); return li;
     };
+    const renderGraphCard = (artifact) => {
+      const li = renderArtifact(artifact, workspacePath); li.classList.add('graph-picker-card');
+      const button = li.querySelector('button');
+      if (button) button.setAttribute('aria-label', `Open graph ${artifact.name}`);
+      return li;
+    };
+    const graphs = artifacts.filter((artifact) => artifact.graph_edges > 0);
     list('recent-artifacts', artifacts, renderArtifact, 'No artifacts yet. Create one to start your library.');
-    list('graph-artifacts', artifacts.filter((artifact) => artifact.graph_edges > 0), renderArtifact, 'No connected artifacts yet.');
-    byId('library-count').textContent = `${artifacts.length} recent artifact${artifacts.length === 1 ? '' : 's'}`;
+    list('graph-artifacts', graphs.length ? graphs : artifacts, renderGraphCard, 'No graphs yet. Create one to start your library.');
+    if (byId('library-count')) byId('library-count').textContent = `${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'}`;
     status('Library ready.');
   } catch (error) { handleFailure(error); }
 }
@@ -807,10 +969,25 @@ def ui_html(
     actor: str | None = None,
     debug: bool = False,
     human: bool = False,
+    workspace: bool = False,
+    standalone: bool = False,
 ) -> str:
     origin = escape(render_origin, quote=True)
     state = escape(auth_state, quote=True)
-    if human and not debug:
+    if standalone:
+        return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Artifact</title><link rel="stylesheet" href="/ui.css"></head>
+<body class="human-route standalone-route" data-render-origin="{origin}" data-auth-state="{state}">
+<main id="main" class="page" aria-busy="false">
+  <div class="live-region sr-only"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
+  <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
+  <article id="human-viewer" class="human-viewer" hidden>
+    <section id="human-site" class="human-viewer-site" aria-label="Website" hidden><iframe id="human-preview" title="Artifact site" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></section>
+    <article id="human-document" class="human-document" aria-label="Document" hidden><div id="human-document-body" class="human-document-body"></div></article>
+  </article>
+</main><script src="/ui.js"></script></body></html>"""
+    if human and not debug and not workspace:
         return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Artifact — Folio Lattice</title><link rel="stylesheet" href="/ui.css"></head>
@@ -878,7 +1055,8 @@ def ui_html(
     debug_graph = (
         '<section id="graph-context" class="surface graph-card" aria-labelledby="graph-title">'
         '<div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">'
-        'Relationships</h2></div></div><ul id="graph" class="graph-list"></ul>'
+        'Relationships</h2></div></div><div id="graph-map" class="graph-map" role="group" aria-label="Relationship map"></div>'
+        '<ul id="graph" class="graph-list"></ul>'
         '<form id="link" class="link-form"><div class="row"><label>Target artifact identifier'
         '<input id="target-id" required maxlength="255" placeholder="art_…"></label>'
         '<label>Relationship type<input id="edge-type" value="references" required maxlength="100"></label>'
@@ -887,9 +1065,12 @@ def ui_html(
         else ""
     )
     human_graph = (
-        '<section id="graph-context" class="surface graph-card" aria-labelledby="graph-title">'
+        '<section id="graph-context" class="surface graph-card" aria-labelledby="graph-title"'
+        + (" hidden" if workspace else "")
+        + ">"
         '<div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">Related artifacts</h2></div></div>'
-        '<p>Move through connected documents by name.</p><ul id="graph" class="graph-list"></ul></section>'
+        '<p>Move through connected documents by name.</p><div id="graph-map" class="graph-map" role="group" aria-label="Relationship map"></div>'
+        '<ul id="graph" class="graph-list"></ul></section>'
         if human and not debug
         else ""
     )
@@ -907,6 +1088,18 @@ def ui_html(
         if human and not debug
         else ""
     )
+    human_share = (
+        '<section id="workspace-share" class="surface access-card card-pad" aria-labelledby="workspace-share-title">'
+        '<div class="card-heading"><div><p class="eyebrow">SHARE</p><h2 id="workspace-share-title">Share this artifact</h2></div>'
+        '<span class="state-pill">Private by default</span></div>'
+        '<p class="field-help">Share with a named person using the existing artifact access contract.</p>'
+        '<form id="share" class="link-form"><label for="share-recipient">Person identifier'
+        '<input id="share-recipient" required maxlength="255" placeholder="person-id"></label>'
+        '<label for="share-role">Access<select id="share-role"><option value="read">Can view</option>'
+        '<option value="write">Can edit</option></select></label><button type="submit">Share</button></form></section>'
+        if workspace
+        else ""
+    )
     debug_create_fields = (
         '<details class="advanced-field"><summary>Advanced fields</summary><div class="stacked-form">'
         '<label for="create-media">Media type<input id="create-media" maxlength="255" placeholder="Inferred from name"></label>'
@@ -917,11 +1110,60 @@ def ui_html(
     )
     workspace_nav = (
         '<a id="back-to-library" class="button-secondary" href="/">Back to library</a>'
-        '<a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#graph-context">Graph</a>'
+        + (
+            '<div class="view-switch" role="tablist" aria-label="Workspace view">'
+            '<button id="read-mode" type="button" role="tab" aria-selected="true" class="is-active">Read</button>'
+            '<button id="graph-mode" type="button" role="tab" aria-selected="false">Graph</button></div>'
+            '<div class="workspace-actions"><a id="share-entry" href="#workspace-share">Share</a>'
+            '<a id="edit-entry" href="#update">Edit</a></div>'
+            if workspace
+            else '<a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#graph-context">Graph</a>'
+        )
         + (
             '<a href="#editor">Edit</a><a href="#history">History</a>' + debug_workspace_nav
             if debug
             else ""
+        )
+    )
+    workspace_tree = (
+        '<aside id="artifact-tree-panel" class="tree-panel" aria-label="Artifact tree">'
+        '<div class="tree-heading"><h2>Workspace</h2><p id="tree-breadcrumb" class="tree-breadcrumb">Library</p></div>'
+        '<nav id="artifact-tree" class="artifact-tree" aria-label="Files and folders">'
+        '<p class="muted">Loading artifacts…</p></nav></aside>'
+        if workspace
+        else ""
+    )
+    root_library = (
+        '<section id="graphs" class="surface graph-library" aria-labelledby="graphs-title">'
+        '<div class="section-heading"><div><p class="eyebrow">GRAPH PICKER</p><h2 id="graphs-title">Choose a graph</h2></div>'
+        '<p>Open a connected workspace.</p></div><ul id="graph-artifacts" class="library-list graph-picker-list">'
+        '<li class="muted">Loading graphs…</li></ul></section>'
+        if not debug
+        else '<section class="surface library-card" aria-labelledby="recent-title"><div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2 id="recent-title">Recent artifacts</h2></div><p id="library-count">Loading recent artifacts…</p></div><ul id="recent-artifacts" class="library-list"><li class="muted">Loading recent artifacts…</li></ul></section>'
+    )
+    root_library_actions = (
+        '<details id="new" class="surface create-card"><summary><span>New graph or artifact</span></summary><form id="create" class="stacked-form">'
+        '<label for="create-name">Name<input id="create-name" required maxlength="255" placeholder="e.g. notes/project.md"></label>'
+        '<label for="create-file">Upload a file<input id="create-file" type="file"></label>'
+        '<label for="create-text">Or paste content<textarea id="create-text" placeholder="Start writing…"></textarea></label>'
+        f'{debug_create_fields}<button type="submit">Create artifact</button></form></details>'
+        + (
+            '<details id="find" class="surface create-card"><summary><span>Search library</span></summary><div class="stacked-form"><div class="search-grid">'
+            '<form id="search" class="search-form"><label for="search-query">Search documents and files<input id="search-query" required maxlength="500" placeholder="Phrase or keyword"></label><button type="submit">Search</button></form>'
+            '<form id="grep" class="search-form"><label for="grep-pattern">Exact text<input id="grep-pattern" required maxlength="500" placeholder="Exact text"></label><button type="submit">Find exact text</button></form>'
+            '</div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></div></details>'
+            if debug
+            else ""
+        )
+    )
+    primary_nav = (
+        '<a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a>'
+        '<a href="/#graphs"><span class="nav-index" aria-hidden="true">02</span>Graphs</a>'
+        + (
+            '<a href="/#find"><span class="nav-index" aria-hidden="true">03</span>Search</a>'
+            '<a href="/#new"><span class="nav-index" aria-hidden="true">04</span>New</a>'
+            if debug
+            else '<a href="/#new"><span class="nav-index" aria-hidden="true">03</span>New</a>'
         )
     )
     preview_debug = (
@@ -945,40 +1187,28 @@ def ui_html(
 <div class="app-shell">
 <header class="topbar">
   <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">F</span><div><div class="brand-name">Folio Lattice</div><div class="brand-subtitle">Knowledge workspace</div></div></div>
-  <nav class="primary-nav" aria-label="Primary"><a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a><a href="/#graphs"><span class="nav-index" aria-hidden="true">02</span>Graphs</a><a href="/#find"><span class="nav-index" aria-hidden="true">03</span>Search</a><a href="/#new"><span class="nav-index" aria-hidden="true">04</span>New</a></nav>
+  <nav class="primary-nav" aria-label="Primary">{primary_nav}</nav>
 </header>
 {account_surface}
 <main id="main" class="page" aria-busy="false">
   <div class="live-region"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
   <section id="welcome" class="welcome-panel" aria-labelledby="welcome-title">
-    <p class="eyebrow">YOUR SPACE</p>
-    <h1 id="welcome-title">Library</h1>
+    <p class="eyebrow">FOLIO LATTICE / LIBRARY</p>
+    <h1 id="welcome-title">Choose where to work.</h1>
     <div class="welcome-grid">
-      <section class="surface library-card" aria-labelledby="recent-title"><div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2 id="recent-title">Recent artifacts</h2></div><p id="library-count">Loading recent artifacts…</p></div><ul id="recent-artifacts" class="library-list"><li class="muted">Loading recent artifacts…</li></ul></section>
-      <div class="library-actions">
-        <section id="graphs" class="surface graph-library" aria-labelledby="graphs-title"><div class="section-heading"><div><p class="eyebrow">GRAPHS</p><h2 id="graphs-title">Connected artifacts</h2></div><p>Follow named links.</p></div><ul id="graph-artifacts" class="library-list"><li class="muted">Loading graphs…</li></ul></section>
-        <details id="new" class="surface create-card"><summary><span>New artifact</span></summary><form id="create" class="stacked-form">
-          <label for="create-name">Name<input id="create-name" required maxlength="255" placeholder="e.g. launch-notes.md"></label>
-          <label for="create-file">Upload a file<input id="create-file" type="file"></label>
-          <label for="create-text">Or paste content<textarea id="create-text" placeholder="Start writing…"></textarea></label>
-          {debug_create_fields}<button type="submit">Create artifact</button>
-        </form></details>
-        <details id="find" class="surface create-card"><summary><span>Search library</span></summary><div class="stacked-form"><div class="search-grid">
-          <form id="search" class="search-form"><label for="search-query">Search documents and files<input id="search-query" required maxlength="500" placeholder="Phrase or keyword"></label><button type="submit">Search</button></form>
-          <form id="grep" class="search-form"><label for="grep-pattern">Exact text<input id="grep-pattern" required maxlength="500" placeholder="Exact text"></label><button type="submit">Find exact text</button></form>
-        </div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></div></details>
-        {debug_open}
-      </div>
+      {root_library}
+      <div class="library-actions">{root_library_actions}{debug_open}</div>
     </div>
   </section>
-  <article id="workspace" class="workspace" hidden>
+  <article id="workspace" class="workspace{" has-tree" if workspace else ""}" hidden>
     <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1>{'<div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div>' if debug else ""}</div></div></div><nav class="workspace-nav" aria-label="Artifact sections">{workspace_nav}</nav></header>
-    <div class="workspace-layout"><div class="primary-column">
+    <div class="workspace-layout">{workspace_tree}<div class="primary-column">
       <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Readable document</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Loading readable content…</p><div id="readable-content" class="document-content">Loading content…</div></section>
-      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div>{preview_debug}</div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>
+      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div><div class="preview-actions"><a id="standalone-link" class="button-secondary" href="#" target="_blank" rel="noreferrer" hidden>Standalone</a>{preview_debug}</div></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>
       {debug_editor}
       {human_editor}
+      {human_share}
       {debug_details}
     </div><aside class="secondary-column">
       {debug_access}
@@ -1067,7 +1297,11 @@ class InspectionApp:
         path = scope["path"]
         headers = control_headers(self.render_origin)
         if method == "GET" and (
-            path == "/" or path.startswith("/inspect/") or path.startswith("/artifacts/")
+            path == "/"
+            or path.startswith("/inspect/")
+            or path.startswith("/artifacts/")
+            or path.startswith("/standalone/")
+            or path.startswith("/workspace/")
         ):
             principal = get_request_principal()
             await HTMLResponse(
@@ -1079,7 +1313,11 @@ class InspectionApp:
                     ),
                     actor=principal.actor_id if principal is not None else self.actor,
                     debug=path.startswith("/inspect/"),
-                    human=path.startswith("/artifacts/"),
+                    human=path.startswith("/artifacts/")
+                    or path.startswith("/standalone/")
+                    or path.startswith("/workspace/"),
+                    workspace=path.startswith("/workspace/"),
+                    standalone=path.startswith("/standalone/"),
                 ),
                 headers=headers,
             )(scope, receive, send)

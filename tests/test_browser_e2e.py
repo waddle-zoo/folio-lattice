@@ -295,7 +295,7 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                     {"rgb(245, 247, 249)", "rgb(16, 23, 32)"},
                 )
                 self.assertGreaterEqual(
-                    chrome.evaluate("document.querySelectorAll('.surface').length"), 4
+                    chrome.evaluate("document.querySelectorAll('.surface').length"), 2
                 )
                 handler.api_status = 401
                 chrome.command("Page.navigate", {"url": f"{origin}/inspect/opaque-reference"})
@@ -311,10 +311,6 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 handler.page_actor = None
                 handler.api_status = 401
                 chrome.command("Page.navigate", {"url": origin})
-                chrome.wait("!document.querySelector('#error').hidden")
-                chrome.evaluate(
-                    "document.querySelector('#search-query').value='private phrase'; document.querySelector('#search').requestSubmit()"
-                )
                 chrome.wait("!document.querySelector('#error').hidden")
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#error').textContent"),
@@ -340,10 +336,6 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                     "assertive",
                 )
                 self.assertEqual(chrome.evaluate("document.activeElement.id"), "error")
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#search-query').value"),
-                    "private phrase",
-                )
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#auth-action').getAttribute('href')"),
                     "/sign-in?return_to=%2F",
@@ -382,7 +374,7 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 )
                 handler.api_status = 401
                 chrome.evaluate(
-                    "document.querySelector('#grep-pattern').value='unsaved search'; document.querySelector('#grep').requestSubmit()"
+                    "document.querySelector('#create-name').value='expired-draft.txt'; document.querySelector('#create-text').value='unsaved search'; document.querySelector('#create').requestSubmit()"
                 )
                 chrome.wait(
                     "document.querySelector('#error').textContent === 'Your session expired. Sign in again.'"
@@ -392,7 +384,7 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                     chrome.evaluate("Boolean(document.querySelector('#auth-context'))")
                 )
                 self.assertEqual(
-                    chrome.evaluate("document.querySelector('#grep-pattern').value"),
+                    chrome.evaluate("document.querySelector('#create-text').value"),
                     "unsaved search",
                 )
                 self.assertEqual(
@@ -617,6 +609,146 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 if thread is not None:
                     thread.join(timeout=5)
 
+    def test_graph_first_workspace_picker_tree_views_and_standalone(self) -> None:
+        browser = browser_path()
+        if browser is None:
+            self.skipTest("set FOLIO_BROWSER to Chrome or Chromium for graph workspace evidence")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_port, render_port = free_port(), free_port()
+            control_origin = f"http://127.0.0.1:{control_port}"
+            render_origin = f"http://127.0.0.1:{render_port}"
+            environment = {
+                **os.environ,
+                "FOLIO_DB_PATH": str(root / "folio.db"),
+                "FOLIO_BLOB_ROOT": str(root / "blobs"),
+                "FOLIO_TENANT_ID": "browser-graph",
+                "FOLIO_ACTOR": "browser-persona",
+                "FOLIO_CONTROL_ORIGIN": control_origin,
+                "FOLIO_RENDER_ORIGIN": render_origin,
+                "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            }
+            control = start_server(environment, "http", control_port)
+            renderer: subprocess.Popen[bytes] | None = None
+            chrome: DevTools | None = None
+            try:
+                wait_ready(control_origin, control)
+                source = create(
+                    control_origin,
+                    "notes/decision.md",
+                    b"# Decision\n\n- Choose the graph workspace",
+                    "text/markdown",
+                )
+                site = create(
+                    control_origin,
+                    "site/index.html",
+                    b"<!doctype html><h1>Connected site</h1>",
+                    "text/html",
+                )
+                mcp(
+                    control_origin,
+                    "graph_link",
+                    {
+                        "source_artifact_id": source["artifact"]["id"],
+                        "target_artifact_id": site["artifact"]["id"],
+                        "edge_type": "publishes",
+                        "metadata": {},
+                    },
+                )
+                renderer = start_server(
+                    {**environment, "FOLIO_MCP_URL": f"{control_origin}/mcp"},
+                    "renderer",
+                    render_port,
+                )
+                wait_ready(render_origin, renderer)
+                chrome = DevTools(browser, control_origin, root / "chrome-graph")
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.wait("Boolean(document.querySelector('#graph-artifacts button'))")
+                self.assertFalse(
+                    chrome.evaluate("Boolean(document.querySelector('#recent-artifacts'))")
+                )
+                self.assertIn("decision.md", chrome.evaluate("document.body.innerText"))
+
+                chrome.evaluate(
+                    "[...document.querySelectorAll('#graph-artifacts button')].find((button) => button.textContent === 'notes/decision.md').click()"
+                )
+                chrome.wait("location.pathname.startsWith('/workspace/')")
+                self.assertEqual(
+                    chrome.evaluate("decodeURIComponent(location.pathname.split('/')[2])"),
+                    source["artifact"]["id"],
+                )
+                chrome.wait("document.querySelector('#title')?.textContent === 'notes/decision.md'")
+                chrome.wait("Boolean(document.querySelector('#artifact-tree details'))")
+                self.assertIn(
+                    "site",
+                    chrome.evaluate("document.querySelector('#artifact-tree').textContent"),
+                )
+                self.assertIn(
+                    "Decision",
+                    chrome.evaluate("document.querySelector('#readable-content').textContent"),
+                )
+                self.assertFalse(chrome.evaluate("document.querySelector('#reader').hidden"))
+                self.assertTrue(chrome.evaluate("document.querySelector('#preview-card').hidden"))
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#share-entry').getAttribute('href')"),
+                    "#workspace-share",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#edit-entry').getAttribute('href')"),
+                    "#update",
+                )
+
+                chrome.evaluate("document.querySelector('#graph-mode').click()")
+                chrome.wait("new URL(location.href).searchParams.get('view') === 'graph'")
+                chrome.wait("!document.querySelector('#graph-context').hidden")
+                self.assertTrue(
+                    chrome.evaluate("Boolean(document.querySelector('#graph-map .graph-source'))")
+                )
+                self.assertTrue(
+                    chrome.evaluate("Boolean(document.querySelector('#graph-map .graph-target'))")
+                )
+                chrome.evaluate("document.querySelector('#graph-map .graph-target').click()")
+                chrome.wait(
+                    "location.pathname === '/workspace/' + " + json.dumps(site["artifact"]["id"])
+                )
+                chrome.wait("document.querySelector('#title')?.textContent === 'site/index.html'")
+                chrome.wait("!document.querySelector('#preview-card').hidden")
+                self.assertTrue(chrome.evaluate("document.querySelector('#reader').hidden"))
+                self.assertFalse(
+                    chrome.evaluate("document.querySelector('#standalone-link').hidden")
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('#standalone-link').getAttribute('href').startsWith('/standalone/')"
+                    )
+                )
+
+                chrome.command(
+                    "Page.navigate",
+                    {"url": f"{control_origin}/workspace/{source['artifact']['id']}?view=graph"},
+                )
+                chrome.wait(
+                    "document.querySelector('#graph-mode')?.getAttribute('aria-selected') === 'true'"
+                )
+                chrome.wait("!document.querySelector('#graph-context').hidden")
+                chrome.command(
+                    "Page.navigate",
+                    {"url": f"{control_origin}/standalone/{site['artifact']['id']}"},
+                )
+                chrome.wait("document.querySelector('body').classList.contains('standalone-route')")
+                chrome.wait("!document.querySelector('#human-preview').hidden")
+                self.assertFalse(chrome.evaluate("Boolean(document.querySelector('.topbar'))"))
+                self.assertFalse(
+                    chrome.evaluate("document.body.innerText.includes('Folio Lattice')")
+                )
+            finally:
+                if chrome is not None:
+                    chrome.close()
+                if renderer is not None:
+                    stop_server(renderer)
+                stop_server(control)
+
     def test_real_ui_upload_search_grep_chunk_graph_versions_conflict_and_bridge(self) -> None:
         browser = browser_path()
         if browser is None:
@@ -677,7 +809,7 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                 wait_ready(render_origin, renderer)
                 chrome = DevTools(browser, control_origin, root / "chrome-ui")
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
-                chrome.wait("Boolean(document.querySelector('#recent-artifacts button'))")
+                chrome.wait("Boolean(document.querySelector('#graph-artifacts button'))")
 
                 ax = chrome.command("Accessibility.getFullAXTree")["nodes"]
                 names = {node.get("name", {}).get("value") for node in ax}
@@ -687,9 +819,8 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                 for expected_name in (
                     "Folio Lattice",
                     "Library",
-                    "Recent artifacts",
-                    "New artifact",
-                    "Search library",
+                    "Choose a graph",
+                    "New graph or artifact",
                 ):
                     self.assertIn(expected_name, names)
                 self.assertEqual(
@@ -700,11 +831,11 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                     chrome.evaluate("document.querySelector('#error').getAttribute('role')"),
                     "alert",
                 )
-                chrome.evaluate("document.querySelector('#recent-artifacts button').focus()")
+                chrome.evaluate("document.querySelector('#graph-artifacts button').focus()")
                 self.assertEqual(chrome.evaluate("document.activeElement.tagName"), "BUTTON")
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('h1')?.textContent"),
-                    "Library",
+                    "Choose where to work.",
                 )
                 self.assertNotIn("Open artifact ID", chrome.evaluate("document.body.innerText"))
                 self.assertNotIn("Open by identifier", chrome.evaluate("document.body.innerText"))
@@ -865,7 +996,7 @@ loadArtifact();
                     chrome.evaluate("document.querySelector('#readable-content').textContent"),
                 )
                 chrome.evaluate(
-                    "window.fetch = window.__folioAclFetch; document.querySelector('#bridge-status').textContent = 'Waiting for attached request.'; loadArtifact()"
+                    "window.fetch = window.__folioAclFetch; document.querySelector('#bridge-status').textContent = 'Waiting for attached request.'; document.querySelector('#preview').removeAttribute('src'); loadArtifact()"
                 )
                 chrome.wait("!document.querySelector('#sharing').hidden")
                 chrome.wait(
@@ -923,7 +1054,7 @@ window.__folioFetch = window.fetch;
 window.fetch = (...args) => {
   return new Promise((resolve) => setTimeout(() => resolve(window.__folioFetch(...args)), 400));
 };
-loadArtifact();
+void loadArtifact();
 """)
                 time.sleep(0.15)
                 self.assertEqual(
@@ -1023,17 +1154,13 @@ document.querySelector('#search').requestSubmit();
                 chrome.command("Page.navigate", {"url": control_origin})
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.evaluate(
-                    "const item = [...document.querySelectorAll('#recent-artifacts button')].find((button) => button.textContent === 'browser-note.html'); item.focus()"
+                    "const item = [...document.querySelectorAll('#graph-artifacts button')].find((button) => button.textContent === 'browser-note.html'); item.focus()"
                 )
                 chrome.key("Enter", "Enter", 13)
-                chrome.wait("location.pathname.startsWith('/artifacts/art_')")
-                chrome.wait(
-                    "document.querySelector('#human-title').textContent === 'browser-note.html'"
-                )
-                self.assertTrue(
-                    chrome.evaluate("Boolean(document.querySelector('#human-preview'))")
-                )
-                for selector in ("#workspace", "#sharing", "#bridge-status", "#graph"):
+                chrome.wait("location.pathname.startsWith('/workspace/art_')")
+                chrome.wait("document.querySelector('#title').textContent === 'browser-note.html'")
+                self.assertTrue(chrome.evaluate("Boolean(document.querySelector('#preview'))"))
+                for selector in ("#sharing", "#bridge-status"):
                     self.assertFalse(
                         chrome.evaluate(f"Boolean(document.querySelector({selector!r}))")
                     )

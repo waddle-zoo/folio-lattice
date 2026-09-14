@@ -187,8 +187,10 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_static_ui_is_bounded_accessible_and_strictly_sandboxed(self) -> None:
         for path, expected in (
-            ("/", b"Recent artifacts"),
+            ("/", b"Choose a graph"),
             (f"/artifacts/{self.html['artifact']['id']}", b'id="back-to-library"'),
+            (f"/workspace/{self.html['artifact']['id']}", b'id="artifact-tree"'),
+            (f"/standalone/{self.html['artifact']['id']}", b'id="human-preview"'),
             (f"/inspect/{self.html['artifact']['id']}", b'sandbox="allow-scripts"'),
             ("/ui.css", b"focus-visible"),
             ("/ui.js", b"event.origin !== 'null' || event.source !== frame.contentWindow"),
@@ -200,7 +202,12 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         _, headers, page = await call(self.inspection, "GET", "/")
         self.assertIn(f"frame-src {RENDER_ORIGIN}", headers["content-security-policy"])
         self.assertNotIn(b"allow-same-origin", page)
-        for marker in (b'role="status"', b'role="alert"', b'aria-busy="false"', b"Exact text"):
+        for marker in (
+            b'role="status"',
+            b'role="alert"',
+            b'aria-busy="false"',
+            b"New graph or artifact",
+        ):
             self.assertIn(marker, page)
         for forbidden in (
             b"Unauthenticated local development",
@@ -215,10 +222,10 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         status, _, page = await call(self.inspection, "GET", "/")
         self.assertEqual(status, 200)
         self.assertIn(b"<h1", page)
-        self.assertIn(b"Recent artifacts", page)
-        self.assertIn(b"New artifact", page)
-        self.assertIn(b"Search documents and files", page)
-        self.assertIn(b"Graphs", page)
+        self.assertIn(b"Choose a graph", page)
+        self.assertIn(b"New graph or artifact", page)
+        self.assertNotIn(b"Search documents and files", page)
+        self.assertIn(b"GRAPH PICKER", page)
         for narration in (
             b"Search across the text you have indexed",
             b"Grep checks for an exact substring",
@@ -243,15 +250,10 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         status, _, page = await call(self.inspection, "GET", "/")
         self.assertEqual(status, 200)
         for marker in (
-            b'id="recent-artifacts"',
-            b'id="back-to-library"',
+            b'id="graph-artifacts"',
             b'id="create"',
             b'id="create-file"',
-            b'id="search"',
-            b'id="grep"',
-            b'id="workspace"',
-            b'id="readable-content"',
-            b'id="preview"',
+            b"Choose a graph",
             b'aria-live="polite"',
         ):
             self.assertIn(marker, page)
@@ -316,6 +318,28 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(forbidden, human_page)
         self.assertIn(b'sandbox="allow-scripts"', human_page)
 
+        workspace_page = (
+            await call(self.inspection, "GET", f"/workspace/{self.html['artifact']['id']}")
+        )[2]
+        for marker in (
+            b'id="artifact-tree-panel"',
+            b'id="read-mode"',
+            b'id="graph-mode"',
+            b'id="workspace-share"',
+            b'id="human-edit"',
+            b'id="graph-context"',
+        ):
+            self.assertIn(marker, workspace_page)
+        self.assertNotIn(b'id="human-viewer"', workspace_page)
+
+        standalone_page = (
+            await call(self.inspection, "GET", f"/standalone/{self.html['artifact']['id']}")
+        )[2]
+        self.assertIn(b'class="human-route standalone-route"', standalone_page)
+        self.assertIn(b'id="human-preview"', standalone_page)
+        self.assertNotIn(b'class="topbar"', standalone_page)
+        self.assertNotIn(b"Folio Lattice", standalone_page)
+
         status, _, script = await call(self.inspection, "GET", "/ui.js")
         self.assertEqual(status, 200)
         for marker in (
@@ -330,6 +354,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b"artifact_acl",
             b"graph_link",
             b"graph_traverse",
+            b"renderArtifactTree",
+            b"setWorkspaceMode",
+            b"workspacePath",
             b"/render/",
             b"/api/bridge",
             b"activeRequests",
@@ -352,7 +379,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("page.html", names)
 
         page = (await call(self.inspection, "GET", "/"))[2]
-        self.assertIn(b"Recent artifacts", page)
+        self.assertIn(b"Choose a graph", page)
         viewer = (await call(self.inspection, "GET", f"/inspect/{self.html['artifact']['id']}"))[2]
         self.assertIn(b"Back to library", viewer)
 

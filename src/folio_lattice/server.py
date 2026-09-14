@@ -278,6 +278,8 @@ class FolioHttpApp:
                 path == "/"
                 or path.startswith("/inspect/")
                 or path.startswith("/artifacts/")
+                or path.startswith("/standalone/")
+                or path.startswith("/workspace/")
                 or path in {"/api/mcp", "/api/bridge", "/ui.css", "/ui.js"}
             ):
                 await self.inspection(scope, receive, send)
