@@ -1673,7 +1673,9 @@ async function loadArtifact(versionId = null) {
     return;
   }
   const graphRequest = call('graph_traverse', {start_artifact_id: artifactId, max_depth: 2, limit: 100});
-  const treeRequest = workspaceMode ? call('artifact_list', {limit: 100}) : Promise.resolve([]);
+  const treeRequest = workspaceMode
+    ? call('graph_component', {start_artifact_id: artifactId, limit: 100})
+    : Promise.resolve([]);
   const [read, versions, graph, tree] = await Promise.all([
     call('artifact_read', args),
     debugMode ? call('artifact_versions', {artifact_id: artifactId, limit: 100}) : Promise.resolve([]),
@@ -1682,8 +1684,7 @@ async function loadArtifact(versionId = null) {
   ]);
   byId('workspace').hidden = false; showRead(read);
   if (workspaceMode) {
-    const graphIds = new Set([artifactId, ...graph.map((edge) => edge.target_artifact_id)]);
-    renderArtifactTree(tree.filter((artifact) => graphIds.has(artifact.id)));
+    renderArtifactTree(tree);
     renderGraphMap(graph);
     setWorkspaceMode(new URLSearchParams(location.search).get('view') === 'graph' ? 'graph' : 'read', false);
   }
@@ -1811,7 +1812,9 @@ byId('create')?.addEventListener('submit', async (event) => {
 async function discover(tool, field, inputId) {
   try {
     status(tool === 'artifact_search' ? 'Searching indexed content…' : 'Running literal grep…');
-    const results = await call(tool, {[field]: byId(inputId).value, limit: 20});
+    const args = {[field]: byId(inputId).value, limit: 20};
+    if (workspaceMode && tool === 'artifact_search') args.graph_root_artifact_id = artifactId;
+    const results = await call(tool, args);
     list('results', results, (result) => {
       const li = document.createElement('li'); li.className = 'result-item';
       const excerpt = result.snippet || result.content || '';
