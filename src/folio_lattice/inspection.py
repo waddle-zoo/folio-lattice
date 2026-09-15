@@ -372,6 +372,13 @@ body.workspace-route {
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
+body.workspace-route input,
+body.workspace-route textarea,
+body.workspace-route select,
+body.workspace-route pre {
+  background: var(--surface);
+  color: var(--ink);
+}
 body:not(.debug-route):not(.human-route):not(.standalone-route) .topbar {
   max-width: none;
   min-height: 76px;
@@ -1769,9 +1776,10 @@ async function loadLibrary() {
         location.assign(destination(artifact.id));
       });
       if (isWebArtifact(artifact, {media_type: artifact.media_type})) {
-        open.setAttribute('aria-label', `Open site ${artifact.name}`);
-        const action = document.createElement('span'); action.className = 'library-action';
-        action.textContent = 'Open site'; li.append(open, action);
+        open.setAttribute('aria-label', `Open artifact ${artifact.name}`);
+        const action = document.createElement('a'); action.className = 'library-action';
+        action.href = standalonePath(artifact.id); action.target = '_blank'; action.rel = 'noreferrer';
+        action.textContent = 'Open site ↗'; li.append(open, action);
       } else li.append(open);
       const meta = document.createElement('span'); meta.className = 'library-meta';
       meta.textContent = `Updated ${formatDate(artifact.updated_at)}`;
@@ -1830,13 +1838,20 @@ byId('create')?.addEventListener('submit', async (event) => {
       reason: byId('create-reason')?.value || 'library create', content_base64: base64(bytes),
       source_context: {interface: 'inspection-ui'},
     });
-    location.assign(`${artifactPath(created.artifact.id)}?created=1`);
+    location.assign(`${workspacePath(created.artifact.id)}?created=1`);
   } catch (error) { handleFailure(error); }
 });
 async function discover(tool, field, inputId) {
   try {
+    const query = byId(inputId).value.trim();
+    if (!query) {
+      byId('results')?.replaceChildren();
+      byId('workspace-search-results')?.setAttribute('hidden', '');
+      status('');
+      return;
+    }
     status(tool === 'artifact_search' ? 'Searching indexed content…' : 'Running literal grep…');
-    const args = {[field]: byId(inputId).value, limit: 20};
+    const args = {[field]: query, limit: 20};
     if (workspaceMode && tool === 'artifact_search') args.graph_root_artifact_id = artifactId;
     const results = await call(tool, args);
     list('results', results, (result) => {
