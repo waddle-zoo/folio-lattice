@@ -149,6 +149,39 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(FolioError, "immutable metadata"):
             self.service.link(*arguments, {"claim": "two"})
 
+    def test_traversal_does_not_follow_injected_cross_tenant_edge(self):
+        source = self.service.create_artifact(
+            tenant_id="tenant-a", name="source", data=b"source", actor="same-actor"
+        )
+        foreign = self.service.create_artifact(
+            tenant_id="tenant-b", name="foreign-secret", data=b"secret", actor="same-actor"
+        )
+        with self.service.connect() as db:
+            db.execute(
+                """
+                INSERT INTO edges (
+                    id, tenant_id, source_artifact_id, target_artifact_id,
+                    edge_type, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "injected-cross-tenant-edge",
+                    "tenant-a",
+                    source["artifact"]["id"],
+                    foreign["artifact"]["id"],
+                    "references",
+                    "{}",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+
+        self.assertEqual(
+            self.service.traverse(
+                "tenant-a", source["artifact"]["id"], max_depth=1, actor="same-actor"
+            ),
+            [],
+        )
+
     def test_binary_artifact_round_trips(self):
         data = b"\x00\x01\xff"
         created = self.service.create_artifact(

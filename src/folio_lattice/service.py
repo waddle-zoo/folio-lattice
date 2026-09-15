@@ -868,6 +868,7 @@ class FolioLattice:
                            a.name AS target_artifact_name
                     FROM edges e
                     JOIN artifacts a ON a.id = e.target_artifact_id
+                     AND a.tenant_id = e.tenant_id
                     WHERE e.tenant_id = ? AND e.source_artifact_id = ?
                       AND """
                     + self._access_clause(actor, "read")[0]
