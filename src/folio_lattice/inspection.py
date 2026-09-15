@@ -350,6 +350,867 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
   .library-item { align-items: start; flex-direction: column; gap: .2rem; }
   .library-meta { text-align: left; }
 }
+
+/* Product UI: a quiet graph library and a content-first workspace. */
+body:not(.debug-route):not(.human-route):not(.standalone-route),
+body.workspace-route {
+  color-scheme: light;
+  --ink: #171717;
+  --muted: #6e6e6e;
+  --soft: #8b8b8b;
+  --line: #e2e2e2;
+  --line-strong: #cfcfcf;
+  --surface: #ffffff;
+  --canvas: #fafafa;
+  --blue: #252525;
+  --blue-dark: #111111;
+  --blue-soft: #f0f0f0;
+  --green: #444444;
+  --green-soft: #f1f1f1;
+  --shadow: 0 18px 42px rgb(0 0 0 / 6%);
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .topbar {
+  max-width: none;
+  min-height: 76px;
+  padding: 0 34px;
+  border-bottom: 1px solid var(--line);
+  background: rgb(250 250 250 / 88%);
+  backdrop-filter: blur(16px);
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .brand-lockup { gap: .55rem; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  background: #e8e8e8;
+  color: var(--ink);
+  font-size: .85rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .brand-name { font-size: .92rem; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .brand-subtitle { display: none; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-nav {
+  align-items: center;
+  gap: 1.5rem;
+  margin-left: auto;
+  margin-right: 0;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-nav a {
+  border: 0;
+  padding: .5rem 0;
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 700;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-nav a:hover,
+body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-nav a.is-active { color: var(--ink); }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-nav a.is-active { border-bottom: 2px solid var(--ink); }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .nav-index { display: none; }
+.avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ink);
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 800;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .page {
+  width: min(1180px, calc(100% - 68px));
+  max-width: none;
+  padding: 68px 0 100px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .welcome-panel { padding: 0; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .welcome-panel > .eyebrow { margin-bottom: 13px; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .welcome-panel > h1 {
+  max-width: 680px;
+  margin-bottom: 14px;
+  font-size: clamp(40px, 6vw, 74px);
+  line-height: .98;
+  letter-spacing: -.065em;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .welcome-panel > .lede {
+  max-width: 520px;
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-library {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-library .section-heading {
+  align-items: end;
+  margin: 66px 0 22px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-library .section-heading h2 {
+  margin-bottom: 0;
+  font-size: 1.35rem;
+  letter-spacing: -.045em;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-library .section-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .8rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 15px;
+  margin: 0;
+  border: 0;
+  list-style: none;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card {
+  display: flex;
+  min-height: 235px;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 3%);
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card:hover {
+  border-color: #b4b4b4;
+  box-shadow: var(--shadow);
+  transform: translateY(-3px);
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-card-action {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-card-top {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 1.1rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-open-mark {
+  color: var(--muted);
+  font-size: 1.1rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card h3 {
+  margin: 20px 0 8px;
+  overflow-wrap: anywhere;
+  font-size: 1.2rem;
+  letter-spacing: -.03em;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card .graph-description {
+  max-width: 245px;
+  margin: 0;
+  color: var(--muted);
+  font-size: .8rem;
+  line-height: 1.48;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card .graph-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 28px;
+  color: var(--muted);
+  font-size: .7rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-meta .status-dot { gap: 6px; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-meta .status-dot::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue);
+  content: "";
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .library-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 20px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .create-card {
+  width: min(480px, 100%);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .create-card summary {
+  display: inline-flex;
+  min-height: 42px;
+  padding: 0 17px;
+  border-radius: 999px;
+  background: #e8e8e8;
+  color: var(--ink);
+  font-size: .8rem;
+  font-weight: 800;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .create-card summary > span:first-child::before { display: none; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .create-card[open] {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+body.workspace-route { min-height: 100vh; background: #f7f7f5; }
+body.workspace-route .app-shell { min-height: 100vh; }
+body.workspace-route .topbar {
+  max-width: none;
+  min-height: 66px;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+body.workspace-route .brand-lockup { display: none; }
+body.workspace-route .primary-nav { width: 100%; margin: 0; }
+body.workspace-route .primary-nav a { display: none; }
+body.workspace-route .page { width: 100%; max-width: none; height: calc(100vh - 66px); min-height: 0; padding: 0; }
+body.workspace-route .workspace { margin: 0; }
+body.workspace-route .workspace-heading {
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+  margin: 0;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+body.workspace-route .workspace-heading > div:first-child { min-width: 0; margin-right: auto; }
+body.workspace-route .workspace-heading .breadcrumb { display: none; }
+body.workspace-route .artifact-title-row { gap: 0; }
+body.workspace-route .artifact-title-row .artifact-icon,
+body.workspace-route .artifact-title-row .eyebrow,
+body.workspace-route .artifact-title-row .title-metadata { display: none; }
+body.workspace-route .artifact-title-row h1 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: .95rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.workspace-route .workspace-nav { align-items: center; gap: 8px; }
+body.workspace-route .workspace-nav > a:first-child {
+  order: -2;
+  border: 0;
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: .82rem;
+}
+body.workspace-route .workspace-nav > a:not(:first-child) { display: none; }
+body.workspace-route .workspace-nav .view-switch,
+body.workspace-route .workspace-nav .workspace-actions { display: inline-flex; }
+body.workspace-route .workspace-layout {
+  min-height: calc(100vh - 130px);
+  grid-template-columns: 290px minmax(0, 1fr);
+  gap: 0;
+}
+body.workspace-route .tree-panel {
+  min-height: calc(100vh - 130px);
+  padding: 28px 17px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: #f1f1f1;
+  box-shadow: none;
+}
+body.workspace-route .tree-heading { border: 0; padding: 0 10px 20px; }
+body.workspace-route .tree-heading h2 { font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }
+body.workspace-route .tree-breadcrumb { color: var(--muted); }
+body.workspace-route .artifact-tree details > summary,
+body.workspace-route .tree-file {
+  min-height: 36px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  color: #383838;
+  font-size: .84rem;
+}
+body.workspace-route .artifact-tree details > summary:hover,
+body.workspace-route .tree-file:hover { background: #e6e6e6; }
+body.workspace-route .tree-file[aria-current="page"] { background: #dedede; color: var(--ink); font-weight: 800; }
+body.workspace-route .primary-column,
+body.workspace-route .secondary-column { grid-column: 2; }
+body.workspace-route .primary-column > .surface,
+body.workspace-route .secondary-column > .surface {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+body.workspace-route .content-inner {
+  width: min(780px, calc(100% - 72px));
+  padding: 64px 0 100px;
+}
+body.workspace-route .content-breadcrumb { margin-bottom: 32px; font-size: .76rem; }
+body.workspace-route .reader-card,
+body.workspace-route .preview-card {
+  padding: 64px max(36px, calc((100% - 780px) / 2)) 100px;
+  background: var(--surface);
+}
+body.workspace-route .reader-card .card-heading,
+body.workspace-route .preview-card .card-heading { display: none; }
+body.workspace-route .reader-card .field-help,
+body.workspace-route .preview-card > .field-help { display: none; }
+body.workspace-route .reader-card .document-content {
+  max-width: 780px;
+  margin: 0 auto;
+  font-size: 1rem;
+}
+body.workspace-route .reader-card .document-content::before {
+  display: block;
+  margin-bottom: 26px;
+  color: var(--muted);
+  content: "Document";
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+body.workspace-route .preview-card { min-height: calc(100vh - 130px); padding-top: 0; }
+body.workspace-route .preview-frame { min-height: calc(100vh - 130px); border: 0; border-radius: 0; }
+body.workspace-route .preview-frame iframe { min-height: calc(100vh - 130px); }
+body.workspace-route .graph-card { padding: 64px max(36px, calc((100% - 1100px) / 2)) 100px; background: var(--surface); }
+body.workspace-route .graph-card .card-heading { display: none; }
+body.workspace-route .graph-card .graph-map { min-height: calc(100vh - 260px); border: 1px solid var(--line); border-radius: 0; background: #fafafa; box-shadow: none; }
+body.workspace-route .graph-card .graph-list,
+body.workspace-route .graph-card .link-form,
+body.workspace-route .workspace-share { display: none; }
+body.workspace-route .workspace-actions a { border: 0; color: var(--muted); background: transparent; font-size: .8rem; }
+body.workspace-route .workspace-actions a:hover { color: var(--ink); background: transparent; }
+body.workspace-route .view-switch { border-color: var(--line); border-radius: 999px; background: #f1f1f1; }
+body.workspace-route .view-switch button { min-height: 30px; border-radius: 999px; color: var(--muted); }
+body.workspace-route .view-switch button.is-active { background: var(--surface); color: var(--ink); }
+@media (max-width: 900px) {
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .page { width: min(100% - 36px, 620px); padding-top: 48px; }
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-list { grid-template-columns: 1fr; }
+  body.workspace-route .workspace-layout { grid-template-columns: 224px minmax(0, 1fr); }
+  body.workspace-route .workspace-heading { padding-inline: 16px; }
+  body.workspace-route .workspace-nav .workspace-actions { display: none; }
+  body.workspace-route .tree-panel { padding: 17px 12px; }
+}
+@media (max-width: 590px) {
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .topbar { padding-inline: 18px; }
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-nav { gap: .8rem; }
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-nav a { display: none; }
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-nav a:first-child { display: inline-flex; }
+  body.workspace-route .workspace-layout { display: block; }
+  body.workspace-route .tree-panel { min-height: auto; }
+  body.workspace-route .primary-column,
+  body.workspace-route .secondary-column { display: block; }
+  body.workspace-route .reader-card,
+  body.workspace-route .preview-card { padding: 36px 22px 70px; }
+}
+
+/* Human product pass: the system disappears behind the work. */
+body:not(.debug-route):not(.human-route):not(.standalone-route),
+body.workspace-route {
+  color-scheme: light;
+  --ink: #181a18;
+  --muted: #70756f;
+  --soft: #969c95;
+  --line: #dfe2dc;
+  --line-strong: #c8cdc5;
+  --surface: #ffffff;
+  --canvas: #f7f8f5;
+  --blue: #2956d7;
+  --blue-dark: #1f46b9;
+  --blue-soft: #eef2ff;
+  --shadow: 0 10px 24px rgb(28 35 25 / 5%);
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .page {
+  max-width: 1120px;
+  padding: 46px 32px 80px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .live-region { min-height: 0; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) #status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .welcome-panel { padding: 0; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .welcome-panel > h1 {
+  margin-bottom: 30px;
+  font-size: clamp(2rem, 4vw, 3rem);
+  letter-spacing: -.05em;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .welcome-panel > .lede { display: none; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-library {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-library .section-heading {
+  align-items: center;
+  margin-bottom: 18px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-library .section-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: -.01em;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-library .section-heading .eyebrow { display: none; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  border: 0;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card {
+  min-height: 162px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0;
+  background: var(--surface);
+  box-shadow: none;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card:hover {
+  border-color: #aeb6aa;
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-card-action {
+  display: flex;
+  width: 100%;
+  min-height: 122px;
+  flex-direction: column;
+  align-items: stretch;
+  border: 0;
+  padding: 18px 18px 4px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-icon {
+  color: var(--muted);
+  font-size: 1.15rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-open-mark {
+  color: var(--soft);
+  font-size: 1.05rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card h3 {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+  font-size: 1.02rem;
+  letter-spacing: -.02em;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card .graph-description {
+  display: none;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card .graph-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding: 12px 18px;
+  color: var(--muted);
+  font-size: .72rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-meta .status-dot::before { display: none; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-button {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: .82rem;
+  font-weight: 800;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 4px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .primary-button:hover {
+  background: transparent;
+  color: var(--blue);
+  text-decoration-color: currentColor;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .library-actions { display: block; margin-top: 24px; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .create-card {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 16px 0 0;
+  background: transparent;
+  box-shadow: none;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .create-card summary {
+  display: inline-flex;
+  min-height: 32px;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: .82rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .create-card summary > span:first-child::before { display: none; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .create-card[open] {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 16px 0 0;
+  background: transparent;
+  box-shadow: none;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .shared-empty {
+  margin-top: 64px;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .shared-empty .section-heading { margin-bottom: 4px; }
+body.workspace-route {
+  min-height: 100vh;
+  overflow: hidden;
+  background: var(--canvas);
+}
+body.workspace-route .topbar { display: none; }
+body.workspace-route:not(.debug-route):not(.human-route):not(.standalone-route) .page {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  height: 100vh;
+  min-height: 0;
+  padding: 0;
+}
+body.workspace-route .live-region { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+body.workspace-route .workspace { display: block; height: 100vh; margin: 0; }
+body.workspace-route .workspace-heading {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 18px;
+  min-height: 58px;
+  height: 58px;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 0 24px;
+  background: var(--surface);
+}
+body.workspace-route .workspace-heading > div:first-child {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  flex: 1 1 auto;
+}
+body.workspace-route .workspace-heading .breadcrumb,
+body.workspace-route .artifact-title-row .artifact-icon,
+body.workspace-route .artifact-title-row .eyebrow,
+body.workspace-route .artifact-title-row .title-metadata { display: none; }
+body.workspace-route .artifact-title-row { gap: 0; }
+body.workspace-route .artifact-title-row h1 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: .92rem;
+  font-weight: 800;
+  letter-spacing: -.015em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.workspace-route .workspace-nav {
+  display: flex;
+  width: auto;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 10px;
+  min-width: 0;
+}
+body.workspace-route .workspace-nav > a:first-child {
+  order: -2;
+  border: 0;
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: .8rem;
+  white-space: nowrap;
+}
+body.workspace-route .workspace-nav > a:first-child:hover { color: var(--ink); }
+body.workspace-route .workspace-nav > a:not(:first-child):not(#standalone-link):not(.workspace-actions a) { display: none; }
+body.workspace-route .workspace-nav .view-switch { order: -1; }
+body.workspace-route .workspace-nav .workspace-actions { order: 0; margin-left: 2px; }
+body.workspace-route .workspace-actions a,
+body.workspace-route .workspace-actions button {
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: .78rem;
+  font-weight: 700;
+}
+body.workspace-route .workspace-actions a:hover,
+body.workspace-route .workspace-actions button:hover { color: var(--ink); background: #f1f2ee; }
+body.workspace-route .workspace-option {
+  display: inline-flex;
+  order: 0;
+  border-radius: 6px;
+  padding: 7px 8px;
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+body.workspace-route .workspace-option:hover { color: var(--ink); background: #f1f2ee; }
+body.workspace-route .workspace-nav > a#standalone-link { display: inline-flex; }
+body.workspace-route .view-switch {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 2px;
+  background: #f6f7f4;
+}
+body.workspace-route .view-switch button {
+  min-height: 28px;
+  border-radius: 5px;
+  padding: 4px 9px;
+  color: var(--muted);
+  font-size: .75rem;
+}
+body.workspace-route .view-switch button.is-active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgb(20 25 19 / 9%); }
+body.workspace-route .workspace-search {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 220px;
+  margin-left: 4px;
+}
+body.workspace-route .workspace-search input {
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 9px;
+  background: #fafbf9;
+  font-size: .76rem;
+}
+body.workspace-route .workspace-search input:focus { background: var(--surface); }
+body.workspace-route .workspace-search button {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: .95rem;
+}
+body.workspace-route .workspace-search button:hover { color: var(--ink); background: #f1f2ee; }
+body.workspace-route .workspace-search-results {
+  position: fixed;
+  top: 67px;
+  right: 24px;
+  z-index: 5;
+  width: min(380px, calc(100% - 32px));
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 16px;
+  background: var(--surface);
+  box-shadow: 0 18px 42px rgb(24 30 22 / 14%);
+}
+body.workspace-route .workspace-search-results .result-item { padding: 9px 0; }
+body.workspace-route .workspace-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 0;
+  height: calc(100vh - 58px);
+  min-height: 0;
+}
+body.workspace-route .workspace.has-tree .workspace-layout { grid-template-columns: 260px minmax(0, 1fr); }
+body.workspace-route .tree-panel {
+  min-width: 0;
+  height: calc(100vh - 58px);
+  overflow: auto;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  padding: 24px 16px;
+  background: #f1f2ef;
+  box-shadow: none;
+}
+body.workspace-route .tree-heading { border: 0; padding: 0 10px 18px; }
+body.workspace-route .tree-heading h2 { margin-bottom: 3px; font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; }
+body.workspace-route .tree-breadcrumb { color: var(--soft); }
+body.workspace-route .artifact-tree details > summary,
+body.workspace-route .tree-file {
+  min-height: 36px;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #4b514b;
+  font-size: .82rem;
+}
+body.workspace-route .artifact-tree details > summary:hover,
+body.workspace-route .tree-file:hover { background: #e5e7e2; }
+body.workspace-route .tree-file[aria-current="page"] { background: #dfe2dc; color: var(--ink); font-weight: 800; }
+body.workspace-route .workspace.has-tree .primary-column,
+body.workspace-route .workspace.has-tree .secondary-column { grid-column: 2; min-width: 0; min-height: 0; }
+body.workspace-route .primary-column { display: block; height: calc(100vh - 58px); }
+body.workspace-route .primary-column > .surface,
+body.workspace-route .secondary-column > .surface { border: 0; border-radius: 0; box-shadow: none; }
+body.workspace-route #reader:not([hidden]),
+body.workspace-route #preview-card:not([hidden]) {
+  display: block;
+  height: calc(100vh - 58px);
+  min-height: 0;
+  overflow: auto;
+}
+body.workspace-route .reader-card {
+  padding: 54px clamp(30px, 7vw, 118px) 84px;
+  background: var(--surface);
+}
+body.workspace-route .reader-card .card-heading,
+body.workspace-route .reader-card #reader-note,
+body.workspace-route .preview-card .card-heading,
+body.workspace-route .preview-card > .field-help { display: none; }
+body.workspace-route .reader-card .document-slot {
+  max-width: 780px;
+  min-height: 0;
+  margin: 0 auto;
+}
+body.workspace-route .reader-card .document-slot::before { display: none; }
+body.workspace-route .reader-card .document-content::before { display: none; }
+body.workspace-route .reader-card .document-content {
+  max-width: none;
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.04rem;
+  line-height: 1.8;
+}
+body.workspace-route .reader-card .document-content h1 {
+  margin: 0 0 28px;
+  font-size: clamp(2rem, 4vw, 3.15rem);
+  line-height: 1.08;
+  letter-spacing: -.05em;
+}
+body.workspace-route .reader-card .document-content h2 { margin: 42px 0 10px; font-size: 1.45rem; }
+body.workspace-route .reader-card .document-content h3 { margin: 30px 0 8px; font-size: 1.08rem; }
+body.workspace-route .reader-card .document-content p { max-width: 68ch; margin-bottom: 1.1rem; }
+body.workspace-route .reader-card .document-content ul { max-width: 68ch; margin-bottom: 1.1rem; }
+body.workspace-route .reader-card .document-content pre { margin: 24px 0; border: 1px solid var(--line); border-radius: 7px; padding: 16px; background: #f6f7f4; }
+body.workspace-route .preview-card { height: calc(100vh - 58px); padding: 0; background: var(--surface); }
+body.workspace-route .preview-frame,
+body.workspace-route .preview-frame iframe { height: calc(100vh - 58px); min-height: 0; border: 0; border-radius: 0; }
+body.workspace-route .graph-card { height: calc(100vh - 58px); min-height: 0; padding: 42px clamp(28px, 6vw, 100px); background: var(--surface); }
+body.workspace-route .graph-card .card-heading { display: none; }
+body.workspace-route .graph-card .graph-map { min-height: 0; margin: 0; border: 1px solid var(--line); border-radius: 7px; background: #fafbf9; box-shadow: none; }
+body.workspace-route .graph-card .graph-list,
+body.workspace-route .graph-card .link-form { display: none; }
+body.workspace-route .secondary-column { position: static; }
+body.workspace-route .workspace.graph-mode .primary-column { display: none; }
+body.workspace-route .workspace.graph-mode .secondary-column {
+  display: block;
+  grid-row: 1;
+  height: calc(100vh - 58px);
+}
+body.workspace-route #update:not([open]),
+body.workspace-route #workspace-share:not([open]) { display: none; }
+body.workspace-route #update[open],
+body.workspace-route #workspace-share[open] {
+  position: fixed;
+  z-index: 6;
+  inset: 76px 24px auto auto;
+  display: block;
+  width: min(460px, calc(100% - 32px));
+  max-height: calc(100vh - 100px);
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 22px;
+  background: var(--surface);
+  box-shadow: 0 20px 56px rgb(24 30 22 / 18%);
+}
+body.workspace-route #update::backdrop,
+body.workspace-route #workspace-share::backdrop { background: rgb(19 23 18 / 18%); }
+body.workspace-route .panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+body.workspace-route .panel-heading h2 { margin: 0; font-size: 1.15rem; }
+body.workspace-route .panel-heading .eyebrow { margin-bottom: 4px; }
+body.workspace-route .panel-close {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 1.3rem;
+  line-height: 1;
+}
+body.workspace-route .panel-close:hover { color: var(--ink); background: #f1f2ee; }
+body.workspace-route #update[open] .stacked-form,
+body.workspace-route #workspace-share[open] .link-form { margin-top: 0; }
+body.workspace-route #workspace-share .card-heading { align-items: start; }
+body.workspace-route #workspace-share .privacy-line { align-items: center; gap: 8px; margin-bottom: 18px; }
+body.workspace-route #workspace-share .state-pill { flex: 0 0 auto; }
+@media (max-width: 900px) {
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .page { width: 100%; max-width: 1120px; padding-inline: 22px; }
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body.workspace-route .workspace-heading { padding-inline: 16px; gap: 12px; }
+  body.workspace-route .workspace-nav .workspace-actions { display: flex; }
+  body.workspace-route .workspace-search { width: min(180px, 23vw); }
+  body.workspace-route .workspace.has-tree .workspace-layout { grid-template-columns: 224px minmax(0, 1fr); }
+  body.workspace-route .tree-panel { padding-inline: 12px; }
+}
+@media (max-width: 640px) {
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .page { padding: 30px 16px 60px; }
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .welcome-panel > h1 { margin-bottom: 30px; }
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-list { grid-template-columns: 1fr; }
+  body.workspace-route .workspace-heading { height: auto; min-height: 58px; padding-block: 10px; }
+  body.workspace-route .workspace-heading > div:first-child { max-width: 30%; }
+  body.workspace-route .workspace-nav { flex-wrap: wrap; justify-content: flex-end; }
+  body.workspace-route .workspace-search { width: 150px; }
+  body.workspace-route .workspace.has-tree .workspace-layout { display: grid; grid-template-columns: minmax(158px, 42vw) minmax(0, 1fr); height: calc(100vh - 78px); }
+  body.workspace-route .tree-panel { height: calc(100vh - 78px); }
+  body.workspace-route .primary-column { height: calc(100vh - 78px); }
+  body.workspace-route #reader:not([hidden]),
+  body.workspace-route #preview-card:not([hidden]) { height: calc(100vh - 78px); }
+  body.workspace-route .preview-frame,
+  body.workspace-route .preview-frame iframe { height: calc(100vh - 78px); }
+  body.workspace-route .reader-card { padding: 34px 22px 60px; }
+  body.workspace-route .graph-card { height: calc(100vh - 78px); padding: 26px 20px; }
+  body.workspace-route #update[open],
+  body.workspace-route #workspace-share[open] { inset: 70px 16px auto; width: auto; max-height: calc(100vh - 86px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card { transition: none; }
+}
 """.strip()
 
 UI_JS = r"""
@@ -484,6 +1345,11 @@ function list(id, items, render, empty) {
   }
   items.forEach((value) => target.append(render(value)));
 }
+function formatDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || 'Unknown date');
+  return new Intl.DateTimeFormat(undefined, {month: 'short', day: 'numeric', year: 'numeric'}).format(date);
+}
 function button(label, action) {
   const value = document.createElement('button'); value.type = 'button';
   value.className = 'inline-action';
@@ -497,7 +1363,12 @@ function setWorkspaceMode(mode, persist = true) {
   byId('graph-mode')?.setAttribute('aria-selected', String(graph));
   byId('reader')?.toggleAttribute('hidden', graph || workspaceWeb);
   byId('preview-card')?.toggleAttribute('hidden', graph || !workspaceWeb);
-  ['update', 'workspace-share'].forEach((id) => byId(id)?.toggleAttribute('hidden', graph));
+  if (graph) {
+    ['update', 'workspace-share'].forEach((id) => {
+      const panel = byId(id);
+      if (panel?.open && typeof panel.close === 'function') panel.close();
+    });
+  }
   byId('graph-context')?.toggleAttribute('hidden', !graph);
   byId('workspace')?.classList.toggle('graph-mode', graph);
   if (workspaceMode && persist) {
@@ -509,6 +1380,38 @@ function setWorkspaceMode(mode, persist = true) {
 }
 byId('read-mode')?.addEventListener('click', () => setWorkspaceMode('read'));
 byId('graph-mode')?.addEventListener('click', () => setWorkspaceMode('graph'));
+
+let lastPanelTrigger = null;
+function openWorkspacePanel(id, triggerId) {
+  const panel = byId(id);
+  if (!panel) return;
+  lastPanelTrigger = byId(triggerId);
+  lastPanelTrigger?.setAttribute('aria-expanded', 'true');
+  if (typeof panel.showModal === 'function') panel.showModal();
+  else panel.classList.add('is-open');
+  setTimeout(() => panel.querySelector('textarea, input:not([type="hidden"])')?.focus(), 0);
+}
+function closeWorkspacePanel(id) {
+  const panel = byId(id);
+  if (!panel) return;
+  lastPanelTrigger?.setAttribute('aria-expanded', 'false');
+  if (typeof panel.close === 'function' && panel.open) panel.close();
+  else panel.classList.remove('is-open');
+  lastPanelTrigger?.focus();
+  lastPanelTrigger = null;
+}
+byId('update')?.addEventListener('close', () => {
+  byId('update')?.classList.remove('is-open');
+  lastPanelTrigger?.setAttribute('aria-expanded', 'false');
+  lastPanelTrigger?.focus(); lastPanelTrigger = null;
+});
+byId('workspace-share')?.addEventListener('close', () => {
+  byId('workspace-share')?.classList.remove('is-open');
+  lastPanelTrigger?.setAttribute('aria-expanded', 'false');
+  lastPanelTrigger?.focus(); lastPanelTrigger = null;
+});
+byId('close-edit')?.addEventListener('click', () => closeWorkspacePanel('update'));
+byId('close-share')?.addEventListener('click', () => closeWorkspacePanel('workspace-share'));
 
 function renderArtifactTree(artifacts) {
   const target = byId('artifact-tree');
@@ -616,7 +1519,7 @@ function showRead(read) {
   const artifact = read.artifact; const version = read.version;
   byId('title').textContent = artifact.name;
   byId('artifact-path').textContent = artifact.name;
-  if (byId('tree-breadcrumb')) byId('tree-breadcrumb').textContent = `Library / ${artifact.name}`;
+  if (byId('tree-breadcrumb')) byId('tree-breadcrumb').textContent = `In this graph / ${artifact.name}`;
   if (byId('artifact-media')) byId('artifact-media').textContent = version.media_type;
   const details = byId('artifact-details');
   if (details) {
@@ -814,14 +1717,28 @@ async function loadLibrary() {
         action.textContent = 'Open site'; li.append(open, action);
       } else li.append(open);
       const meta = document.createElement('span'); meta.className = 'library-meta';
-      meta.textContent = `Updated ${artifact.updated_at}`;
+      meta.textContent = `Updated ${formatDate(artifact.updated_at)}`;
       li.append(meta); return li;
     };
     const renderGraphCard = (artifact) => {
-      const li = renderArtifact(artifact, workspacePath); li.classList.add('graph-picker-card');
-      const button = li.querySelector('button');
-      if (button) button.setAttribute('aria-label', `Open graph ${artifact.name}`);
-      return li;
+      const li = document.createElement('li'); li.className = 'graph-picker-card';
+      const open = document.createElement('button'); open.type = 'button';
+      open.className = 'graph-card-action'; open.setAttribute('aria-label', `Open graph ${artifact.name}`);
+      open.addEventListener('click', () => location.assign(workspacePath(artifact.id)));
+      const top = document.createElement('span'); top.className = 'graph-card-top';
+      const icon = document.createElement('span'); icon.className = 'graph-icon'; icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = /\.(html?|css|m?js)$/i.test(artifact.name) ? '↗' : '✦';
+      const mark = document.createElement('span'); mark.className = 'graph-open-mark';
+      mark.setAttribute('aria-hidden', 'true'); mark.textContent = '↗'; top.append(icon, mark);
+      const title = document.createElement('h3'); title.textContent = artifact.name;
+      const description = document.createElement('p'); description.className = 'graph-description';
+      description.textContent = 'A connected workspace for documents, sites, and the context around them.';
+      open.append(top, title, description);
+      const meta = document.createElement('div'); meta.className = 'graph-meta';
+      const count = document.createElement('span'); count.className = 'status-dot';
+      count.textContent = `${artifact.graph_edges || 0} linked item${artifact.graph_edges === 1 ? '' : 's'}`;
+      const updated = document.createElement('span'); updated.textContent = `Updated ${formatDate(artifact.updated_at)}`;
+      meta.append(count, updated); li.append(open, meta); return li;
     };
     const graphs = artifacts.filter((artifact) => artifact.graph_edges > 0);
     list('recent-artifacts', artifacts, renderArtifact, 'No artifacts yet. Create one to start your library.');
@@ -879,6 +1796,27 @@ byId('search')?.addEventListener('submit', (event) => {
 byId('grep')?.addEventListener('submit', (event) => {
   event.preventDefault(); discover('artifact_grep', 'pattern', 'grep-pattern');
 });
+byId('new-entry')?.addEventListener('click', () => {
+  const panel = byId('new');
+  if (panel) {
+    panel.open = true;
+    setTimeout(() => panel.querySelector('input')?.focus(), 0);
+  }
+});
+byId('workspace-search')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const results = byId('workspace-search-results');
+  if (results) results.hidden = false;
+  discover('artifact_search', 'query', 'workspace-search-query');
+});
+byId('edit-entry')?.addEventListener('click', (event) => {
+  event.preventDefault();
+  openWorkspacePanel('update', 'edit-entry');
+});
+byId('share-entry')?.addEventListener('click', (event) => {
+  event.preventDefault();
+  openWorkspacePanel('workspace-share', 'share-entry');
+});
 byId('edit')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
@@ -907,6 +1845,7 @@ byId('human-edit')?.addEventListener('submit', async (event) => {
       source_context: {interface: 'library-ui'},
     });
     history.replaceState(null, '', location.pathname);
+    closeWorkspacePanel('update');
     await loadArtifact(); status('Saved a new version.');
   } catch (error) {
     if (error.status === 409) failure('A newer version already exists. Refresh before saving again; your edit remains here.');
@@ -930,6 +1869,7 @@ byId('share')?.addEventListener('submit', async (event) => {
     await call('artifact_share', {artifact_id: artifactId, subject_actor_id: subject,
       action: byId('share-role').value, reason: 'shared in inspection UI'});
     byId('share-recipient').value = '';
+    closeWorkspacePanel('workspace-share');
     await loadArtifact(); status(`Shared with ${subject}.`);
   } catch (error) { handleFailure(error); }
 });
@@ -1081,22 +2021,24 @@ def ui_html(
         else ""
     )
     human_editor = (
-        '<details id="update" class="surface editor-card card-pad"><summary>Update document</summary>'
+        '<dialog id="update" class="surface editor-card" aria-labelledby="update-title">'
+        '<div class="panel-heading"><div><p class="eyebrow">EDIT</p><h2 id="update-title">Update document</h2></div>'
+        '<button id="close-edit" class="panel-close" type="button" aria-label="Close editor">×</button></div>'
         '<form id="human-edit" class="stacked-form"><input id="human-parent-version" type="hidden">'
         '<label for="human-content">Content<textarea id="human-content" spellcheck="true"></textarea></label>'
-        '<button id="human-save" type="submit">Save new version</button></form></details>'
+        '<button id="human-save" type="submit">Save new version</button></form></dialog>'
         if human and not debug
         else ""
     )
     human_share = (
-        '<section id="workspace-share" class="surface access-card card-pad" aria-labelledby="workspace-share-title">'
+        '<dialog id="workspace-share" class="surface access-card" aria-labelledby="workspace-share-title">'
         '<div class="card-heading"><div><p class="eyebrow">SHARE</p><h2 id="workspace-share-title">Share this artifact</h2></div>'
-        '<span class="state-pill">Private by default</span></div>'
-        '<p class="field-help">Share with a named person using the existing artifact access contract.</p>'
+        '<button id="close-share" class="panel-close" type="button" aria-label="Close sharing">×</button></div>'
+        '<p class="privacy-line"><span class="state-pill">Private by default</span> Only people you add can open this artifact.</p>'
         '<form id="share" class="link-form"><label for="share-recipient">Person identifier'
         '<input id="share-recipient" required maxlength="255" placeholder="person-id"></label>'
         '<label for="share-role">Access<select id="share-role"><option value="read">Can view</option>'
-        '<option value="write">Can edit</option></select></label><button type="submit">Share</button></form></section>'
+        '<option value="write">Can edit</option></select></label><button type="submit">Share</button></form></dialog>'
         if workspace
         else ""
     )
@@ -1109,13 +2051,16 @@ def ui_html(
         else ""
     )
     workspace_nav = (
-        '<a id="back-to-library" class="button-secondary" href="/">Back to library</a>'
+        '<a id="back-to-library" class="button-secondary" href="/">' + ("← Graphs" if workspace else "Back to library") + '</a>'
         + (
             '<div class="view-switch" role="tablist" aria-label="Workspace view">'
             '<button id="read-mode" type="button" role="tab" aria-selected="true" class="is-active">Read</button>'
             '<button id="graph-mode" type="button" role="tab" aria-selected="false">Graph</button></div>'
-            '<div class="workspace-actions"><a id="share-entry" href="#workspace-share">Share</a>'
-            '<a id="edit-entry" href="#update">Edit</a></div>'
+            '<div class="workspace-actions"><button id="share-entry" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="workspace-share">Share</button>'
+            '<button id="edit-entry" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="update">Edit</button></div>'
+            '<a id="standalone-link" class="workspace-option" href="#" target="_blank" rel="noreferrer" hidden>Open site ↗</a>'
+            '<form id="workspace-search" class="workspace-search" role="search"><label class="sr-only" for="workspace-search-query">Search this graph</label>'
+            '<input id="workspace-search-query" type="search" maxlength="500" placeholder="Search graph"><button type="submit" aria-label="Search graph">⌕</button></form>'
             if workspace
             else '<a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#graph-context">Graph</a>'
         )
@@ -1127,7 +2072,7 @@ def ui_html(
     )
     workspace_tree = (
         '<aside id="artifact-tree-panel" class="tree-panel" aria-label="Artifact tree">'
-        '<div class="tree-heading"><h2>Workspace</h2><p id="tree-breadcrumb" class="tree-breadcrumb">Library</p></div>'
+        '<div class="tree-heading"><h2>Files</h2><p id="tree-breadcrumb" class="tree-breadcrumb">In this graph</p></div>'
         '<nav id="artifact-tree" class="artifact-tree" aria-label="Files and folders">'
         '<p class="muted">Loading artifacts…</p></nav></aside>'
         if workspace
@@ -1135,8 +2080,8 @@ def ui_html(
     )
     root_library = (
         '<section id="graphs" class="surface graph-library" aria-labelledby="graphs-title">'
-        '<div class="section-heading"><div><p class="eyebrow">GRAPH PICKER</p><h2 id="graphs-title">Choose a graph</h2></div>'
-        '<p>Open a connected workspace.</p></div><ul id="graph-artifacts" class="library-list graph-picker-list">'
+        '<div class="section-heading"><div><p class="eyebrow">YOUR KNOWLEDGE SPACE</p><span class="sr-only">GRAPH PICKER</span><h2 id="graphs-title">Your graphs</h2><span class="sr-only">Choose a graph</span></div>'
+        '<a class="primary-button" href="#new" id="new-entry">＋ New graph</a></div><ul id="graph-artifacts" class="library-list graph-picker-list">'
         '<li class="muted">Loading graphs…</li></ul></section>'
         if not debug
         else '<section class="surface library-card" aria-labelledby="recent-title"><div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2 id="recent-title">Recent artifacts</h2></div><p id="library-count">Loading recent artifacts…</p></div><ul id="recent-artifacts" class="library-list"><li class="muted">Loading recent artifacts…</li></ul></section>'
@@ -1163,7 +2108,7 @@ def ui_html(
             '<a href="/#find"><span class="nav-index" aria-hidden="true">03</span>Search</a>'
             '<a href="/#new"><span class="nav-index" aria-hidden="true">04</span>New</a>'
             if debug
-            else '<a href="/#new"><span class="nav-index" aria-hidden="true">03</span>New</a>'
+            else '<a href="/#shared">Shared with me</a><span class="avatar" aria-label="Brandon’s account">BS</span>'
         )
     )
     preview_debug = (
@@ -1182,7 +2127,7 @@ def ui_html(
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Folio Lattice</title><link rel="stylesheet" href="/ui.css"></head>
-<body data-render-origin="{origin}" data-auth-state="{state}">
+<body class="{'debug-route' if debug else 'workspace-route' if workspace else ''}" data-render-origin="{origin}" data-auth-state="{state}">
 <a class="skip-link" href="#main">Skip to content</a>
 <div class="app-shell">
 <header class="topbar">
@@ -1194,18 +2139,21 @@ def ui_html(
   <div class="live-region"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
   <section id="welcome" class="welcome-panel" aria-labelledby="welcome-title">
-    <p class="eyebrow">FOLIO LATTICE / LIBRARY</p>
-    <h1 id="welcome-title">Choose where to work.</h1>
+    <p class="eyebrow">LIBRARY</p>
+    <h1 id="welcome-title">Graphs</h1>
+    <p class="lede">Everything you and your agents are building, arranged around the work—not the machinery underneath.</p>
     <div class="welcome-grid">
       {root_library}
       <div class="library-actions">{root_library_actions}{debug_open}</div>
+      {'' if debug else '<section id="shared" class="shared-empty" aria-labelledby="shared-title"><div class="section-heading"><div><p class="eyebrow">SHARED WITH YOU</p><h2 id="shared-title">Shared with me</h2></div></div><p class="muted">Nothing shared with you yet.</p></section>'}
     </div>
   </section>
   <article id="workspace" class="workspace{" has-tree" if workspace else ""}" hidden>
     <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1>{'<div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div>' if debug else ""}</div></div></div><nav class="workspace-nav" aria-label="Artifact sections">{workspace_nav}</nav></header>
+    {('<div id="workspace-search-results" class="workspace-search-results" hidden><ul id="results" class="results-list"><li class="muted">Search this graph.</li></ul></div>' if workspace else '')}
     <div class="workspace-layout">{workspace_tree}<div class="primary-column">
-      <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Readable document</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Loading readable content…</p><div id="readable-content" class="document-content">Loading content…</div></section>
-      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div><div class="preview-actions"><a id="standalone-link" class="button-secondary" href="#" target="_blank" rel="noreferrer" hidden>Standalone</a>{preview_debug}</div></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>
+      <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Readable document</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Loading readable content…</p><div id="readable-content" class="document-slot">Loading content…</div></section>
+      <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div><div class="preview-actions">{preview_debug}</div></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>
       {debug_editor}
       {human_editor}
       {human_share}
