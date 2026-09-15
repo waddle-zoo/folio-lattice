@@ -66,6 +66,7 @@ TOOL_SCOPES = {
     "artifact_grep": "artifact:search",
     "graph_link": "graph:write",
     "graph_traverse": "graph:read",
+    "graph_component": "graph:read",
     "artifact_versions": "artifact:read",
 }
 

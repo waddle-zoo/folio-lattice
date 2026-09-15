@@ -25,6 +25,7 @@ TOOL_SCOPES = {
     "artifact_grep": "artifact:search",
     "graph_link": "graph:write",
     "graph_traverse": "graph:read",
+    "graph_component": "graph:read",
     "artifact_versions": "artifact:read",
     "artifact_share": "artifact:share",
     "artifact_revoke": "artifact:share",
@@ -56,10 +57,10 @@ def build_mcp_server(
 
     fixed_local_identity = tenant_id is not None and actor is not None
 
-    def identity(required_scope: str | None = None) -> tuple[str, str]:
+    def identity(*required_scopes: str) -> tuple[str, str]:
         principal = get_request_principal()
         if principal is not None:
-            if required_scope is not None and required_scope not in principal.scopes:
+            if any(scope not in principal.scopes for scope in required_scopes):
                 raise ToolError("operation not permitted")
             return principal.tenant_id, principal.actor_id
         if tenant_id is None or actor is None:
@@ -167,10 +168,22 @@ def build_mcp_server(
     def artifact_search(
         query: Annotated[str, Field(min_length=1, max_length=500)],
         limit: Annotated[int, Field(ge=1, le=100)] = 20,
+        graph_root_artifact_id: Annotated[
+            str | None, Field(min_length=1, max_length=MAX_ID_LENGTH)
+        ] = None,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_search"])
+        required_scopes = [TOOL_SCOPES["artifact_search"]]
+        if graph_root_artifact_id is not None:
+            required_scopes.append(TOOL_SCOPES["graph_component"])
+        request_tenant, request_actor = identity(*required_scopes)
         return _tool_errors(
-            lambda: service.search(request_tenant, query, limit, actor=policy_actor(request_actor))
+            lambda: service.search(
+                request_tenant,
+                query,
+                limit,
+                actor=policy_actor(request_actor),
+                graph_root_artifact_id=graph_root_artifact_id,
+            )
         )
 
     @server.tool(description="Find a bounded literal string within indexed text chunks.")
@@ -214,6 +227,21 @@ def build_mcp_server(
                 request_tenant,
                 start_artifact_id,
                 max_depth,
+                limit,
+                actor=policy_actor(request_actor),
+            )
+        )
+
+    @server.tool(description="List readable artifacts in a bounded undirected graph component.")
+    def graph_component(
+        start_artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+        limit: Annotated[int, Field(ge=1, le=500)] = 100,
+    ) -> list[dict[str, Any]]:
+        request_tenant, request_actor = identity(TOOL_SCOPES["graph_component"])
+        return _tool_errors(
+            lambda: service.graph_component(
+                request_tenant,
+                start_artifact_id,
                 limit,
                 actor=policy_actor(request_actor),
             )

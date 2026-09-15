@@ -60,6 +60,44 @@ class ServiceTests(unittest.TestCase):
         traversal = self.service.traverse("acme", artifact_id, max_depth=1)
         self.assertEqual(traversal[0]["target_artifact_id"], second["artifact"]["id"])
 
+    def test_graph_component_is_undirected_and_search_can_scope_to_it(self):
+        incoming = self.service.create_artifact(
+            tenant_id="acme", name="duplicate.txt", data=b"component marker"
+        )
+        root = self.service.create_artifact(tenant_id="acme", name="root.txt", data=b"root node")
+        outgoing = self.service.create_artifact(
+            tenant_id="acme", name="outgoing.txt", data=b"component marker"
+        )
+        disconnected = self.service.create_artifact(
+            tenant_id="acme", name="duplicate.txt", data=b"component marker"
+        )
+        self.service.link("acme", incoming["artifact"]["id"], root["artifact"]["id"], "references")
+        self.service.link("acme", root["artifact"]["id"], outgoing["artifact"]["id"], "references")
+        self.service.link(
+            "acme", outgoing["artifact"]["id"], incoming["artifact"]["id"], "references"
+        )
+
+        component = self.service.graph_component("acme", root["artifact"]["id"])
+        self.assertEqual(
+            {item["id"] for item in component},
+            {incoming["artifact"]["id"], root["artifact"]["id"], outgoing["artifact"]["id"]},
+        )
+        leaf_component = self.service.graph_component("acme", outgoing["artifact"]["id"])
+        self.assertEqual(
+            {item["id"] for item in leaf_component}, {item["id"] for item in component}
+        )
+        bounded = self.service.graph_component("acme", outgoing["artifact"]["id"], limit=2)
+        self.assertEqual(len(bounded), 2)
+        self.assertEqual(len({item["id"] for item in bounded}), 2)
+        scoped = self.service.search(
+            "acme", "component", graph_root_artifact_id=root["artifact"]["id"]
+        )
+        self.assertEqual(
+            {item["artifact_id"] for item in scoped},
+            {incoming["artifact"]["id"], outgoing["artifact"]["id"]},
+        )
+        self.assertNotIn(disconnected["artifact"]["id"], {item["artifact_id"] for item in scoped})
+
     def test_parent_mismatch_does_not_create_version(self):
         first = self.service.create_artifact(
             tenant_id="acme", name="one.txt", data=b"one", media_type="text/plain"
@@ -181,6 +219,44 @@ class ServiceTests(unittest.TestCase):
             ),
             [],
         )
+        self.assertEqual(
+            [
+                item["id"]
+                for item in self.service.graph_component(
+                    "tenant-a", source["artifact"]["id"], actor="same-actor"
+                )
+            ],
+            [source["artifact"]["id"]],
+        )
+
+    def test_graph_component_stops_at_unreadable_bridge(self):
+        root = self.service.create_artifact(
+            tenant_id="acme", name="root", data=b"root", actor="owner"
+        )
+        bridge = self.service.create_artifact(
+            tenant_id="acme", name="bridge", data=b"bridge", actor="owner"
+        )
+        beyond = self.service.create_artifact(
+            tenant_id="acme", name="beyond", data=b"beyond", actor="owner"
+        )
+        self.service.link("acme", root["artifact"]["id"], bridge["artifact"]["id"], "references")
+        self.service.link("acme", bridge["artifact"]["id"], beyond["artifact"]["id"], "references")
+        self.service.share_artifact(
+            "acme", root["artifact"]["id"], actor="owner", subject_actor_id="reader"
+        )
+        self.service.share_artifact(
+            "acme", beyond["artifact"]["id"], actor="owner", subject_actor_id="reader"
+        )
+
+        self.assertEqual(
+            [
+                item["id"]
+                for item in self.service.graph_component(
+                    "acme", root["artifact"]["id"], actor="reader"
+                )
+            ],
+            [root["artifact"]["id"]],
+        )
 
     def test_binary_artifact_round_trips(self):
         data = b"\x00\x01\xff"
@@ -196,6 +272,19 @@ class ServiceTests(unittest.TestCase):
             tenant_id="acme", name="empty.txt", data=b"", media_type="text/plain"
         )
         artifact_id = created["artifact"]["id"]
+        foreign = self.service.create_artifact(tenant_id="other", name="foreign.txt", data=b"x")
+        private = self.service.create_artifact(
+            tenant_id="acme", name="private.txt", data=b"private", actor="owner"
+        )
+        for root, actor in (
+            ("art_missing", None),
+            (foreign["artifact"]["id"], None),
+            (private["artifact"]["id"], "member"),
+        ):
+            with self.assertRaisesRegex(FolioError, "artifact not found"):
+                self.service.graph_component("acme", root, actor=actor)
+            with self.assertRaisesRegex(FolioError, "artifact not found"):
+                self.service.search("acme", "private", actor=actor, graph_root_artifact_id=root)
         with self.assertRaisesRegex(FolioError, "artifact not found"):
             self.service.get_artifact("acme", "art_missing")
         with self.assertRaisesRegex(FolioError, "version not found"):

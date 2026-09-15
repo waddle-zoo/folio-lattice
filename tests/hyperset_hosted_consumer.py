@@ -37,6 +37,7 @@ PUBLIC_TOOLS = frozenset(
         "artifact_grep",
         "graph_link",
         "graph_traverse",
+        "graph_component",
         "artifact_versions",
     }
 )
