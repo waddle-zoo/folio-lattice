@@ -892,6 +892,15 @@ body:not(.debug-route):not(.human-route):not(.standalone-route) .shared-empty {
   padding-top: 20px;
 }
 body:not(.debug-route):not(.human-route):not(.standalone-route) .shared-empty .section-heading { margin-bottom: 4px; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .artifact-library {
+  margin-top: 16px;
+  padding: 24px 28px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .artifact-library .section-heading { margin-bottom: 8px; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .artifact-library .section-heading .eyebrow { display: none; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .artifact-library .section-heading h2 { font-size: 1rem; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .artifact-library .library-list { margin-top: 0; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .artifact-library .library-item { padding-inline: 0; }
 body.workspace-route {
   min-height: 100vh;
   overflow: hidden;
@@ -1361,6 +1370,8 @@ function setWorkspaceMode(mode, persist = true) {
   byId('graph-mode')?.classList.toggle('is-active', graph);
   byId('read-mode')?.setAttribute('aria-selected', String(!graph));
   byId('graph-mode')?.setAttribute('aria-selected', String(graph));
+  byId('read-mode')?.setAttribute('tabindex', graph ? '-1' : '0');
+  byId('graph-mode')?.setAttribute('tabindex', graph ? '0' : '-1');
   byId('reader')?.toggleAttribute('hidden', graph || workspaceWeb);
   byId('preview-card')?.toggleAttribute('hidden', graph || !workspaceWeb);
   if (graph) {
@@ -1380,6 +1391,27 @@ function setWorkspaceMode(mode, persist = true) {
 }
 byId('read-mode')?.addEventListener('click', () => setWorkspaceMode('read'));
 byId('graph-mode')?.addEventListener('click', () => setWorkspaceMode('graph'));
+document.querySelectorAll('[role="tab"]').forEach((tab) => tab.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  event.preventDefault();
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  const next = tabs[(tabs.indexOf(event.currentTarget) + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
+  next.focus(); next.click();
+}));
+
+function updatePrimaryNav() {
+  if (debugMode || workspaceMode || standaloneMode) return;
+  const hash = location.hash;
+  const target = hash === '#graphs' ? '/#graphs' : hash === '#shared' ? '/#shared' : '/';
+  document.querySelectorAll('.primary-nav a').forEach((link) => {
+    const active = link.getAttribute('href') === target;
+    link.classList.toggle('is-active', active);
+    if (active) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+}
+addEventListener('hashchange', updatePrimaryNav);
+updatePrimaryNav();
 
 let lastPanelTrigger = null;
 function openWorkspacePanel(id, triggerId) {
@@ -1706,7 +1738,7 @@ async function loadLibrary() {
   status('Loading recent artifacts…');
   try {
     const artifacts = await call('artifact_list', {limit: 20});
-    const renderArtifact = (artifact, destination = artifactPath) => {
+    const renderArtifact = (artifact, destination = (debugMode ? artifactPath : workspacePath)) => {
       const li = document.createElement('li'); li.className = 'library-item';
       const open = button(artifact.name, () => {
         location.assign(destination(artifact.id));
@@ -1742,7 +1774,9 @@ async function loadLibrary() {
     };
     const graphs = artifacts.filter((artifact) => artifact.graph_edges > 0);
     list('recent-artifacts', artifacts, renderArtifact, 'No artifacts yet. Create one to start your library.');
-    list('graph-artifacts', graphs.length ? graphs : artifacts, renderGraphCard, 'No graphs yet. Create one to start your library.');
+    list('graph-artifacts', graphs, renderGraphCard, 'No graphs yet. Create one to start your library.');
+    list('artifact-library', artifacts.filter((artifact) => artifact.graph_edges === 0), renderArtifact,
+      'No standalone artifacts. Create one to keep a file outside a graph.');
     if (byId('library-count')) byId('library-count').textContent = `${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'}`;
     status('Library ready.');
   } catch (error) { handleFailure(error); }
@@ -2022,7 +2056,7 @@ def ui_html(
     )
     human_editor = (
         '<dialog id="update" class="surface editor-card" aria-labelledby="update-title">'
-        '<div class="panel-heading"><div><p class="eyebrow">EDIT</p><h2 id="update-title">Update document</h2></div>'
+        '<div class="panel-heading"><div><p class="eyebrow">EDIT</p><h2 id="update-title">Edit artifact</h2></div>'
         '<button id="close-edit" class="panel-close" type="button" aria-label="Close editor">×</button></div>'
         '<form id="human-edit" class="stacked-form"><input id="human-parent-version" type="hidden">'
         '<label for="human-content">Content<textarea id="human-content" spellcheck="true"></textarea></label>'
@@ -2054,8 +2088,8 @@ def ui_html(
         '<a id="back-to-library" class="button-secondary" href="/">' + ("← Graphs" if workspace else "Back to library") + '</a>'
         + (
             '<div class="view-switch" role="tablist" aria-label="Workspace view">'
-            '<button id="read-mode" type="button" role="tab" aria-selected="true" class="is-active">Read</button>'
-            '<button id="graph-mode" type="button" role="tab" aria-selected="false">Graph</button></div>'
+            '<button id="read-mode" type="button" role="tab" aria-selected="true" aria-controls="reader" tabindex="0" class="is-active">Read</button>'
+            '<button id="graph-mode" type="button" role="tab" aria-selected="false" aria-controls="graph-context" tabindex="-1">Graph</button></div>'
             '<div class="workspace-actions"><button id="share-entry" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="workspace-share">Share</button>'
             '<button id="edit-entry" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="update">Edit</button></div>'
             '<a id="standalone-link" class="workspace-option" href="#" target="_blank" rel="noreferrer" hidden>Open site ↗</a>'
@@ -2081,8 +2115,11 @@ def ui_html(
     root_library = (
         '<section id="graphs" class="surface graph-library" aria-labelledby="graphs-title">'
         '<div class="section-heading"><div><p class="eyebrow">YOUR KNOWLEDGE SPACE</p><span class="sr-only">GRAPH PICKER</span><h2 id="graphs-title">Your graphs</h2><span class="sr-only">Choose a graph</span></div>'
-        '<a class="primary-button" href="#new" id="new-entry">＋ New graph</a></div><ul id="graph-artifacts" class="library-list graph-picker-list">'
+        '<a class="primary-button" href="#new" id="new-entry">＋ New artifact</a></div><ul id="graph-artifacts" class="library-list graph-picker-list">'
         '<li class="muted">Loading graphs…</li></ul></section>'
+        '<section id="artifacts" class="surface artifact-library" aria-labelledby="artifacts-title">'
+        '<div class="section-heading"><div><p class="eyebrow">FILES WITHOUT LINKS</p><h2 id="artifacts-title">Your artifacts</h2></div></div>'
+        '<ul id="artifact-library" class="library-list"><li class="muted">Loading artifacts…</li></ul></section>'
         if not debug
         else '<section class="surface library-card" aria-labelledby="recent-title"><div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2 id="recent-title">Recent artifacts</h2></div><p id="library-count">Loading recent artifacts…</p></div><ul id="recent-artifacts" class="library-list"><li class="muted">Loading recent artifacts…</li></ul></section>'
     )
@@ -2102,7 +2139,7 @@ def ui_html(
         )
     )
     primary_nav = (
-        '<a class="is-active" href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a>'
+        '<a href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a>'
         '<a href="/#graphs"><span class="nav-index" aria-hidden="true">02</span>Graphs</a>'
         + (
             '<a href="/#find"><span class="nav-index" aria-hidden="true">03</span>Search</a>'
