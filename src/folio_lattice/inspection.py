@@ -1307,9 +1307,20 @@ function showForbiddenFailure() {
   byId('auth-action').hidden = false;
   byId('auth-recovery').hidden = false;
 }
+function showUnavailableFailure() {
+  hideProtectedView();
+  failure('We couldn’t open that artifact. It may have been moved or you may not have access.');
+  byId('auth-recovery-title').textContent = 'Artifact unavailable';
+  byId('auth-recovery-message').textContent = 'Check the library for another copy or return home.';
+  byId('auth-action').textContent = 'Return to library';
+  byId('auth-action').href = '/';
+  byId('auth-action').hidden = false;
+  byId('auth-recovery').hidden = false;
+}
 function handleFailure(error) {
   if (error.status === 401) { showAuthFailure(); return; }
   if (error.status === 403) { showForbiddenFailure(); return; }
+  if (/artifact not found/i.test(error.message || '')) { showUnavailableFailure(); return; }
   if (error.status === 409) {
     failure('A newer version already exists. Refresh before saving again; your edit remains here.');
     return;
@@ -1489,24 +1500,35 @@ function renderArtifactTree(artifacts) {
   };
   target.append(renderNode(root));
 }
-function renderGraphMap(edges) {
+function renderGraphMap(edges, component = []) {
   const map = byId('graph-map');
   if (!map) return;
   map.replaceChildren();
   const source = document.createElement('div'); source.className = 'graph-node graph-source';
   source.textContent = byId('title')?.textContent || 'Current artifact'; map.append(source);
-  if (!edges.length) {
+  const edgeById = new Map(edges.map((edge) => [edge.target_artifact_id, edge]));
+  const targets = new Map();
+  component.forEach((artifact) => {
+    if (artifact.id && artifact.id !== artifactId) targets.set(artifact.id, artifact);
+  });
+  edges.forEach((edge) => {
+    if (edge.target_artifact_id) targets.set(edge.target_artifact_id, {
+      id: edge.target_artifact_id, name: edge.target_artifact_name || 'Related artifact',
+    });
+  });
+  if (!targets.size) {
     const empty = document.createElement('p'); empty.className = 'muted';
     empty.textContent = 'No connected artifacts.'; map.append(empty); return;
   }
   const links = document.createElement('div'); links.className = 'graph-links';
-  edges.forEach((edge) => {
-    const target = edge.target_artifact_name || 'Related artifact';
-    const link = button(target, () => location.assign(workspacePath(edge.target_artifact_id)));
+  targets.forEach((artifact, id) => {
+    const edge = edgeById.get(id);
+    const target = artifact.name || 'Related artifact';
+    const link = button(target, () => location.assign(workspacePath(id)));
     link.classList.add('graph-node', 'graph-target');
-    link.setAttribute('aria-label', `${edge.edge_type}: ${target}`);
+    link.setAttribute('aria-label', `${edge?.edge_type || 'connected'}: ${target}`);
     const edgeLabel = document.createElement('span'); edgeLabel.className = 'graph-edge-label';
-    edgeLabel.textContent = edge.edge_type;
+    edgeLabel.textContent = edge?.edge_type || 'connected';
     const item = document.createElement('div'); item.className = 'graph-link';
     item.append(edgeLabel, link); links.append(item);
   });
@@ -1716,7 +1738,7 @@ async function loadArtifact(versionId = null) {
   byId('workspace').hidden = false; showRead(read);
   if (workspaceMode) {
     renderArtifactTree(tree);
-    renderGraphMap(graph);
+    renderGraphMap(graph, tree);
     setWorkspaceMode(new URLSearchParams(location.search).get('view') === 'graph' ? 'graph' : 'read', false);
   }
   if (debugMode && byId('versions')) list('versions', versions, (version) => {
@@ -1734,7 +1756,7 @@ async function loadArtifact(versionId = null) {
         location.assign(workspacePath(edge.target_artifact_id));
       })); return li;
     }, 'No relationships.');
-    renderGraphMap(graph);
+    renderGraphMap(graph, workspaceMode ? tree : undefined);
   }
   if (debugMode) {
     try {
@@ -1801,11 +1823,26 @@ async function loadLibrary() {
       open.append(top, title, description);
       const meta = document.createElement('div'); meta.className = 'graph-meta';
       const count = document.createElement('span'); count.className = 'status-dot';
-      count.textContent = `${artifact.graph_edges || 0} linked item${artifact.graph_edges === 1 ? '' : 's'}`;
+      const linkedItems = artifact.component_size ? Math.max(0, artifact.component_size - 1) : (artifact.graph_edges || 0);
+      count.textContent = `${linkedItems} linked item${linkedItems === 1 ? '' : 's'}`;
       const updated = document.createElement('span'); updated.textContent = `Updated ${formatDate(artifact.updated_at)}`;
       meta.append(count, updated); li.append(open, meta); return li;
     };
-    const graphs = artifacts.filter((artifact) => artifact.graph_edges > 0);
+    const graphCandidates = artifacts.filter((artifact) => artifact.graph_edges > 0);
+    const graphGroups = await Promise.all(graphCandidates.map(async (artifact) => {
+      try {
+        const component = await call('graph_component', {start_artifact_id: artifact.id, limit: 100});
+        const ids = component.map((item) => item.id).filter(Boolean).sort();
+        return {...artifact, component_size: component.length, graph_key: ids.join('\u0000') || artifact.id};
+      } catch (_error) {
+        return {...artifact, graph_key: artifact.id};
+      }
+    }));
+    const seenGraphs = new Set();
+    const graphs = graphGroups.filter((artifact) => {
+      if (seenGraphs.has(artifact.graph_key)) return false;
+      seenGraphs.add(artifact.graph_key); return true;
+    });
     list('recent-artifacts', artifacts, renderArtifact, 'No artifacts yet. Create one to start your library.');
     list('graph-artifacts', graphs, renderGraphCard, 'No graphs yet. Create one to start your library.');
     list('artifact-library', artifacts.filter((artifact) => artifact.graph_edges === 0), renderArtifact,
