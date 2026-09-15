@@ -15,6 +15,22 @@ from .service import FolioError, FolioLattice
 MAX_ID_LENGTH = 255
 MAX_BASE64_LENGTH = 12 * 1024 * 1024
 
+TOOL_SCOPES = {
+    "artifact_create": "artifact:write",
+    "artifact_write": "artifact:write",
+    "artifact_list": "artifact:read",
+    "artifact_read": "artifact:read",
+    "artifact_read_chunk": "artifact:read",
+    "artifact_search": "artifact:search",
+    "artifact_grep": "artifact:search",
+    "graph_link": "graph:write",
+    "graph_traverse": "graph:read",
+    "artifact_versions": "artifact:read",
+    "artifact_share": "artifact:share",
+    "artifact_revoke": "artifact:share",
+    "artifact_acl": "artifact:share",
+}
+
 
 def _tool_errors[T](operation: Callable[[], T]) -> T:
     try:
@@ -40,9 +56,11 @@ def build_mcp_server(
 
     fixed_local_identity = tenant_id is not None and actor is not None
 
-    def identity() -> tuple[str, str]:
+    def identity(required_scope: str | None = None) -> tuple[str, str]:
         principal = get_request_principal()
         if principal is not None:
+            if required_scope is not None and required_scope not in principal.scopes:
+                raise ToolError("operation not permitted")
             return principal.tenant_id, principal.actor_id
         if tenant_id is None or actor is None:
             raise FolioError("authentication required")
@@ -68,7 +86,7 @@ def build_mcp_server(
         reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "initial artifact",
         source_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_create"])
         return _tool_errors(
             lambda: service.create_artifact(
                 tenant_id=request_tenant,
@@ -91,7 +109,7 @@ def build_mcp_server(
         source_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         def operation() -> dict[str, Any]:
-            request_tenant, request_actor = identity()
+            request_tenant, request_actor = identity(TOOL_SCOPES["artifact_write"])
             artifact = service.get_artifact(
                 request_tenant,
                 artifact_id,
@@ -116,7 +134,7 @@ def build_mcp_server(
     def artifact_list(
         limit: Annotated[int, Field(ge=1, le=100)] = 20,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_list"])
         return _tool_errors(
             lambda: service.list_artifacts(request_tenant, limit, actor=policy_actor(request_actor))
         )
@@ -126,7 +144,7 @@ def build_mcp_server(
         artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         version_id: Annotated[str | None, Field(max_length=MAX_ID_LENGTH)] = None,
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_read"])
         return _tool_errors(
             lambda: service.read_artifact(
                 request_tenant,
@@ -140,7 +158,7 @@ def build_mcp_server(
     def artifact_read_chunk(
         chunk_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_read_chunk"])
         return _tool_errors(
             lambda: service.read_chunk(request_tenant, chunk_id, actor=policy_actor(request_actor))
         )
@@ -150,7 +168,7 @@ def build_mcp_server(
         query: Annotated[str, Field(min_length=1, max_length=500)],
         limit: Annotated[int, Field(ge=1, le=100)] = 20,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_search"])
         return _tool_errors(
             lambda: service.search(request_tenant, query, limit, actor=policy_actor(request_actor))
         )
@@ -160,7 +178,7 @@ def build_mcp_server(
         pattern: Annotated[str, Field(min_length=1, max_length=500)],
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_grep"])
         return _tool_errors(
             lambda: service.grep(request_tenant, pattern, limit, actor=policy_actor(request_actor))
         )
@@ -172,7 +190,7 @@ def build_mcp_server(
         edge_type: Annotated[str, Field(min_length=1, max_length=100)],
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["graph_link"])
         return _tool_errors(
             lambda: service.link(
                 request_tenant,
@@ -190,7 +208,7 @@ def build_mcp_server(
         max_depth: Annotated[int, Field(ge=0, le=10)] = 2,
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["graph_traverse"])
         return _tool_errors(
             lambda: service.traverse(
                 request_tenant,
@@ -206,7 +224,7 @@ def build_mcp_server(
         artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_versions"])
         return _tool_errors(
             lambda: service.versions(
                 request_tenant, artifact_id, limit, actor=policy_actor(request_actor)
@@ -220,7 +238,7 @@ def build_mcp_server(
         action: Annotated[str, Field(pattern="^(read|write|share)$")] = "read",
         reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "shared artifact",
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_share"])
         return _tool_errors(
             lambda: service.share_artifact(
                 request_tenant,
@@ -239,7 +257,7 @@ def build_mcp_server(
         grant_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "revoked share",
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_revoke"])
         return _tool_errors(
             lambda: service.revoke_share(
                 request_tenant,
@@ -255,7 +273,7 @@ def build_mcp_server(
     def artifact_acl(
         artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity()
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_acl"])
         return _tool_errors(
             lambda: service.artifact_acl(
                 request_tenant,
