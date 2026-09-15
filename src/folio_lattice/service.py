@@ -34,6 +34,7 @@ MAX_REASON_LENGTH = 2_000
 MAX_CONTEXT_BYTES = 32 * 1024
 MAX_QUERY_LENGTH = 500
 MAX_EDGE_TYPE_LENGTH = 100
+MAX_GRAPH_COMPONENT_NODES = 500
 ACL_ACTIONS = frozenset({"read", "write", "share"})
 ACL_SUBJECT_TYPE = "actor"
 OWNER_GRANT_REASON = "artifact owner"
@@ -261,9 +262,6 @@ class FolioLattice:
         actor: str | None,
         action: str,
     ) -> None:
-        if actor is None:
-            return
-        self._validate_text("actor", actor, MAX_NAME_LENGTH)
         if action not in ACL_ACTIONS:
             raise FolioError("unknown authorization action")
         artifact = db.execute(
@@ -272,6 +270,9 @@ class FolioLattice:
         ).fetchone()
         if artifact is None:
             raise FolioError("artifact not found")
+        if actor is None:
+            return
+        self._validate_text("actor", actor, MAX_NAME_LENGTH)
         if artifact["owner_actor_id"] == actor:
             return
         grant = db.execute(
@@ -696,18 +697,120 @@ class FolioLattice:
         result["offset_unit"] = "unicode_code_points"
         return result
 
+    def _component_ids(
+        self,
+        db: sqlite3.Connection,
+        tenant_id: str,
+        start_artifact_id: str,
+        limit: int,
+        *,
+        actor: str | None,
+    ) -> list[str]:
+        self._authorize(db, tenant_id, start_artifact_id, actor, "read")
+        limit = max(1, min(limit, MAX_GRAPH_COMPONENT_NODES))
+        seen = {start_artifact_id}
+        ordered = [start_artifact_id]
+        queue = deque([start_artifact_id])
+        access_sql, access_params = self._access_clause(actor, "read")
+        while queue and len(seen) < limit:
+            current = queue.popleft()
+            rows = db.execute(
+                """
+                SELECT a.id AS artifact_id
+                FROM edges e
+                JOIN artifacts a
+                  ON a.tenant_id = e.tenant_id
+                 AND a.id <> ?
+                 AND (a.id = e.source_artifact_id OR a.id = e.target_artifact_id)
+                WHERE e.tenant_id = ?
+                  AND (e.source_artifact_id = ? OR e.target_artifact_id = ?)
+                  AND """
+                + access_sql
+                + " ORDER BY e.created_at, e.id",
+                (current, tenant_id, current, current, *access_params),
+            ).fetchall()
+            for row in rows:
+                artifact_id = row["artifact_id"]
+                if artifact_id in seen:
+                    continue
+                seen.add(artifact_id)
+                ordered.append(artifact_id)
+                queue.append(artifact_id)
+                if len(seen) >= limit:
+                    break
+        return ordered
+
+    def graph_component(
+        self,
+        tenant_id: str,
+        start_artifact_id: str,
+        limit: int = 100,
+        *,
+        actor: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            artifact_ids = self._component_ids(
+                db,
+                tenant_id,
+                start_artifact_id,
+                limit,
+                actor=actor,
+            )
+            placeholders = ",".join("?" for _ in artifact_ids)
+            access_sql, access_params = self._access_clause(actor, "read")
+            rows = db.execute(
+                """
+                SELECT a.id, a.name, a.media_type, a.created_at,
+                       a.current_version_id, v.created_at AS updated_at
+                FROM artifacts a
+                LEFT JOIN versions v
+                  ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
+                WHERE a.tenant_id = ?
+                  AND a.id IN ("""
+                + placeholders
+                + ") AND "
+                + access_sql,
+                (tenant_id, *artifact_ids, *access_params),
+            ).fetchall()
+        by_id = {row["id"]: dict(row) for row in rows}
+        return [by_id[artifact_id] for artifact_id in artifact_ids if artifact_id in by_id]
+
     def search(
-        self, tenant_id: str, query: str, limit: int = 20, *, actor: str | None = None
+        self,
+        tenant_id: str,
+        query: str,
+        limit: int = 20,
+        *,
+        actor: str | None = None,
+        graph_root_artifact_id: str | None = None,
     ) -> list[dict[str, Any]]:
         query = query.strip()
         if not query:
+            if graph_root_artifact_id is not None:
+                with self.connect() as db:
+                    self._authorize(db, tenant_id, graph_root_artifact_id, actor, "read")
             return []
         if len(query) > MAX_QUERY_LENGTH:
             raise FolioError(f"query exceeds {MAX_QUERY_LENGTH} characters")
         match_query = '"' + query.replace('"', '""') + '"'
         try:
             with self.connect() as db:
+                component_ids: list[str] | None = None
+                if graph_root_artifact_id is not None:
+                    component_ids = self._component_ids(
+                        db,
+                        tenant_id,
+                        graph_root_artifact_id,
+                        MAX_GRAPH_COMPONENT_NODES,
+                        actor=actor,
+                    )
                 access_sql, access_params = self._access_clause(actor, "read")
+                component_sql = ""
+                component_params: tuple[str, ...] = ()
+                if component_ids is not None:
+                    placeholders = ",".join("?" for _ in component_ids)
+                    component_sql = f" AND a.id IN ({placeholders})"
+                    component_params = tuple(component_ids)
                 rows = db.execute(
                     """
                     SELECT chunk_fts.chunk_id, chunk_fts.artifact_id, chunk_fts.version_id,
@@ -719,13 +822,21 @@ class FolioLattice:
                      AND a.tenant_id = chunk_fts.tenant_id
                     WHERE chunk_fts.tenant_id = ? AND chunk_fts MATCH ?
                       AND a.current_version_id = chunk_fts.version_id
-                      AND """
+                    """
+                    + component_sql
+                    + " AND "
                     + access_sql
                     + """
                     ORDER BY score
                     LIMIT ?
                     """,
-                    (tenant_id, match_query, *access_params, max(1, min(limit, 100))),
+                    (
+                        tenant_id,
+                        match_query,
+                        *component_params,
+                        *access_params,
+                        max(1, min(limit, 100)),
+                    ),
                 ).fetchall()
         except sqlite3.OperationalError as exc:
             raise FolioError("invalid search query") from exc
@@ -868,6 +979,7 @@ class FolioLattice:
                            a.name AS target_artifact_name
                     FROM edges e
                     JOIN artifacts a ON a.id = e.target_artifact_id
+                     AND a.tenant_id = e.tenant_id
                     WHERE e.tenant_id = ? AND e.source_artifact_id = ?
                       AND """
                     + self._access_clause(actor, "read")[0]

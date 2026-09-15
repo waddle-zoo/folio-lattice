@@ -33,6 +33,9 @@ TENANT_A = "tenant-a"
 TENANT_B = "tenant-b"
 MAX_REQUEST_BYTES = 13 * 1024 * 1024
 PRIVATE_SEED = bytes(range(32))
+RESTART_READY_TIMEOUT_SECONDS = 10.0
+RESTART_POLL_INTERVAL_SECONDS = 0.05
+_BOOT_ID = os.urandom(16).hex()
 
 PROFILES = {
     "A_OWNER": {
@@ -63,6 +66,7 @@ TOOL_SCOPES = {
     "artifact_grep": "artifact:search",
     "graph_link": "graph:write",
     "graph_traverse": "graph:read",
+    "graph_component": "graph:read",
     "artifact_versions": "artifact:read",
 }
 
@@ -328,6 +332,7 @@ def _server_app(host: str, port: int, state_dir: Path, audience: str) -> Any:
         return JSONResponse(
             {
                 "ready": True,
+                "boot_id": _BOOT_ID,
                 "authentication": "deterministic-test-jwks",
                 "tenants": [TENANT_A, TENANT_B],
             }
@@ -395,10 +400,16 @@ def serve(host: str, port: int, state_dir: Path, audience: str) -> None:
     )
 
 
-def _url_json(url: str, *, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
+def _url_json(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    timeout_seconds: float = 3,
+) -> Any:
     data = json.dumps(payload).encode() if payload is not None else None
     request = Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
-    with urlopen(request, timeout=3) as response:
+    with urlopen(request, timeout=timeout_seconds) as response:
         return json.loads(response.read())
 
 
@@ -419,7 +430,34 @@ def control_command(base_url: str, action: str, subject: str | None) -> None:
             payload={"subject": subject},
         )
     else:
+        health = _url_json(f"{base_url.rstrip('/')}/health")
+        previous_boot_id = health.get("boot_id") if isinstance(health, dict) else None
+        if not isinstance(previous_boot_id, str) or not previous_boot_id:
+            raise RuntimeError("restart readiness marker is unavailable")
         _url_json(f"{base_url.rstrip('/')}/__test/restart", method="POST", payload={})
+        _wait_for_restart(base_url, previous_boot_id)
+
+
+def _wait_for_restart(base_url: str, previous_boot_id: str) -> None:
+    deadline = time.monotonic() + RESTART_READY_TIMEOUT_SECONDS
+    health_url = f"{base_url.rstrip('/')}/health"
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        try:
+            health = _url_json(
+                health_url,
+                timeout_seconds=min(0.5, max(0.01, remaining)),
+            )
+            if (
+                isinstance(health, dict)
+                and health.get("ready") is True
+                and health.get("boot_id") != previous_boot_id
+            ):
+                return
+        except (HTTPError, OSError, URLError, ValueError):
+            pass
+        time.sleep(min(RESTART_POLL_INTERVAL_SECONDS, max(0, deadline - time.monotonic())))
+    raise RuntimeError("hosted auth target did not become ready after restart")
 
 
 def _wait_ready(base_url: str, process: subprocess.Popen[bytes]) -> None:

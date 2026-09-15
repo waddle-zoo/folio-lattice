@@ -91,6 +91,7 @@ class OidcTests(unittest.TestCase):
             "iss": self.issuer,
             "aud": self.audience,
             "sub": "subject-1",
+            "scope": "artifact:read artifact:write",
             "iat": 999_900,
             "nbf": 999_900,
             "exp": 1_000_100,
@@ -101,7 +102,13 @@ class OidcTests(unittest.TestCase):
     def test_verifies_exact_claims_and_server_mapping(self) -> None:
         self.assertEqual(
             self.verifier.verify(self._token()),
-            Principal("tenant-a", "actor-a", self.issuer, "subject-1"),
+            Principal(
+                "tenant-a",
+                "actor-a",
+                self.issuer,
+                "subject-1",
+                frozenset({"artifact:read", "artifact:write"}),
+            ),
         )
         for claims in (
             {"iss": "https://wrong.example"},
@@ -113,6 +120,39 @@ class OidcTests(unittest.TestCase):
                 self.verifier.verify(self._token(**claims))
         with self.assertRaises(AuthenticationError):
             self.verifier.verify(jwt.encode({"iss": self.issuer}, b"x" * 32, algorithm="HS256"))
+
+    def test_scope_claim_is_required_and_strictly_parsed(self) -> None:
+        self.assertEqual(
+            self.verifier.verify(self._token(scope="artifact:read graph:read")).scopes,
+            frozenset({"artifact:read", "graph:read"}),
+        )
+        for scope in (
+            None,
+            "",
+            " artifact:read",
+            "artifact:read ",
+            "artifact:\tread",
+            "artifact:\\read",
+        ):
+            with self.assertRaises(AuthenticationError):
+                self.verifier.verify(self._token(scope=scope))
+        missing_scope = {
+            "iss": self.issuer,
+            "aud": self.audience,
+            "sub": "subject-1",
+            "iat": 999_900,
+            "nbf": 999_900,
+            "exp": 1_000_100,
+        }
+        with self.assertRaises(AuthenticationError):
+            self.verifier.verify(
+                jwt.encode(
+                    missing_scope,
+                    self.keys["key-1"],
+                    algorithm="RS256",
+                    headers={"kid": "key-1"},
+                )
+            )
 
     def test_signature_and_key_rotation_are_real_jwks_checks(self) -> None:
         with self.assertRaises(AuthenticationError):

@@ -37,6 +37,7 @@ PUBLIC_TOOLS = frozenset(
         "artifact_grep",
         "graph_link",
         "graph_traverse",
+        "graph_component",
         "artifact_versions",
     }
 )
@@ -811,9 +812,9 @@ def _validate_token(value: str, issuer: str, audience: str) -> Token:
     )
 
 
-def _decode_segment(value: str) -> str:
+def _decode_segment(value: str) -> bytes:
     padded = value + "=" * (-len(value) % 4)
-    return base64.b64decode(padded.encode(), altchars=b"-_", validate=True).decode()
+    return base64.b64decode(padded.encode(), altchars=b"-_", validate=True)
 
 
 def _check_issuer_metadata(issuer: str, tokens: dict[str, Token], audience: str) -> None:
@@ -877,7 +878,7 @@ def _mcp_url(name: str) -> str:
         or not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.path != "/mcp"
+        or not parsed.path.endswith("/mcp")
         or parsed.query
         or parsed.fragment
     ):

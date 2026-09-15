@@ -6,6 +6,7 @@ from typing import Any
 
 from mcp import Client
 
+from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.service import FolioLattice
 
@@ -33,6 +34,7 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             names = {tool.name for tool in listed.tools}
             self.assertIn("artifact_list", names)
             self.assertIn("artifact_search", names)
+            self.assertIn("graph_component", names)
             list_tool = next(tool for tool in listed.tools if tool.name == "artifact_list")
             self.assertEqual(set(list_tool.input_schema.get("properties", {})), {"limit"})
             for tool in listed.tools:
@@ -104,6 +106,28 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(
                 await self.call(client, "graph_traverse", {"start_artifact_id": artifact_id})
             )
+            component = await self.call(
+                client, "graph_component", {"start_artifact_id": artifact_id}
+            )
+            self.assertEqual({item["id"] for item in component}, {artifact_id, target_id})
+            self.assertTrue(
+                await self.call(
+                    client,
+                    "artifact_search",
+                    {"query": "updated", "graph_root_artifact_id": artifact_id},
+                )
+            )
+            missing_component = await client.call_tool(
+                "graph_component", {"start_artifact_id": "art_missing"}
+            )
+            self.assertTrue(missing_component.is_error)
+            self.assertIn("artifact not found", missing_component.content[0].text)
+            missing_search = await client.call_tool(
+                "artifact_search",
+                {"query": "updated", "graph_root_artifact_id": "art_missing"},
+            )
+            self.assertTrue(missing_search.is_error)
+            self.assertIn("artifact not found", missing_search.content[0].text)
             self.assertEqual(
                 len(await self.call(client, "artifact_versions", {"artifact_id": artifact_id})),
                 2,
@@ -124,6 +148,32 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("valid base64", invalid.content[0].text)
             missing = await client.call_tool("artifact_create", {})
             self.assertTrue(missing.is_error)
+            invalid_root = await client.call_tool(
+                "artifact_search", {"query": "anything", "graph_root_artifact_id": ""}
+            )
+            self.assertTrue(invalid_root.is_error)
+
+    async def test_graph_scoped_search_requires_graph_read_scope(self) -> None:
+        server = build_mcp_server(self.service)
+        token = set_request_principal(
+            Principal(
+                "acme",
+                "reader",
+                "https://issuer.example",
+                "reader",
+                frozenset({"artifact:search"}),
+            )
+        )
+        try:
+            async with Client(server) as client:
+                denied = await client.call_tool(
+                    "artifact_search",
+                    {"query": "anything", "graph_root_artifact_id": "art_root"},
+                )
+                self.assertTrue(denied.is_error)
+                self.assertIn("operation not permitted", denied.content[0].text)
+        finally:
+            reset_request_principal(token)
 
 
 if __name__ == "__main__":

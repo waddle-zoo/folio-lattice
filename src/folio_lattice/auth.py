@@ -38,6 +38,7 @@ class Principal:
     actor_id: str
     issuer: str
     subject: str
+    scopes: frozenset[str] = frozenset()
 
     @property
     def actor(self) -> str:
@@ -353,6 +354,7 @@ class OidcVerifier:
             raise AuthenticationError("invalid bearer token")
         if not self._audience_matches(claims.get("aud")):
             raise AuthenticationError("invalid bearer token")
+        scopes = self._scope_claim(claims.get("scope"))
         subject = claims.get("sub")
         if not isinstance(subject, str) or not subject:
             raise AuthenticationError("invalid bearer token")
@@ -375,6 +377,7 @@ class OidcVerifier:
             actor_id=membership.actor_id,
             issuer=self.issuer,
             subject=subject,
+            scopes=scopes,
         )
 
     def _audience_matches(self, value: object) -> bool:
@@ -385,6 +388,24 @@ class OidcVerifier:
             and all(isinstance(item, str) for item in value)
             and (self.audience in value)
         )
+
+    @staticmethod
+    def _scope_claim(value: object) -> frozenset[str]:
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise AuthenticationError("invalid bearer token")
+        if any(character.isspace() and character != " " for character in value):
+            raise AuthenticationError("invalid bearer token")
+        scopes = frozenset(value.split(" "))
+        if any(
+            not scope
+            or any(
+                ord(character) < 0x21 or ord(character) > 0x7E or character in {'"', "\\"}
+                for character in scope
+            )
+            for scope in scopes
+        ):
+            raise AuthenticationError("invalid bearer token")
+        return scopes
 
     @staticmethod
     def _numeric_claim(
