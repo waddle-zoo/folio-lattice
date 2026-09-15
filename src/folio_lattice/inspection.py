@@ -1519,6 +1519,30 @@ const webMediaTypes = new Set([
 function isWebArtifact(artifact, version) {
   return webMediaTypes.has(version.media_type) || /\.(html?|css|m?js)$/i.test(artifact.name);
 }
+function appendInlineMarkdown(parent, value) {
+  const source = String(value || '');
+  const token = /(\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|\*([^*]+)\*|_([^_]+)_)/g;
+  let cursor = 0; let match;
+  while ((match = token.exec(source))) {
+    if (match.index > cursor) parent.append(document.createTextNode(source.slice(cursor, match.index)));
+    if (match[2]) {
+      const href = match[3];
+      if (/^(?:https?:|mailto:|\/|#)/i.test(href)) {
+        const link = document.createElement('a'); link.href = href; link.textContent = match[2];
+        if (/^https?:/i.test(href)) { link.target = '_blank'; link.rel = 'noreferrer'; }
+        parent.append(link);
+      } else parent.append(document.createTextNode(match[2]));
+    } else if (match[4] || match[5]) {
+      const strong = document.createElement('strong'); strong.textContent = match[4] || match[5]; parent.append(strong);
+    } else if (match[6]) {
+      const code = document.createElement('code'); code.textContent = match[6]; parent.append(code);
+    } else {
+      const emphasis = document.createElement('em'); emphasis.textContent = match[7] || match[8]; parent.append(emphasis);
+    }
+    cursor = token.lastIndex;
+  }
+  if (cursor < source.length) parent.append(document.createTextNode(source.slice(cursor)));
+}
 function renderMarkdown(markdown) {
   const root = document.createElement('div'); root.className = 'document-content';
   let listTarget = null; let codeTarget = null;
@@ -1531,18 +1555,18 @@ function renderMarkdown(markdown) {
     if (codeTarget) { codeTarget.firstChild.textContent += `${line}\n`; continue; }
     const heading = /^(#{1,3})\s+(.+)$/.exec(line);
     if (heading) {
-      const item = document.createElement(`h${heading[1].length}`); item.textContent = heading[2]; root.append(item);
+      const item = document.createElement(`h${heading[1].length}`); appendInlineMarkdown(item, heading[2]); root.append(item);
       listTarget = null; continue;
     }
     const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
     if (bullet) {
       listTarget ||= document.createElement('ul');
       if (!listTarget.parentNode) root.append(listTarget);
-      const item = document.createElement('li'); item.textContent = bullet[1]; listTarget.append(item); continue;
+      const item = document.createElement('li'); appendInlineMarkdown(item, bullet[1]); listTarget.append(item); continue;
     }
     listTarget = null;
     if (!line.trim()) continue;
-    const paragraph = document.createElement('p'); paragraph.textContent = line; root.append(paragraph);
+    const paragraph = document.createElement('p'); appendInlineMarkdown(paragraph, line); root.append(paragraph);
   }
   if (codeTarget) root.append(codeTarget);
   return root;
