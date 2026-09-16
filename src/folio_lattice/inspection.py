@@ -742,7 +742,7 @@ body.workspace-route {
   --line: #dfe2dc;
   --line-strong: #c8cdc5;
   --surface: #ffffff;
-  --canvas: #f7f8f5;
+  --canvas: #f5f7f9;
   --blue: #2956d7;
   --blue-dark: #1f46b9;
   --blue-soft: #eef2ff;
@@ -1227,6 +1227,176 @@ body.workspace-route #workspace-share .state-pill { flex: 0 0 auto; }
 @media (prefers-reduced-motion: reduce) {
   body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card { transition: none; }
 }
+
+/* Human usability review: keep the library calm and make workspace states explicit. */
+body:not(.debug-route):not(.human-route):not(.standalone-route),
+body.workspace-route {
+  --blue: #252525;
+  --blue-dark: #111111;
+  --blue-soft: #f0f0f0;
+  --green: #444444;
+  --green-soft: #f1f1f1;
+  --amber: #5f5f5f;
+  --amber-soft: #f3f3f3;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) input,
+body:not(.debug-route):not(.human-route):not(.standalone-route) textarea,
+body:not(.debug-route):not(.human-route):not(.standalone-route) select,
+body:not(.debug-route):not(.human-route):not(.standalone-route) pre {
+  background: var(--surface);
+  color: var(--ink);
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-library .section-heading {
+  margin-top: 42px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .artifact-library {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 24px 0 0;
+  background: transparent;
+  box-shadow: none;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .artifact-library .library-item {
+  min-height: 54px;
+  padding-block: 14px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-list .graph-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  grid-column: 1 / -1;
+  min-height: 74px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: .86rem;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-list .graph-empty p { margin: 0; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-list .graph-empty button {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 8px 11px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: .78rem;
+  font-weight: 800;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-list .graph-empty button:hover { background: #f0f1f2; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-related {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 18px 12px;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-related button {
+  overflow: hidden;
+  max-width: 100%;
+  border: 0;
+  border-radius: 5px;
+  padding: 3px 6px;
+  background: #f0f1f2;
+  color: var(--muted);
+  font-size: .69rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-related button:hover { color: var(--ink); background: #e7e8e9; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-icon::before { content: "✦"; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-icon[data-kind="web"]::before { content: "↗"; }
+body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-open-mark::before { content: "↗"; }
+body.workspace-route .workspace-search-results {
+  padding: 12px 16px 14px;
+}
+body.workspace-route .search-popover-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+  color: var(--ink);
+  font-size: .78rem;
+}
+body.workspace-route .search-popover-summary {
+  margin: 10px 0 4px;
+  color: var(--muted);
+  font-size: .72rem;
+}
+body.workspace-route .search-popover-heading .panel-close {
+  width: 28px;
+  height: 28px;
+  font-size: 1.05rem;
+}
+body.workspace-route .graph-card .graph-map {
+  display: block;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 28px 0;
+  background: var(--surface);
+}
+body.workspace-route .graph-card .graph-source {
+  width: min(320px, 100%);
+  margin: 0 auto 28px;
+  text-align: center;
+}
+body.workspace-route .graph-card .graph-links {
+  position: relative;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 32px 14px;
+  padding-top: 22px;
+}
+body.workspace-route .graph-card .graph-links::before {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 22px;
+  background: var(--line-strong);
+  content: "";
+}
+body.workspace-route .graph-card .graph-link {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  grid-template-columns: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 13px;
+  background: var(--surface);
+}
+body.workspace-route .graph-card .graph-link::before {
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  width: 1px;
+  height: 22px;
+  background: var(--line-strong);
+  content: "";
+}
+body.workspace-route .graph-card .graph-edge-label {
+  overflow-wrap: anywhere;
+  text-align: left;
+  font-size: .68rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+body.workspace-route .graph-card .graph-node {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 6px;
+}
+@media (max-width: 640px) {
+  body.workspace-route .graph-card .graph-map { padding: 20px 16px; }
+  body.workspace-route .graph-card .graph-links { grid-template-columns: 1fr; }
+}
 """.strip()
 
 UI_JS = r"""
@@ -1309,7 +1479,7 @@ function showForbiddenFailure() {
 }
 function showUnavailableFailure() {
   hideProtectedView();
-  failure('We couldn’t open that artifact. It may have been moved or you may not have access.');
+  failure('We couldn’t open that artifact. It was not found or you may not have access.');
   byId('auth-recovery-title').textContent = 'Artifact unavailable';
   byId('auth-recovery-message').textContent = 'Check the library for another copy or return home.';
   byId('auth-action').textContent = 'Return to library';
@@ -1393,6 +1563,7 @@ function setWorkspaceMode(mode, persist = true) {
   byId('reader')?.toggleAttribute('hidden', graph || workspaceWeb);
   byId('preview-card')?.toggleAttribute('hidden', graph || !workspaceWeb);
   if (graph) {
+    clearWorkspaceSearch();
     ['update', 'workspace-share'].forEach((id) => {
       const panel = byId(id);
       if (panel?.open && typeof panel.close === 'function') panel.close();
@@ -1432,6 +1603,16 @@ addEventListener('hashchange', updatePrimaryNav);
 updatePrimaryNav();
 
 let lastPanelTrigger = null;
+function clearWorkspaceSearch({focus = false} = {}) {
+  const input = byId('workspace-search-query');
+  const panel = byId('workspace-search-results');
+  if (input) input.value = '';
+  byId('results')?.replaceChildren();
+  if (byId('workspace-search-summary')) byId('workspace-search-summary').textContent = 'Search this graph.';
+  panel?.setAttribute('hidden', '');
+  if (byId('status')) byId('status').textContent = '';
+  if (focus) input?.focus();
+}
 function openWorkspacePanel(id, triggerId) {
   const panel = byId(id);
   if (!panel) return;
@@ -1638,6 +1819,7 @@ function showRead(read) {
   }
   if (byId('human-parent-version')) byId('human-parent-version').value = version.id;
   if (byId('human-save')) byId('human-save').disabled = !editable;
+  byId('edit-entry')?.toggleAttribute('hidden', !editable);
   if (byId('binary-note')) byId('binary-note').hidden = editable;
   if (byId('chunks')) list('chunks', read.chunks || [], (chunk) => {
     const li = document.createElement('li'); li.className = 'resource-item';
@@ -1714,6 +1896,7 @@ async function loadArtifact(versionId = null) {
   if (!artifactId) {
     await loadLibrary(); return;
   }
+  clearWorkspaceSearch();
   byId('welcome')?.setAttribute('hidden', '');
   status('Loading artifact…');
   const args = {artifact_id: artifactId}; if (versionId) args.version_id = versionId;
@@ -1814,26 +1997,49 @@ async function loadLibrary() {
       open.addEventListener('click', () => location.assign(workspacePath(artifact.id)));
       const top = document.createElement('span'); top.className = 'graph-card-top';
       const icon = document.createElement('span'); icon.className = 'graph-icon'; icon.setAttribute('aria-hidden', 'true');
-      icon.textContent = /\.(html?|css|m?js)$/i.test(artifact.name) ? '↗' : '✦';
+      if (/\.(html?|css|m?js)$/i.test(artifact.name)) icon.dataset.kind = 'web';
       const mark = document.createElement('span'); mark.className = 'graph-open-mark';
-      mark.setAttribute('aria-hidden', 'true'); mark.textContent = '↗'; top.append(icon, mark);
+      mark.setAttribute('aria-hidden', 'true'); top.append(icon, mark);
       const title = document.createElement('h3'); title.textContent = artifact.name;
       const description = document.createElement('p'); description.className = 'graph-description';
-      description.textContent = 'A connected workspace for documents, sites, and the context around them.';
-      open.append(top, title, description);
+      const relatedItems = (artifact.component_items || []).filter((item) => item.name !== artifact.name);
+      const relatedNames = relatedItems.map((item) => item.name);
+      description.textContent = relatedNames.length
+        ? `Includes ${relatedNames.slice(0, 2).join(', ')}${relatedNames.length > 2 ? ' and more.' : '.'}`
+        : 'A connected workspace for documents, sites, and the context around them.';
+      open.append(top, title);
+      li.append(open, description);
+      if (relatedItems.length) {
+        const related = document.createElement('div'); related.className = 'graph-related';
+        relatedItems.slice(0, 4).forEach((item) => {
+          const relatedButton = button(item.name, () => location.assign(workspacePath(item.id)));
+          relatedButton.setAttribute('aria-label', `Open graph item ${item.name}`);
+          related.append(relatedButton);
+        });
+        li.append(related);
+      }
       const meta = document.createElement('div'); meta.className = 'graph-meta';
       const count = document.createElement('span'); count.className = 'status-dot';
       const linkedItems = artifact.component_size ? Math.max(0, artifact.component_size - 1) : (artifact.graph_edges || 0);
       count.textContent = `${linkedItems} linked item${linkedItems === 1 ? '' : 's'}`;
       const updated = document.createElement('span'); updated.textContent = `Updated ${formatDate(artifact.updated_at)}`;
-      meta.append(count, updated); li.append(open, meta); return li;
+      meta.append(count, updated); li.append(meta); return li;
     };
     const graphCandidates = artifacts.filter((artifact) => artifact.graph_edges > 0);
     const graphGroups = await Promise.all(graphCandidates.map(async (artifact) => {
       try {
         const component = await call('graph_component', {start_artifact_id: artifact.id, limit: 100});
         const ids = component.map((item) => item.id).filter(Boolean).sort();
-        return {...artifact, component_size: component.length, graph_key: ids.join('\u0000') || artifact.id};
+        const ordered = [...component].sort((left, right) => String(left.created_at || '').localeCompare(String(right.created_at || '')));
+        const graphRoot = ordered[0] || artifact;
+        return {
+          ...artifact,
+          ...graphRoot,
+          graph_edges: artifact.graph_edges,
+          component_size: component.length,
+          component_items: component.map((item) => ({id: item.id, name: item.name})).filter((item) => item.id && item.name),
+          graph_key: ids.join('\u0000') || artifact.id,
+        };
       } catch (_error) {
         return {...artifact, graph_key: artifact.id};
       }
@@ -1844,7 +2050,26 @@ async function loadLibrary() {
       seenGraphs.add(artifact.graph_key); return true;
     });
     list('recent-artifacts', artifacts, renderArtifact, 'No artifacts yet. Create one to start your library.');
-    list('graph-artifacts', graphs, renderGraphCard, 'No graphs yet. Create one to start your library.');
+    if (graphs.length) list('graph-artifacts', graphs, renderGraphCard, 'No graphs yet. Create one to start your library.');
+    else {
+      const target = byId('graph-artifacts');
+      if (target) {
+        target.replaceChildren();
+        const item = document.createElement('li'); item.className = 'graph-empty';
+        const copy = document.createElement('p'); copy.textContent = 'No connected graphs yet.';
+        const action = button('Create a graph', () => {
+          const panel = byId('new');
+          if (panel) panel.open = true;
+          byId('create-name')?.focus();
+        });
+        item.append(copy, action); target.append(item);
+      }
+    }
+    if (byId('graph-count')) {
+      byId('graph-count').textContent = graphs.length
+        ? `${graphs.length} graph${graphs.length === 1 ? '' : 's'}`
+        : 'No graphs yet';
+    }
     list('artifact-library', artifacts.filter((artifact) => artifact.graph_edges === 0), renderArtifact,
       'No standalone artifacts. Create one to keep a file outside a graph.');
     if (byId('library-count')) byId('library-count').textContent = `${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'}`;
@@ -1875,22 +2100,41 @@ byId('create')?.addEventListener('submit', async (event) => {
       reason: byId('create-reason')?.value || 'library create', content_base64: base64(bytes),
       source_context: {interface: 'inspection-ui'},
     });
-    location.assign(`${workspacePath(created.artifact.id)}?created=1`);
+    const createdPath = debugMode
+      ? artifactPath(created.artifact.id)
+      : workspaceMode
+        ? workspacePath(created.artifact.id)
+        : `/artifacts/${encodeURIComponent(created.artifact.id)}`;
+    location.assign(`${createdPath}?created=1`);
   } catch (error) { handleFailure(error); }
 });
 async function discover(tool, field, inputId) {
   try {
     const query = byId(inputId).value.trim();
     if (!query) {
-      byId('results')?.replaceChildren();
-      byId('workspace-search-results')?.setAttribute('hidden', '');
+      if (workspaceMode) clearWorkspaceSearch();
+      else byId('results')?.replaceChildren();
       status('');
       return;
     }
     status(tool === 'artifact_search' ? 'Searching indexed content…' : 'Running literal grep…');
     const args = {[field]: query, limit: 20};
     if (workspaceMode && tool === 'artifact_search') args.graph_root_artifact_id = artifactId;
-    const results = await call(tool, args);
+    const rawResults = await call(tool, args);
+    const seenArtifacts = new Set();
+    const results = rawResults.filter((result) => {
+      if (!result.artifact_id || seenArtifacts.has(result.artifact_id)) return false;
+      seenArtifacts.add(result.artifact_id); return true;
+    });
+    if (workspaceMode) {
+      const panel = byId('workspace-search-results');
+      if (panel) panel.hidden = false;
+      if (byId('workspace-search-summary')) {
+        byId('workspace-search-summary').textContent = results.length
+          ? `${results.length} artifact${results.length === 1 ? '' : 's'} found.`
+          : 'No artifacts match that search.';
+      }
+    }
     list('results', results, (result) => {
       const li = document.createElement('li'); li.className = 'result-item';
       const excerpt = result.snippet || result.content || '';
@@ -1898,7 +2142,8 @@ async function discover(tool, field, inputId) {
         ? `${result.artifact_id} — ${result.artifact_name}`
         : result.artifact_name || 'Open artifact';
       li.append(button(resultLabel, () => location.assign(artifactPath(result.artifact_id))));
-      const span = document.createElement('span'); span.textContent = ` — ${excerpt.slice(0, 240)}`;
+      const span = document.createElement('span'); span.append(document.createTextNode(' — '));
+      appendInlineMarkdown(span, excerpt.slice(0, 240));
       li.append(span); return li;
     }, 'No results.'); status(`${results.length} result${results.length === 1 ? '' : 's'}.`);
   } catch (error) { handleFailure(error); }
@@ -1918,9 +2163,14 @@ byId('new-entry')?.addEventListener('click', () => {
 });
 byId('workspace-search')?.addEventListener('submit', (event) => {
   event.preventDefault();
-  const results = byId('workspace-search-results');
-  if (results) results.hidden = false;
   discover('artifact_search', 'query', 'workspace-search-query');
+});
+byId('workspace-search-close')?.addEventListener('click', () => clearWorkspaceSearch({focus: true}));
+byId('workspace-search-query')?.addEventListener('input', (event) => {
+  if (!event.currentTarget.value.trim()) clearWorkspaceSearch();
+});
+byId('workspace-search-query')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') clearWorkspaceSearch({focus: true});
 });
 byId('edit-entry')?.addEventListener('click', (event) => {
   event.preventDefault();
@@ -2122,7 +2372,7 @@ def ui_html(
         + (" hidden" if workspace else "")
         + ">"
         '<div class="card-heading"><div><p class="eyebrow">GRAPH</p><h2 id="graph-title">Related artifacts</h2></div></div>'
-        '<p>Move through connected documents by name.</p><div id="graph-map" class="graph-map" role="group" aria-label="Relationship map"></div>'
+        '<div id="graph-map" class="graph-map" role="group" aria-label="Relationship map"></div>'
         '<ul id="graph" class="graph-list"></ul></section>'
         if human and not debug
         else ""
@@ -2169,8 +2419,8 @@ def ui_html(
             '<div class="view-switch" role="tablist" aria-label="Workspace view">'
             '<button id="read-mode" type="button" role="tab" aria-selected="true" aria-controls="reader" tabindex="0" class="is-active">Read</button>'
             '<button id="graph-mode" type="button" role="tab" aria-selected="false" aria-controls="graph-context" tabindex="-1">Graph</button></div>'
-            '<div class="workspace-actions"><button id="share-entry" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="workspace-share">Share</button>'
-            '<button id="edit-entry" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="update">Edit</button></div>'
+            '<div class="workspace-actions"><a id="share-entry" href="#workspace-share" aria-haspopup="dialog" aria-expanded="false" aria-controls="workspace-share">Share</a>'
+            '<a id="edit-entry" href="#update" aria-haspopup="dialog" aria-expanded="false" aria-controls="update">Edit</a></div>'
             '<a id="standalone-link" class="workspace-option" href="#" target="_blank" rel="noreferrer" hidden>Open site ↗</a>'
             '<form id="workspace-search" class="workspace-search" role="search"><label class="sr-only" for="workspace-search-query">Search this graph</label>'
             '<input id="workspace-search-query" type="search" maxlength="500" placeholder="Search graph"><button type="submit" aria-label="Search graph">⌕</button></form>'
@@ -2193,7 +2443,7 @@ def ui_html(
     )
     root_library = (
         '<section id="graphs" class="surface graph-library" aria-labelledby="graphs-title">'
-        '<div class="section-heading"><div><p class="eyebrow">YOUR KNOWLEDGE SPACE</p><span class="sr-only">GRAPH PICKER</span><h2 id="graphs-title">Your graphs</h2><span class="sr-only">Choose a graph</span></div>'
+        '<div class="section-heading"><div><p class="eyebrow">YOUR KNOWLEDGE SPACE</p><span class="sr-only">GRAPH PICKER</span><h2 id="graphs-title">Your graphs</h2><span class="sr-only">Choose a graph</span></div><p id="graph-count">Loading graphs…</p>'
         '<a class="primary-button" href="#new" id="new-entry">＋ New artifact</a></div><ul id="graph-artifacts" class="library-list graph-picker-list">'
         '<li class="muted">Loading graphs…</li></ul></section>'
         '<section id="artifacts" class="surface artifact-library" aria-labelledby="artifacts-title">'
@@ -2256,7 +2506,7 @@ def ui_html(
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
   <section id="welcome" class="welcome-panel" aria-labelledby="welcome-title">
     <p class="eyebrow">LIBRARY</p>
-    <h1 id="welcome-title">Graphs</h1>
+    <h1 id="welcome-title">Choose where to work.</h1>
     <p class="lede">Everything you and your agents are building, arranged around the work—not the machinery underneath.</p>
     <div class="welcome-grid">
       {root_library}
@@ -2266,7 +2516,7 @@ def ui_html(
   </section>
   <article id="workspace" class="workspace{" has-tree" if workspace else ""}" hidden>
     <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1>{'<div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div>' if debug else ""}</div></div></div><nav class="workspace-nav" aria-label="Artifact sections">{workspace_nav}</nav></header>
-    {('<div id="workspace-search-results" class="workspace-search-results" hidden><ul id="results" class="results-list"><li class="muted">Search this graph.</li></ul></div>' if workspace else '')}
+    {('<section id="workspace-search-results" class="workspace-search-results" role="region" aria-label="Graph search results" aria-live="polite" hidden><div class="search-popover-heading"><strong id="workspace-search-results-title">Search this graph</strong><button id="workspace-search-close" type="button" class="panel-close" aria-label="Close search results">×</button></div><p id="workspace-search-summary" class="search-popover-summary">Search this graph.</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></section>' if workspace else '')}
     <div class="workspace-layout">{workspace_tree}<div class="primary-column">
       <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Readable document</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Loading readable content…</p><div id="readable-content" class="document-slot">Loading content…</div></section>
       <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div><div class="preview-actions">{preview_debug}</div></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>
