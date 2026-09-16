@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import http.client
+import io
 import json
+import logging
 import socket
 import sqlite3
 import tempfile
@@ -21,7 +23,14 @@ from starlette.responses import JSONResponse
 
 from folio_lattice.auth import AuthenticationError, MembershipStore, Principal
 from folio_lattice.identity import IdentityClaims
-from folio_lattice.server import FolioHttpApp
+from folio_lattice.server import (
+    AUTH_CALLBACK_RATE_LIMIT,
+    AUTH_LOGOUT_RATE_LIMIT,
+    AUTH_RATE_LIMIT_CODE,
+    AUTH_START_RATE_LIMIT,
+    FolioHttpApp,
+    _BoundedRateLimiter,
+)
 from folio_lattice.sessions import SESSION_COOKIE_NAME, SessionStore
 
 
@@ -156,6 +165,9 @@ class HostedAuthHttpTests(unittest.TestCase):
         self.sessions = SessionStore(self.db_path, self.memberships)
         self.redirect_uri = "https://127.0.0.1/auth/callback"
         self.adapter = _IdentityAdapter(self.subject, self.redirect_uri)
+        self.audit_stream = io.StringIO()
+        self.audit_logger = logging.Logger("hosted-auth-http-test")
+        self.audit_logger.addHandler(logging.StreamHandler(self.audit_stream))
         downstream = JSONResponse({"downstream": True})
         self.app = FolioHttpApp(
             downstream,
@@ -166,6 +178,7 @@ class HostedAuthHttpTests(unittest.TestCase):
             session_store=self.sessions,
             identity_adapter=self.adapter,
             auth_redirect_uri=self.redirect_uri,
+            audit_logger=self.audit_logger,
         )
         try:
             self.http_server = _HttpServer(self.app)
@@ -178,12 +191,19 @@ class HostedAuthHttpTests(unittest.TestCase):
         self.temp.cleanup()
 
     def request(
-        self, method: str, path: str, *, cookie: str | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        cookie: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
         connection = http.client.HTTPConnection("127.0.0.1", self.http_server.port, timeout=5)
-        headers = {"Cookie": cookie} if cookie is not None else {}
+        request_headers = dict(headers or {})
+        if cookie is not None:
+            request_headers["Cookie"] = cookie
         try:
-            connection.request(method, path, headers=headers)
+            connection.request(method, path, headers=request_headers)
             response = connection.getresponse()
             response_headers: dict[str, str] = {}
             for key, value in response.getheaders():
@@ -268,6 +288,82 @@ class HostedAuthHttpTests(unittest.TestCase):
             json.loads(body),
             {"authenticated": True, "tenant_id": "tenant-a", "actor_id": "actor-a"},
         )
+
+    def test_public_http_logout_requires_exact_same_origin_and_audits_without_secrets(self) -> None:
+        session_id = self.sessions.create(self.subject)
+        cookie = f"{SESSION_COOKIE_NAME}={session_id}"
+
+        for origin in (None, "https://attacker.example"):
+            headers = {} if origin is None else {"Origin": origin}
+            status, response_headers, body = self.request(
+                "POST",
+                "/auth/logout",
+                cookie=cookie,
+                headers=headers,
+            )
+            self.assertEqual(status, 403)
+            self.assertEqual(response_headers["cache-control"], "no-store")
+            error = json.loads(body)
+            self.assertEqual(error["code"], "csrf_failed")
+            self.assertEqual(error["message"], "This sign-out request is not allowed.")
+            self.assertIsNotNone(self.sessions.lookup(session_id))
+
+        status, _, body = self.request(
+            "POST",
+            "/auth/logout",
+            cookie=cookie,
+            headers={"Origin": "https://127.0.0.1"},
+        )
+        self.assertEqual(status, 204)
+        self.assertEqual(body, b"")
+        self.assertIsNone(self.sessions.lookup(session_id))
+        audit = self.audit_stream.getvalue()
+        self.assertIn('"event":"logout_csrf_denied"', audit)
+        self.assertIn('"event":"logout_succeeded"', audit)
+        self.assertNotIn(session_id, audit)
+        self.assertNotIn("attacker.example", audit)
+
+    def test_public_http_auth_routes_fail_closed_with_stable_rate_errors(self) -> None:
+        for _ in range(AUTH_START_RATE_LIMIT):
+            status, _, _ = self.request("GET", "/auth/start")
+            self.assertEqual(status, 302)
+        status, headers, body = self.request("GET", "/auth/start")
+        self.assertEqual(status, 429)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(headers["retry-after"], "60")
+        self.assertEqual(json.loads(body)["code"], AUTH_RATE_LIMIT_CODE)
+
+        callback = "/auth/callback?state=attacker-state&code=attacker-code"
+        for _ in range(AUTH_CALLBACK_RATE_LIMIT):
+            status, _, _ = self.request("GET", callback)
+            self.assertEqual(status, 400)
+        status, headers, body = self.request("GET", callback)
+        self.assertEqual(status, 429)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(json.loads(body)["code"], AUTH_RATE_LIMIT_CODE)
+        self.assertNotIn(b"attacker-state", body)
+        self.assertNotIn(b"attacker-code", body)
+
+        logout_headers = {"Origin": "https://127.0.0.1"}
+        for _ in range(AUTH_LOGOUT_RATE_LIMIT):
+            status, _, _ = self.request("POST", "/auth/logout", headers=logout_headers)
+            self.assertEqual(status, 204)
+        status, headers, body = self.request("POST", "/auth/logout", headers=logout_headers)
+        self.assertEqual(status, 429)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(json.loads(body)["code"], AUTH_RATE_LIMIT_CODE)
+        audit = self.audit_stream.getvalue()
+        self.assertIn('"event":"auth_start_rate_limited"', audit)
+        self.assertIn('"event":"auth_callback_rate_limited"', audit)
+        self.assertIn('"event":"auth_logout_rate_limited"', audit)
+
+    def test_rate_limiter_denies_new_keys_when_bounded(self) -> None:
+        clock = _Clock()
+        limiter = _BoundedRateLimiter(limit=1, max_keys=1, clock=clock)
+        self.assertEqual(limiter.allow("first"), (True, 0))
+        self.assertEqual(limiter.allow("second"), (False, 60))
+        clock.value += 60
+        self.assertEqual(limiter.allow("second"), (True, 0))
 
 
 class SessionHttpTests(unittest.IsolatedAsyncioTestCase):
@@ -472,8 +568,11 @@ class SessionHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_logout_expires_secure_host_cookie_and_invalidates_server_session(self) -> None:
         session_id = self.sessions.create(self.principal)
         cookie = f"{SESSION_COOKIE_NAME}={session_id}".encode()
+        self.app.auth_redirect_uri = "https://folio.test/auth/callback"
         status, headers, body = await self.call(
-            "/auth/logout", method="POST", headers=[(b"cookie", cookie)]
+            "/auth/logout",
+            method="POST",
+            headers=[(b"cookie", cookie), (b"origin", b"https://folio.test")],
         )
         self.assertEqual(status, 204)
         self.assertEqual(body, b"")

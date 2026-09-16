@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import json
+import logging
 import math
 import os
 import string
+import threading
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
 from typing import Any
@@ -52,6 +57,54 @@ from .sessions import (
 DEFAULT_MAX_REQUEST_BYTES = 13 * 1024 * 1024
 MAX_AUTH_QUERY_BYTES = 8 * 1024
 MAX_AUTH_QUERY_VALUE = 4 * 1024
+AUTH_RATE_LIMIT_WINDOW_SECONDS = 60.0
+AUTH_RATE_LIMIT_MAX_KEYS = 4096
+AUTH_START_RATE_LIMIT = 10
+AUTH_CALLBACK_RATE_LIMIT = 20
+AUTH_LOGOUT_RATE_LIMIT = 20
+AUTH_RATE_LIMIT_CODE = "auth_rate_limited"
+AUTH_RATE_LIMIT_MESSAGE = "Too many authentication requests. Try again later."
+
+
+class _BoundedRateLimiter:
+    def __init__(
+        self,
+        *,
+        limit: int,
+        window_seconds: float = AUTH_RATE_LIMIT_WINDOW_SECONDS,
+        max_keys: int = AUTH_RATE_LIMIT_MAX_KEYS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if limit < 1 or window_seconds <= 0 or max_keys < 1:
+            raise ValueError("rate limiter bounds must be positive")
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self.max_keys = max_keys
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._windows: dict[str, tuple[float, int]] = {}
+
+    def allow(self, key: str) -> tuple[bool, int]:
+        now = self._clock()
+        with self._lock:
+            expired = [
+                candidate
+                for candidate, (started_at, _count) in self._windows.items()
+                if now - started_at >= self.window_seconds
+            ]
+            for candidate in expired:
+                del self._windows[candidate]
+            window = self._windows.get(key)
+            if window is None:
+                if len(self._windows) >= self.max_keys:
+                    return False, max(1, math.ceil(self.window_seconds))
+                self._windows[key] = (now, 1)
+                return True, 0
+            started_at, count = window
+            if count >= self.limit:
+                return False, max(1, math.ceil(self.window_seconds - (now - started_at)))
+            self._windows[key] = (started_at, count + 1)
+            return True, 0
 
 
 @dataclass(frozen=True)
@@ -353,6 +406,8 @@ class FolioHttpApp:
         session_store: SessionStore | None = None,
         identity_adapter: HostedIdentityAdapter | None = None,
         auth_redirect_uri: str | None = None,
+        control_origin: str | None = None,
+        audit_logger: logging.Logger | None = None,
     ):
         self.app = app
         self.service = service
@@ -362,6 +417,14 @@ class FolioHttpApp:
         self.session_store = session_store
         self.identity_adapter = identity_adapter
         self.auth_redirect_uri = _auth_redirect_uri(auth_redirect_uri)
+        self.control_origin = control_origin
+        self.audit_logger = audit_logger or logging.getLogger("folio_lattice.audit")
+        self.audit_logger.setLevel(logging.INFO)
+        self._auth_rate_limiters = {
+            "/auth/start": _BoundedRateLimiter(limit=AUTH_START_RATE_LIMIT),
+            "/auth/callback": _BoundedRateLimiter(limit=AUTH_CALLBACK_RATE_LIMIT),
+            "/auth/logout": _BoundedRateLimiter(limit=AUTH_LOGOUT_RATE_LIMIT),
+        }
         if deployment_mode == "hosted" and authenticator is None:
             raise ValueError("hosted mode requires configured OIDC authentication")
 
@@ -425,9 +488,37 @@ class FolioHttpApp:
             )(scope, receive, send)
             return
         if scope["method"] == "POST" and scope["path"] == "/auth/logout":
+            if not await self._check_auth_rate(scope, receive, send, "/auth/logout"):
+                return
+            if not self._same_origin(scope):
+                request_id = uuid.uuid4().hex
+                self._audit(
+                    scope,
+                    event="logout_csrf_denied",
+                    outcome="denied",
+                    status=403,
+                    request_id=request_id,
+                )
+                await self._error(
+                    scope,
+                    receive,
+                    send,
+                    403,
+                    "csrf_failed",
+                    "This sign-out request is not allowed.",
+                    request_id=request_id,
+                )
+                return
             session_id = _session_cookie(scope)
             if session_id is not None and self.session_store is not None:
                 self.session_store.revoke(session_id)
+            self._audit(
+                scope,
+                event="logout_succeeded",
+                outcome="revoked" if session_id is not None else "no_session",
+                status=204,
+                request_id=uuid.uuid4().hex,
+            )
             response = Response(status_code=204, headers={"Cache-Control": "no-store"})
             response.set_cookie(
                 SESSION_COOKIE_NAME,
@@ -501,6 +592,8 @@ class FolioHttpApp:
             return False
 
     async def _auth_start(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if not await self._check_auth_rate(scope, receive, send, "/auth/start"):
+            return
         if not self._identity_ready():
             await self._error(
                 scope,
@@ -569,6 +662,8 @@ class FolioHttpApp:
         await response(scope, receive, send)
 
     async def _auth_callback(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if not await self._check_auth_rate(scope, receive, send, "/auth/callback"):
+            return
         if not self._identity_ready():
             await self._error(
                 scope,
@@ -677,6 +772,78 @@ class FolioHttpApp:
         )
         await response(scope, receive, send)
 
+    async def _check_auth_rate(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        route: str,
+    ) -> bool:
+        limiter = self._auth_rate_limiters[route]
+        try:
+            allowed, retry_after = limiter.allow(_client_key(scope))
+        except Exception:
+            allowed, retry_after = False, math.ceil(AUTH_RATE_LIMIT_WINDOW_SECONDS)
+        if allowed:
+            return True
+        request_id = uuid.uuid4().hex
+        self._audit(
+            scope,
+            event=f"{route.removeprefix('/').replace('/', '_')}_rate_limited",
+            outcome="denied",
+            status=429,
+            request_id=request_id,
+        )
+        await self._error(
+            scope,
+            receive,
+            send,
+            429,
+            AUTH_RATE_LIMIT_CODE,
+            AUTH_RATE_LIMIT_MESSAGE,
+            retryable=True,
+            headers={"Retry-After": str(retry_after)},
+            request_id=request_id,
+        )
+        return False
+
+    def _same_origin(self, scope: Scope) -> bool:
+        expected_origin = _auth_origin(self.auth_redirect_uri)
+        if self.control_origin is not None:
+            expected_origin = self.control_origin
+        values = [
+            value for header, value in scope.get("headers", []) if header.lower() == b"origin"
+        ]
+        if expected_origin is None or len(values) != 1:
+            return False
+        try:
+            origin = values[0].decode("ascii")
+        except UnicodeDecodeError:
+            return False
+        return hmac.compare_digest(origin, expected_origin)
+
+    def _audit(
+        self,
+        scope: Scope,
+        *,
+        event: str,
+        outcome: str,
+        status: int,
+        request_id: str,
+    ) -> None:
+        record = {
+            "event": event,
+            "method": scope.get("method", ""),
+            "outcome": outcome,
+            "path": scope.get("path", ""),
+            "request_id": request_id,
+            "status": status,
+        }
+        self.audit_logger.info(
+            "auth_audit %s",
+            json.dumps(record, sort_keys=True, separators=(",", ":")),
+        )
+
     @staticmethod
     async def _error(
         scope: Scope,
@@ -689,13 +856,14 @@ class FolioHttpApp:
         retryable: bool = False,
         reauthenticate: bool = False,
         headers: dict[str, str] | None = None,
+        request_id: str | None = None,
     ) -> None:
         response_headers = {"Cache-Control": "no-store", **(headers or {})}
         await JSONResponse(
             {
                 "code": code,
                 "message": message,
-                "request_id": uuid.uuid4().hex,
+                "request_id": request_id or uuid.uuid4().hex,
                 "retryable": retryable,
                 "reauthenticate": reauthenticate,
             },
@@ -706,6 +874,13 @@ class FolioHttpApp:
 
 def _session_cookie(scope: Scope) -> str | None:
     return _cookie(scope, SESSION_COOKIE_NAME)
+
+
+def _client_key(scope: Scope) -> str:
+    client = scope.get("client")
+    if isinstance(client, (tuple, list)) and client and isinstance(client[0], str):
+        return client[0]
+    return "unknown"
 
 
 def _cookie(scope: Scope, name: str) -> str | None:
@@ -802,6 +977,19 @@ def _auth_redirect_uri(value: str | None) -> str | None:
     except ValueError:
         return None
     return value
+
+
+def _auth_origin(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.hostname is None:
+        return None
+    try:
+        _ = parsed.port
+    except ValueError:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _valid_provider_url(value: object) -> bool:
@@ -918,6 +1106,7 @@ def run_http(host: str, port: int) -> None:
             session_store=session_store,
             identity_adapter=identity_adapter,
             auth_redirect_uri=auth_redirect_uri,
+            control_origin=settings.control_origin,
         ),
         host=host,
         port=port,
