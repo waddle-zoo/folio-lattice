@@ -4,12 +4,14 @@ import argparse
 import math
 import os
 import string
+import uuid
 from dataclasses import dataclass
+from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import urlsplit
 
 import uvicorn
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .auth import (
@@ -18,6 +20,7 @@ from .auth import (
     MembershipStore,
     OidcAuthenticator,
     OidcVerifier,
+    Principal,
     reset_request_principal,
     set_request_principal,
 )
@@ -27,6 +30,7 @@ from .mcp_protocol import build_mcp_server
 from .public_mcp import HttpMcpClient
 from .renderer import RendererApp
 from .service import DEFAULT_MAX_ARTIFACT_BYTES, FolioLattice
+from .sessions import SESSION_COOKIE_NAME, SESSION_COOKIE_PATH, SessionStore
 
 DEFAULT_MAX_REQUEST_BYTES = 13 * 1024 * 1024
 
@@ -226,12 +230,14 @@ class FolioHttpApp:
         *,
         deployment_mode: str,
         authenticator: OidcAuthenticator | None = None,
+        session_store: SessionStore | None = None,
     ):
         self.app = app
         self.service = service
         self.inspection = inspection
         self.deployment_mode = deployment_mode
         self.authenticator = authenticator
+        self.session_store = session_store
         if deployment_mode == "hosted" and authenticator is None:
             raise ValueError("hosted mode requires configured OIDC authentication")
 
@@ -260,16 +266,61 @@ class FolioHttpApp:
             status = 200 if health["ready"] else 503
             await JSONResponse(health, status_code=status)(scope, receive, send)
             return
+        if scope["method"] == "GET" and scope["path"] == "/v1/me":
+            try:
+                principal = self._authenticate(scope)
+            except AuthenticationError:
+                await self._error(
+                    scope,
+                    receive,
+                    send,
+                    401,
+                    "authentication_required",
+                    "Sign-in required. Sign in to continue.",
+                    reauthenticate=True,
+                )
+                return
+            await JSONResponse(
+                {
+                    "authenticated": True,
+                    "tenant_id": principal.tenant_id,
+                    "actor_id": principal.actor_id,
+                },
+                headers={"Cache-Control": "no-store"},
+            )(scope, receive, send)
+            return
+        if scope["method"] == "POST" and scope["path"] == "/auth/logout":
+            session_id = _session_cookie(scope)
+            if session_id is not None and self.session_store is not None:
+                self.session_store.revoke(session_id)
+            response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+            response.set_cookie(
+                SESSION_COOKIE_NAME,
+                "",
+                max_age=0,
+                expires=0,
+                path=SESSION_COOKIE_PATH,
+                secure=True,
+                httponly=True,
+                samesite="lax",
+            )
+            await response(scope, receive, send)
+            return
         principal_token = None
         if self.authenticator is not None:
             try:
-                principal = self.authenticator.authenticate(scope)
+                principal = self._authenticate(scope)
             except AuthenticationError:
-                await JSONResponse(
-                    {"error": "authentication required"},
-                    status_code=401,
+                await self._error(
+                    scope,
+                    receive,
+                    send,
+                    401,
+                    "authentication_required",
+                    "Sign-in required. Sign in to continue.",
+                    reauthenticate=True,
                     headers={"WWW-Authenticate": "Bearer"},
-                )(scope, receive, send)
+                )
                 return
             principal_token = set_request_principal(principal)
         path = scope["path"]
@@ -288,6 +339,65 @@ class FolioHttpApp:
         finally:
             if principal_token is not None:
                 reset_request_principal(principal_token)
+
+    def _authenticate(self, scope: Scope) -> Principal:
+        session_id = _session_cookie(scope)
+        if session_id is not None:
+            if self.session_store is None:
+                raise AuthenticationError("session authentication is unavailable")
+            principal = self.session_store.lookup(session_id)
+            if principal is None:
+                raise AuthenticationError("session is invalid")
+            return principal
+        if self.authenticator is not None:
+            return self.authenticator.authenticate(scope)
+        raise AuthenticationError("authentication is required")
+
+    @staticmethod
+    async def _error(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        reauthenticate: bool = False,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        response_headers = {"Cache-Control": "no-store", **(headers or {})}
+        await JSONResponse(
+            {
+                "code": code,
+                "message": message,
+                "request_id": uuid.uuid4().hex,
+                "retryable": retryable,
+                "reauthenticate": reauthenticate,
+            },
+            status_code=status_code,
+            headers=response_headers,
+        )(scope, receive, send)
+
+
+def _session_cookie(scope: Scope) -> str | None:
+    values = [value for name, value in scope.get("headers", []) if name.lower() == b"cookie"]
+    if len(values) != 1:
+        return None
+    try:
+        header = values[0].decode("latin-1")
+        if (
+            sum(part.strip().startswith(f"{SESSION_COOKIE_NAME}=") for part in header.split(";"))
+            != 1
+        ):
+            return None
+        cookie = SimpleCookie(header)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    morsel = cookie.get(SESSION_COOKIE_NAME)
+    if morsel is None or not morsel.value:
+        return None
+    return morsel.value
 
 
 def build_runtime(settings: Settings) -> tuple[FolioLattice, Any, OidcAuthenticator | None]:
@@ -325,6 +435,9 @@ def build_runtime(settings: Settings) -> tuple[FolioLattice, Any, OidcAuthentica
 def run_http(host: str, port: int) -> None:
     settings = Settings.from_env()
     service, mcp, authenticator = build_runtime(settings)
+    session_store = None
+    if settings.deployment_mode == "hosted":
+        session_store = SessionStore(settings.db_path, MembershipStore(settings.db_path))
     app = mcp.streamable_http_app(
         json_response=True,
         max_request_body_size=settings.max_request_bytes,
@@ -352,6 +465,7 @@ def run_http(host: str, port: int) -> None:
             inspection,
             deployment_mode=settings.deployment_mode,
             authenticator=authenticator,
+            session_store=session_store,
         ),
         host=host,
         port=port,
