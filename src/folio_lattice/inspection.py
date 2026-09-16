@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from html import escape
+from urllib.parse import parse_qs, quote
 
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.types import Receive, Scope, Send
@@ -117,6 +118,22 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .auth-recovery h2 { margin-bottom: .25rem; color: #8f2323; font-size: 1rem; }
 .auth-recovery p { margin-bottom: .7rem; color: #6f4141; font-size: .84rem; }
 .auth-recovery a { display: inline-block; border-radius: 6px; padding: .5rem .7rem; background: var(--blue); color: white; font-size: .82rem; font-weight: 700; text-decoration: none; }
+.auth-route { min-height: 100vh; background: #fafafa; }
+.auth-route .auth-shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+.auth-route .auth-topbar { display: flex; align-items: center; min-height: 76px; padding: 0 34px; border-bottom: 1px solid var(--line); background: #fff; }
+.auth-route .auth-topbar .brand-lockup { margin-right: auto; }
+.auth-route .auth-topbar .button-secondary { color: var(--muted); font-size: .78rem; text-decoration: none; }
+.auth-page { display: grid; align-content: center; width: min(440px, calc(100% - 2rem)); margin: 0 auto; padding: 3rem 0 5rem; }
+.auth-page .eyebrow { margin-bottom: .9rem; color: var(--muted); }
+.auth-page h1 { max-width: 23rem; margin-bottom: .85rem; font-size: clamp(2.2rem, 7vw, 3.7rem); letter-spacing: -.06em; }
+.auth-page .auth-lede { max-width: 24rem; margin-bottom: 2rem; color: var(--muted); font-size: .98rem; line-height: 1.6; }
+.auth-provider-button { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 54px; border: 1px solid var(--ink); border-radius: 8px; padding: .85rem 1rem; background: var(--ink); color: #fff; font-size: .88rem; font-weight: 800; text-decoration: none; }
+.auth-provider-button:hover { background: #333; color: #fff; }
+.auth-provider-button span { font-size: 1.1rem; }
+.auth-note { margin: 1rem 0 0; color: var(--muted); font-size: .76rem; line-height: 1.55; }
+.auth-local-note { border-top: 1px solid var(--line); padding-top: 1rem; }
+.auth-back-link { display: inline-block; margin-top: 1.4rem; color: var(--ink); font-size: .82rem; font-weight: 800; }
+.mode-status { border: 1px solid var(--line-strong); border-radius: 999px; padding: .35rem .6rem; color: var(--muted); font-size: .72rem; font-weight: 800; }
 .page { max-width: 1240px; margin: auto; padding: 1.5rem 1.5rem 4rem; }
 .live-region { min-height: 2rem; }
 #status, #error { margin: 0 0 1rem; border-radius: 7px; padding: .65rem .8rem; font-size: .84rem; }
@@ -337,6 +354,8 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
 }
 @media (max-width: 640px) {
   .topbar, .security-banner, .page { padding-inline: 1rem; }
+  .auth-route .auth-topbar { padding-inline: 1rem; }
+  .auth-route .auth-topbar .brand-name { font-size: .86rem; }
   .primary-nav { order: 2; width: 100%; }
   .welcome-panel { padding-top: 1.3rem; }
   .welcome-grid, .search-grid, .utility-grid, .secondary-column { grid-template-columns: 1fr; }
@@ -2141,7 +2160,8 @@ async function discover(tool, field, inputId) {
       const resultLabel = debugMode && result.artifact_name
         ? `${result.artifact_id} — ${result.artifact_name}`
         : result.artifact_name || 'Open artifact';
-      li.append(button(resultLabel, () => location.assign(artifactPath(result.artifact_id))));
+      const destination = workspaceMode ? workspacePath(result.artifact_id) : artifactPath(result.artifact_id);
+      li.append(button(resultLabel, () => location.assign(destination)));
       const span = document.createElement('span'); span.append(document.createTextNode(' — '));
       appendInlineMarkdown(span, excerpt.slice(0, 240));
       li.append(span); return li;
@@ -2264,6 +2284,32 @@ loadArtifact().catch(handleFailure);
 """.strip()
 
 
+def _safe_return_to(value: object) -> str:
+    """Keep sign-in navigation inside the Folio UI; never reflect an open URL."""
+    if value == "/":
+        return "/"
+    if not isinstance(value, str) or not value.startswith("/") or value.startswith("//"):
+        return "/"
+    parts = value.split("/")
+    if (
+        len(parts) == 3
+        and parts[1] in {"inspect", "artifacts", "standalone", "workspace"}
+        and parts[2]
+        and all(character not in parts[2] for character in "?#\\")
+    ):
+        return value
+    return "/"
+
+
+def _request_return_to(scope: Scope) -> str:
+    try:
+        query = scope.get("query_string", b"").decode("ascii")
+        value = parse_qs(query, keep_blank_values=False).get("return_to", ["/"])[0]
+    except (UnicodeDecodeError, ValueError, IndexError):
+        value = "/"
+    return _safe_return_to(value)
+
+
 def ui_html(
     render_origin: str,
     *,
@@ -2274,9 +2320,36 @@ def ui_html(
     human: bool = False,
     workspace: bool = False,
     standalone: bool = False,
+    sign_in: bool = False,
+    return_to: str = "/",
 ) -> str:
     origin = escape(render_origin, quote=True)
     state = escape(auth_state, quote=True)
+    if sign_in:
+        safe_return_to = _safe_return_to(return_to)
+        return_query = escape(quote(safe_return_to, safe=""), quote=True)
+        hosted = auth_state in {"hosted", "authenticated"}
+        sign_in_action = (
+            f'<a class="auth-provider-button" href="/auth/start?return_to={return_query}">'
+            'Continue with your organization <span aria-hidden="true">→</span></a>'
+            if hosted
+            else '<p class="auth-note auth-local-note">This local workspace is running without sign-in. Hosted deployments connect your organization identity provider here.</p>'
+        )
+        return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in — Folio Lattice</title><link rel="stylesheet" href="/ui.css"></head>
+<body class="auth-route" data-auth-state="{state}">
+<div class="auth-shell">
+<header class="auth-topbar"><div class="brand-lockup"><span class="brand-mark" aria-hidden="true">F</span><div><div class="brand-name">Folio Lattice</div><div class="brand-subtitle">Knowledge workspace</div></div></div><a class="button-secondary" href="/">Back to library</a></header>
+<main id="main" class="auth-page" aria-labelledby="sign-in-title">
+  <p class="eyebrow">YOUR WORKSPACE</p>
+  <h1 id="sign-in-title">Sign in to continue.</h1>
+  <p class="auth-lede">Your graphs and artifacts stay inside your organization. Use the identity provider your company already trusts.</p>
+  {sign_in_action}
+  <p class="auth-note">No password to remember here. Access is managed by your organization.</p>
+  <a class="auth-back-link" href="/">← Return to library</a>
+</main>
+</div></body></html>"""
     if standalone:
         return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2467,6 +2540,12 @@ def ui_html(
             else ""
         )
     )
+    avatar_parts = []
+    for part in str(actor or "").split():
+        normalized = "".join(character for character in part if character.isalnum())
+        if normalized:
+            avatar_parts.append(normalized[0])
+    avatar_initials = escape("".join(avatar_parts[:2]).upper() or "ME")
     primary_nav = (
         '<a href="/"><span class="nav-index" aria-hidden="true">01</span>Library</a>'
         '<a href="/#graphs"><span class="nav-index" aria-hidden="true">02</span>Graphs</a>'
@@ -2474,7 +2553,14 @@ def ui_html(
             '<a href="/#find"><span class="nav-index" aria-hidden="true">03</span>Search</a>'
             '<a href="/#new"><span class="nav-index" aria-hidden="true">04</span>New</a>'
             if debug
-            else '<a href="/#shared">Shared with me</a><span class="avatar" aria-label="Brandon’s account">BS</span>'
+            else (
+                '<a href="/#shared">Shared with me</a>'
+                + (
+                    f'<span class="avatar" aria-label="{escape(actor or "Your account", quote=True)}">{avatar_initials}</span>'
+                    if auth_state == "authenticated"
+                    else '<span class="mode-status" aria-label="Local development mode">Local</span>'
+                )
+            )
         )
     )
     preview_debug = (
@@ -2610,6 +2696,17 @@ class InspectionApp:
         method = scope["method"]
         path = scope["path"]
         headers = control_headers(self.render_origin)
+        if method == "GET" and path == "/sign-in":
+            await HTMLResponse(
+                ui_html(
+                    self.render_origin,
+                    auth_state=self.auth_state,
+                    sign_in=True,
+                    return_to=_request_return_to(scope),
+                ),
+                headers=headers,
+            )(scope, receive, send)
+            return
         if method == "GET" and (
             path == "/"
             or path.startswith("/inspect/")

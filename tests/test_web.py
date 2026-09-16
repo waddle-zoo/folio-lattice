@@ -218,6 +218,31 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertNotIn(forbidden, page)
 
+    async def test_sign_in_shell_is_safe_and_does_not_offer_local_fake_auth(self) -> None:
+        status, headers, page = await call(
+            self.inspection,
+            "GET",
+            "/sign-in",
+            query="return_to=%2Fworkspace%2Fart_123",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertIn(b"Sign in to continue.", page)
+        self.assertIn(b"local workspace is running without sign-in", page)
+        self.assertNotIn(b"/auth/start", page)
+
+        hosted = ui_html(
+            RENDER_ORIGIN,
+            auth_state="hosted",
+            sign_in=True,
+            return_to="/workspace/art_123",
+        )
+        self.assertIn(
+            'href="/auth/start?return_to=%2Fworkspace%2Fart_123"', hosted
+        )
+        self.assertNotIn("/auth/start?return_to=https", hosted)
+        self.assertNotIn("document.cookie", hosted)
+
     async def test_ui_contract_has_nontechnical_orientation_and_safe_status_copy(self) -> None:
         status, _, page = await call(self.inspection, "GET", "/")
         self.assertEqual(status, 200)
