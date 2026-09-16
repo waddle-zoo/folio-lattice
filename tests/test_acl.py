@@ -6,7 +6,12 @@ from pathlib import Path
 
 from mcp import Client
 
-from folio_lattice.auth import MembershipStore
+from folio_lattice.auth import (
+    MembershipStore,
+    Principal,
+    reset_request_principal,
+    set_request_principal,
+)
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.service import FolioError, FolioLattice
 
@@ -274,6 +279,88 @@ class McpAclTests(unittest.IsolatedAsyncioTestCase):
                 assert revoked_content is not None
                 revoked_result = revoked_content.get("result", revoked_content)
                 self.assertEqual(revoked_result["status"], "revoked")
+
+    async def test_public_mcp_does_not_enumerate_private_version_or_chunk_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = FolioLattice(root / "folio.db", root / "blobs")
+            server = build_mcp_server(service)
+            owner_token = set_request_principal(
+                Principal(
+                    "tenant-a",
+                    "owner",
+                    "https://issuer.example",
+                    "owner",
+                    frozenset({"artifact:read", "artifact:write"}),
+                )
+            )
+            try:
+                async with Client(server) as owner:
+                    created = await owner.call_tool(
+                        "artifact_create",
+                        {
+                            "name": "private.txt",
+                            "content_base64": base64.b64encode(b"private marker").decode(),
+                        },
+                    )
+                    structured = created.structured_content
+                    assert structured is not None
+                    result = structured.get("result", structured)
+                    version_id = result["version"]["id"]
+                    read = await owner.call_tool(
+                        "artifact_read", {"artifact_id": result["artifact"]["id"]}
+                    )
+                    read_structured = read.structured_content
+                    assert read_structured is not None
+                    chunk_id = read_structured.get("result", read_structured)["chunks"][0]["id"]
+            finally:
+                reset_request_principal(owner_token)
+
+            member_token = set_request_principal(
+                Principal(
+                    "tenant-a",
+                    "member",
+                    "https://issuer.example",
+                    "member",
+                    frozenset({"artifact:read", "artifact:write"}),
+                )
+            )
+            try:
+                async with Client(server) as member:
+                    member_created = await member.call_tool(
+                        "artifact_create",
+                        {
+                            "name": "member.txt",
+                            "content_base64": base64.b64encode(b"member content").decode(),
+                        },
+                    )
+                    member_structured = member_created.structured_content
+                    assert member_structured is not None
+                    member_artifact_id = member_structured.get("result", member_structured)[
+                        "artifact"
+                    ]["id"]
+                    cases = (
+                        (
+                            "artifact_read",
+                            {"artifact_id": member_artifact_id, "version_id": version_id},
+                            {"artifact_id": member_artifact_id, "version_id": "ver-unknown"},
+                        ),
+                        (
+                            "artifact_read_chunk",
+                            {"chunk_id": chunk_id},
+                            {"chunk_id": "chk-unknown"},
+                        ),
+                    )
+                    for tool, private_args, unknown_args in cases:
+                        private = await member.call_tool(tool, private_args)
+                        unknown = await member.call_tool(tool, unknown_args)
+                        self.assertTrue(private.is_error)
+                        self.assertTrue(unknown.is_error)
+                        self.assertEqual(private.content[0].text, unknown.content[0].text)
+                        self.assertNotIn(version_id, private.content[0].text)
+                        self.assertNotIn(chunk_id, private.content[0].text)
+            finally:
+                reset_request_principal(member_token)
 
 
 if __name__ == "__main__":

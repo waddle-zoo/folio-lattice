@@ -608,25 +608,42 @@ class FolioLattice:
         *,
         actor: str | None = None,
         action: str = "read",
+        artifact_id: str | None = None,
     ) -> dict[str, Any]:
         with self.connect() as db:
             row = db.execute(
                 """
                 SELECT id, artifact_id, parent_version_id, blob_hash, media_type,
                        byte_size, actor, reason, source_context, created_at
-                FROM versions WHERE id = ? AND tenant_id = ?
+                FROM versions
+                WHERE id = ? AND tenant_id = ?
+                  AND (? IS NULL OR artifact_id = ?)
                 """,
-                (version_id, tenant_id),
+                (version_id, tenant_id, artifact_id, artifact_id),
             ).fetchone()
             if row is None:
                 raise FolioError("version not found")
-            self._authorize(db, tenant_id, row["artifact_id"], actor, action)
+            try:
+                self._authorize(db, tenant_id, row["artifact_id"], actor, action)
+            except FolioError as exc:
+                if str(exc) == "artifact not found":
+                    raise FolioError("version not found") from None
+                raise
         result = dict(row)
         result["source_context"] = json.loads(result["source_context"])
         return result
 
-    def _version_bytes(self, tenant_id: str, version_id: str, *, actor: str | None = None) -> bytes:
-        metadata = self.version_metadata(tenant_id, version_id, actor=actor)
+    def _version_bytes(
+        self,
+        tenant_id: str,
+        version_id: str,
+        *,
+        actor: str | None = None,
+        artifact_id: str | None = None,
+    ) -> bytes:
+        metadata = self.version_metadata(
+            tenant_id, version_id, actor=actor, artifact_id=artifact_id
+        )
         path = self._blob_path(metadata["blob_hash"])
         if not path.exists():
             raise FolioError("version blob missing")
@@ -643,10 +660,10 @@ class FolioLattice:
         artifact = self.get_artifact(tenant_id, artifact_id, actor=actor)
         if version_id is None:
             version_id = artifact["current_version_id"]
-        metadata = self.version_metadata(tenant_id, version_id, actor=actor)
-        if metadata["artifact_id"] != artifact_id:
-            raise FolioError("version does not belong to artifact")
-        data = self._version_bytes(tenant_id, version_id, actor=actor)
+        metadata = self.version_metadata(
+            tenant_id, version_id, actor=actor, artifact_id=artifact_id
+        )
+        data = self._version_bytes(tenant_id, version_id, actor=actor, artifact_id=artifact_id)
         result = {
             "artifact": artifact,
             "version": metadata,
@@ -692,7 +709,12 @@ class FolioLattice:
             ).fetchone()
             if row is None:
                 raise FolioError("chunk not found")
-            self._authorize(db, tenant_id, row["artifact_id"], actor, "read")
+            try:
+                self._authorize(db, tenant_id, row["artifact_id"], actor, "read")
+            except FolioError as exc:
+                if str(exc) == "artifact not found":
+                    raise FolioError("chunk not found") from None
+                raise
         result = dict(row)
         result["offset_unit"] = "unicode_code_points"
         return result
