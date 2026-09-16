@@ -233,6 +233,7 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .workspace-actions { display: flex; gap: .5rem; margin-left: auto; }
 .workspace-actions a { border: 1px solid var(--line-strong); border-radius: 7px; padding: .52rem .7rem; color: #39485d; font-size: .78rem; font-weight: 700; text-decoration: none; }
 .workspace-actions a:hover { border-color: #a9b7c7; background: #f8fafc; }
+.workspace-actions button { font: inherit; cursor: pointer; }
 .workspace.has-tree.graph-mode .tree-panel { position: sticky; top: 1rem; }
 .primary-column { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 .secondary-column { display: grid; gap: 1rem; min-width: 0; }
@@ -1017,6 +1018,8 @@ body.workspace-route .workspace-actions button {
 }
 body.workspace-route .workspace-actions a:hover,
 body.workspace-route .workspace-actions button:hover { color: var(--ink); background: #f1f2ee; }
+body.workspace-route .workspace-actions .workspace-primary-action { color: var(--ink); background: #e9ebea; }
+body.workspace-route .workspace-actions .workspace-primary-action:hover { background: #dfe2df; }
 body.workspace-route .workspace-option {
   display: inline-flex;
   order: 0;
@@ -1180,10 +1183,74 @@ body.workspace-route .workspace.graph-mode .secondary-column {
   grid-row: 1;
   height: calc(100vh - 58px);
 }
-body.workspace-route #update:not([open]),
-body.workspace-route #workspace-share:not([open]) { display: none; }
-body.workspace-route #update[open],
-body.workspace-route #workspace-share[open] {
+body.workspace-route #update[hidden],
+body.workspace-route #workspace-share:not([open]),
+body.workspace-route #new-note:not([open]) { display: none; }
+body.workspace-route #update:not([hidden]) {
+  display: flex;
+  position: relative;
+  flex-direction: column;
+  min-height: calc(100vh - 58px);
+  padding: clamp(32px, 6vw, 84px) clamp(30px, 7vw, 118px) 40px;
+  background: var(--surface);
+}
+body.workspace-route #update:not([hidden]) .editor-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto 24px;
+}
+body.workspace-route #update:not([hidden]) .editor-heading h2 { margin: 0; font-size: clamp(1.5rem, 3vw, 2.2rem); letter-spacing: -.035em; }
+body.workspace-route #update:not([hidden]) .editor-heading p:not(.eyebrow) { margin: 7px 0 0; color: var(--muted); font-size: .84rem; }
+body.workspace-route #update:not([hidden]) .editor-back {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 11px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: .78rem;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+}
+body.workspace-route #update:not([hidden]) .editor-back:hover { color: var(--ink); background: #f1f2ee; }
+body.workspace-route #update:not([hidden]) #human-edit {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+}
+body.workspace-route #update:not([hidden]) #human-content {
+  flex: 1;
+  width: 100%;
+  min-height: min(62vh, 720px);
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  padding: 20px 22px;
+  background: #fbfcfa;
+  color: var(--ink);
+  font: 1rem/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+body.workspace-route #update:not([hidden]) #human-content:focus { border-color: #8d9a91; box-shadow: 0 0 0 3px rgb(80 96 84 / 12%); outline: 0; }
+body.workspace-route #update:not([hidden]) .editor-label { display: grid; gap: 8px; color: var(--muted); font-size: .76rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+body.workspace-route #update:not([hidden]) .editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; }
+body.workspace-route #update:not([hidden]) .editor-footer .field-help { margin: 0; }
+body.workspace-route #update:not([hidden]) .editor-actions { display: flex; gap: 8px; }
+body.workspace-route #update:not([hidden]) .editor-actions button { min-height: 36px; padding: 8px 13px; }
+body.workspace-route #update:not([hidden]) .editor-actions .button-secondary { border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); }
+body.workspace-route #update:not([hidden]) .editor-actions .button-secondary:hover { color: var(--ink); background: #f1f2ee; }
+body.workspace-route #update:not([hidden]) .editor-actions button[type="submit"] { border-radius: 6px; background: var(--ink); color: var(--surface); }
+body.workspace-route #update:not([hidden]) .editor-actions button[type="submit"]:hover { background: #343936; }
+body.workspace-route #workspace-share[open],
+body.workspace-route #new-note[open] {
   position: fixed;
   z-index: 6;
   inset: 76px 24px auto auto;
@@ -1198,8 +1265,8 @@ body.workspace-route #workspace-share[open] {
   background: var(--surface);
   box-shadow: 0 20px 56px rgb(24 30 22 / 18%);
 }
-body.workspace-route #update::backdrop,
-body.workspace-route #workspace-share::backdrop { background: rgb(19 23 18 / 18%); }
+body.workspace-route #workspace-share::backdrop,
+body.workspace-route #new-note::backdrop { background: rgb(19 23 18 / 18%); }
 body.workspace-route .panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 body.workspace-route .panel-heading h2 { margin: 0; font-size: 1.15rem; }
 body.workspace-route .panel-heading .eyebrow { margin-bottom: 4px; }
@@ -1216,8 +1283,13 @@ body.workspace-route .panel-close {
   line-height: 1;
 }
 body.workspace-route .panel-close:hover { color: var(--ink); background: #f1f2ee; }
-body.workspace-route #update[open] .stacked-form,
-body.workspace-route #workspace-share[open] .link-form { margin-top: 0; }
+body.workspace-route #workspace-share[open] .link-form,
+body.workspace-route #new-note[open] .stacked-form { margin-top: 0; }
+body.workspace-route #new-note .panel-copy { margin: -6px 0 18px; color: var(--muted); font-size: .84rem; line-height: 1.5; }
+body.workspace-route #new-note .field-help { margin: -.35rem 0 .15rem; }
+body.workspace-route #new-note .form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+body.workspace-route #new-note .form-actions .button-secondary { border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); }
+body.workspace-route #new-note .form-actions .button-secondary:hover { color: var(--ink); background: #f1f2ee; }
 body.workspace-route #workspace-share .card-heading { align-items: start; }
 body.workspace-route #workspace-share .privacy-line { align-items: center; gap: 8px; margin-bottom: 18px; }
 body.workspace-route #workspace-share .state-pill { flex: 0 0 auto; }
@@ -1247,8 +1319,12 @@ body.workspace-route #workspace-share .state-pill { flex: 0 0 auto; }
   body.workspace-route .preview-frame iframe { height: calc(100vh - 78px); }
   body.workspace-route .reader-card { padding: 34px 22px 60px; }
   body.workspace-route .graph-card { height: calc(100vh - 78px); padding: 26px 20px; }
-  body.workspace-route #update[open],
-  body.workspace-route #workspace-share[open] { inset: 70px 16px auto; width: auto; max-height: calc(100vh - 86px); }
+  body.workspace-route #workspace-share[open],
+  body.workspace-route #new-note[open] { inset: 70px 16px auto; width: auto; max-height: calc(100vh - 86px); }
+  body.workspace-route #update:not([hidden]) { padding: 32px 22px 28px; }
+  body.workspace-route #update:not([hidden]) .editor-heading { gap: 12px; }
+  body.workspace-route #update:not([hidden]) .editor-footer { align-items: stretch; flex-direction: column; }
+  body.workspace-route #update:not([hidden]) .editor-actions { justify-content: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) {
   body:not(.debug-route):not(.human-route):not(.standalone-route) .graph-picker-card { transition: none; }
@@ -1439,6 +1515,7 @@ const authReturnTo = document.body.dataset.returnTo || '/';
 let wasAuthenticated = document.body.dataset.authState === 'authenticated';
 let activeRequests = 0;
 let workspaceWeb = false;
+let workspaceEditMode = false;
 let authRedirectStarted = false;
 
 function artifactPath(id) {
@@ -1648,6 +1725,7 @@ function button(label, action) {
 }
 function setWorkspaceMode(mode, persist = true) {
   const graph = mode === 'graph';
+  if (graph && workspaceEditMode) setWorkspaceEditMode(false, false);
   byId('read-mode')?.classList.toggle('is-active', !graph);
   byId('graph-mode')?.classList.toggle('is-active', graph);
   byId('read-mode')?.setAttribute('aria-selected', String(!graph));
@@ -1658,7 +1736,7 @@ function setWorkspaceMode(mode, persist = true) {
   byId('preview-card')?.toggleAttribute('hidden', graph || !workspaceWeb);
   if (graph) {
     clearWorkspaceSearch();
-    ['update', 'workspace-share'].forEach((id) => {
+    ['workspace-share', 'new-note'].forEach((id) => {
       const panel = byId(id);
       if (panel?.open && typeof panel.close === 'function') panel.close();
     });
@@ -1725,18 +1803,33 @@ function closeWorkspacePanel(id) {
   lastPanelTrigger?.focus();
   lastPanelTrigger = null;
 }
-byId('update')?.addEventListener('close', () => {
-  byId('update')?.classList.remove('is-open');
-  lastPanelTrigger?.setAttribute('aria-expanded', 'false');
-  lastPanelTrigger?.focus(); lastPanelTrigger = null;
-});
+function setWorkspaceEditMode(active, focus = true) {
+  const editor = byId('update');
+  if (!editor) return;
+  workspaceEditMode = active;
+  editor.hidden = !active;
+  byId('workspace')?.classList.toggle('edit-mode', active);
+  byId('edit-entry')?.setAttribute('aria-expanded', String(active));
+  byId('reader')?.toggleAttribute('hidden', active || workspaceWeb);
+  byId('preview-card')?.toggleAttribute('hidden', active || !workspaceWeb);
+  byId('graph-context')?.toggleAttribute('hidden', active || !byId('graph-mode')?.classList.contains('is-active'));
+  if (active && focus) setTimeout(() => byId('human-content')?.focus(), 0);
+}
 byId('workspace-share')?.addEventListener('close', () => {
   byId('workspace-share')?.classList.remove('is-open');
   lastPanelTrigger?.setAttribute('aria-expanded', 'false');
   lastPanelTrigger?.focus(); lastPanelTrigger = null;
 });
-byId('close-edit')?.addEventListener('click', () => closeWorkspacePanel('update'));
+byId('new-note')?.addEventListener('close', () => {
+  byId('new-note')?.classList.remove('is-open');
+  lastPanelTrigger?.setAttribute('aria-expanded', 'false');
+  lastPanelTrigger?.focus(); lastPanelTrigger = null;
+});
+byId('close-edit')?.addEventListener('click', () => setWorkspaceEditMode(false));
+byId('human-cancel')?.addEventListener('click', () => setWorkspaceEditMode(false));
 byId('close-share')?.addEventListener('click', () => closeWorkspacePanel('workspace-share'));
+byId('close-new-note')?.addEventListener('click', () => closeWorkspacePanel('new-note'));
+byId('new-note-cancel')?.addEventListener('click', () => closeWorkspacePanel('new-note'));
 
 function renderArtifactTree(artifacts) {
   const target = byId('artifact-tree');
@@ -1880,6 +1973,9 @@ function showRead(read) {
   byId('title').textContent = artifact.name;
   byId('artifact-path').textContent = artifact.name;
   if (byId('tree-breadcrumb')) byId('tree-breadcrumb').textContent = `In this graph / ${artifact.name}`;
+  if (byId('update-title')) byId('update-title').textContent = `Edit ${artifact.name}`;
+  if (byId('edit-context')) byId('edit-context').textContent = 'Changes are saved as a new immutable version.';
+  if (byId('new-note-context')) byId('new-note-context').textContent = `A Markdown note will be added to ${artifact.name}.`;
   if (byId('artifact-media')) byId('artifact-media').textContent = version.media_type;
   const details = byId('artifact-details');
   if (details) {
@@ -2269,11 +2365,19 @@ byId('workspace-search-query')?.addEventListener('keydown', (event) => {
 });
 byId('edit-entry')?.addEventListener('click', (event) => {
   event.preventDefault();
-  openWorkspacePanel('update', 'edit-entry');
+  if (!byId('human-content') || byId('human-content').disabled) return;
+  setWorkspaceMode('read', false);
+  setWorkspaceEditMode(true);
 });
 byId('share-entry')?.addEventListener('click', (event) => {
   event.preventDefault();
   openWorkspacePanel('workspace-share', 'share-entry');
+});
+byId('new-note-entry')?.addEventListener('click', (event) => {
+  event.preventDefault();
+  byId('new-note-name').value = '';
+  byId('new-note-content').value = '';
+  openWorkspacePanel('new-note', 'new-note-entry');
 });
 byId('edit')?.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -2303,12 +2407,44 @@ byId('human-edit')?.addEventListener('submit', async (event) => {
       source_context: {interface: 'library-ui'},
     });
     history.replaceState(null, '', location.pathname);
-    closeWorkspacePanel('update');
+    setWorkspaceEditMode(false, false);
     await loadArtifact(); status('Saved a new version.');
   } catch (error) {
     if (error.status === 409) failure('A newer version already exists. Refresh before saving again; your edit remains here.');
     else handleFailure(error);
   }
+});
+function markdownNoteName(value) {
+  const name = value.trim();
+  if (!name) return '';
+  return /\.(?:md|markdown)$/i.test(name) ? name : `${name}.md`;
+}
+byId('new-note-form')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  let created = null;
+  try {
+    const name = markdownNoteName(byId('new-note-name').value);
+    const content = byId('new-note-content').value;
+    if (!name) throw new Error('Give the note a name.');
+    if (!content.trim()) throw new Error('Write something before adding the note.');
+    status('Adding note to this graph…');
+    created = await call('artifact_create', {
+      name, media_type: 'text/markdown', reason: 'graph note create',
+      content_base64: base64(new TextEncoder().encode(content)),
+      source_context: {interface: 'inspection-ui', graph_root_artifact_id: artifactId},
+    });
+    await call('graph_link', {
+      source_artifact_id: artifactId, target_artifact_id: created.artifact.id,
+      edge_type: 'contains', metadata: {interface: 'inspection-ui'},
+    });
+  } catch (error) {
+    closeWorkspacePanel('new-note');
+    if (created?.artifact?.id) {
+      failure(`Created ${created.artifact.name}, but it could not be added to this graph. It is still in your library.`);
+    } else handleFailure(error);
+    return;
+  }
+  location.assign(`${workspacePath(created.artifact.id)}?created=1`);
 });
 byId('link')?.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -2541,12 +2677,25 @@ def ui_html(
         else ""
     )
     human_editor = (
-        '<dialog id="update" class="surface editor-card" aria-labelledby="update-title">'
-        '<div class="panel-heading"><div><p class="eyebrow">EDIT</p><h2 id="update-title">Edit artifact</h2></div>'
-        '<button id="close-edit" class="panel-close" type="button" aria-label="Close editor">×</button></div>'
-        '<form id="human-edit" class="stacked-form"><input id="human-parent-version" type="hidden">'
-        '<label for="human-content">Content<textarea id="human-content" spellcheck="true"></textarea></label>'
-        '<button id="human-save" type="submit">Save new version</button></form></dialog>'
+        '<section id="update" class="surface editor-card workspace-editor" aria-labelledby="update-title" hidden>'
+        '<div class="editor-heading"><div><p class="eyebrow">EDITING</p><h2 id="update-title">Edit artifact</h2>'
+        '<p id="edit-context">Changes are saved as a new immutable version.</p></div>'
+        '<button id="close-edit" class="editor-back" type="button">Back to reading</button></div>'
+        '<form id="human-edit"><input id="human-parent-version" type="hidden">'
+        '<label class="editor-label" for="human-content">Markdown / text<textarea id="human-content" spellcheck="true"></textarea></label>'
+        '<div class="editor-footer"><p class="field-help">Saving creates version <strong>n + 1</strong>; your current version stays available in history.</p>'
+        '<div class="editor-actions"><button id="human-cancel" class="button-secondary" type="button">Cancel</button>'
+        '<button id="human-save" type="submit">Save new version</button></div></div></form></section>'
+        '<dialog id="new-note" class="surface editor-card" aria-labelledby="new-note-title">'
+        '<div class="panel-heading"><div><p class="eyebrow">NEW NOTE</p><h2 id="new-note-title">Add to this graph</h2></div>'
+        '<button id="close-new-note" class="panel-close" type="button" aria-label="Close new note">×</button></div>'
+        '<p id="new-note-context" class="panel-copy">A Markdown note will be added to this graph.</p>'
+        '<form id="new-note-form" class="stacked-form"><label for="new-note-name">Note name'
+        '<input id="new-note-name" required maxlength="255" placeholder="e.g. decision.md"></label>'
+        '<p class="field-help">Markdown note · .md is added if you leave off the extension.</p>'
+        '<label for="new-note-content">Content<textarea id="new-note-content" required spellcheck="true" placeholder="Write a note…"></textarea></label>'
+        '<div class="form-actions"><button id="new-note-cancel" class="button-secondary" type="button">Cancel</button>'
+        '<button id="new-note-save" type="submit">Add note</button></div></form></dialog>'
         if human and not debug
         else ""
     )
@@ -2578,8 +2727,9 @@ def ui_html(
             '<div class="view-switch" role="tablist" aria-label="Workspace view">'
             '<button id="read-mode" type="button" role="tab" aria-selected="true" aria-controls="reader" tabindex="0" class="is-active">Read</button>'
             '<button id="graph-mode" type="button" role="tab" aria-selected="false" aria-controls="graph-context" tabindex="-1">Graph</button></div>'
-            '<div class="workspace-actions"><a id="share-entry" href="#workspace-share" aria-haspopup="dialog" aria-expanded="false" aria-controls="workspace-share">Share</a>'
-            '<a id="edit-entry" href="#update" aria-haspopup="dialog" aria-expanded="false" aria-controls="update">Edit</a></div>'
+            '<div class="workspace-actions"><button id="new-note-entry" class="workspace-primary-action" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="new-note">Add note</button>'
+            '<button id="share-entry" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="workspace-share">Share</button>'
+            '<button id="edit-entry" type="button" aria-expanded="false" aria-controls="update">Edit</button></div>'
             '<a id="standalone-link" class="workspace-option" href="#" target="_blank" rel="noreferrer" hidden>Open site ↗</a>'
             '<form id="workspace-search" class="workspace-search" role="search"><label class="sr-only" for="workspace-search-query">Search this graph</label>'
             '<input id="workspace-search-query" type="search" maxlength="500" placeholder="Search graph"><button type="submit" aria-label="Search graph">⌕</button></form>'

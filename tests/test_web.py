@@ -362,6 +362,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="read-mode"',
             b'id="graph-mode"',
             b'id="workspace-share"',
+            b'id="new-note"',
+            b'id="new-note-entry"',
             b'id="human-edit"',
             b'id="graph-context"',
         ):
@@ -389,6 +391,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b"artifact_revoke",
             b"artifact_acl",
             b"graph_link",
+            b"graph note create",
+            b"markdownNoteName",
             b"graph_traverse",
             b"renderArtifactTree",
             b"setWorkspaceMode",
