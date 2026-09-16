@@ -10,9 +10,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
-from .auth import AuthenticationError, MembershipStore, Principal
+from .auth import AuthenticationError, MembershipError, MembershipStore, Principal
+from .identity import IdentityClaims
 
 SESSION_COOKIE_NAME = "__Host-folio_session"
 SESSION_COOKIE_PATH = "/"
@@ -41,31 +41,6 @@ class AuthTransaction:
     code_challenge: str
     return_to: str
     redirect_uri: str
-
-
-class HostedIdentityAdapter(Protocol):
-    """Provider-neutral browser authorization-code adapter."""
-
-    def ready(self) -> bool: ...
-
-    def authorization_url(
-        self,
-        *,
-        state: str,
-        nonce: str,
-        code_challenge: str,
-        redirect_uri: str,
-        return_to: str,
-    ) -> str: ...
-
-    def complete_callback(
-        self,
-        *,
-        code: str,
-        nonce: str,
-        code_verifier: str,
-        redirect_uri: str,
-    ) -> Principal: ...
 
 
 class SessionStore:
@@ -139,7 +114,6 @@ class SessionStore:
             raise AuthenticationError("principal is not active")
         session_id = secrets.token_urlsafe(SESSION_ID_BYTES)
         now = self._clock()
-        scopes = json.dumps(sorted(principal.scopes), separators=(",", ":"))
         with self.connect() as db:
             db.execute(
                 """
@@ -154,13 +128,27 @@ class SessionStore:
                     principal.subject,
                     membership.tenant_id,
                     membership.actor_id,
-                    scopes,
+                    json.dumps(sorted(membership.scopes), separators=(",", ":")),
                     now,
                     now,
                     now + self.absolute_ttl_seconds,
                 ),
             )
         return session_id
+
+    def create_for_identity(self, identity: IdentityClaims) -> str:
+        membership = self.membership_store.lookup(identity.issuer, identity.subject)
+        if membership is None or membership.status != "active":
+            raise AuthenticationError("principal is not active")
+        return self.create(
+            Principal(
+                tenant_id=membership.tenant_id,
+                actor_id=membership.actor_id,
+                issuer=identity.issuer,
+                subject=identity.subject,
+                scopes=membership.scopes,
+            )
+        )
 
     def begin_auth(
         self,
@@ -254,12 +242,21 @@ class SessionStore:
                 or row["last_seen_at"] + self.idle_ttl_seconds <= now
             ):
                 return None
-            membership = self.membership_store.lookup(row["issuer"], row["subject"])
+            try:
+                membership = self.membership_store.lookup(row["issuer"], row["subject"])
+            except MembershipError:
+                membership = None
+            membership_scopes = (
+                json.dumps(sorted(membership.scopes), separators=(",", ":"))
+                if membership is not None
+                else None
+            )
             if (
                 membership is None
                 or membership.status != "active"
                 or membership.tenant_id != row["tenant_id"]
                 or membership.actor_id != row["actor_id"]
+                or membership_scopes != row["scopes"]
             ):
                 db.execute(
                     "UPDATE browser_sessions SET revoked_at = ? WHERE session_hash = ?",
@@ -275,7 +272,7 @@ class SessionStore:
                 actor_id=row["actor_id"],
                 issuer=row["issuer"],
                 subject=row["subject"],
-                scopes=frozenset(json.loads(row["scopes"])),
+                scopes=membership.scopes,
             )
             return SessionRecord(
                 session_id=session_id,

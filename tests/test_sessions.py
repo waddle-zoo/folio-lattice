@@ -20,6 +20,7 @@ import uvicorn
 from starlette.responses import JSONResponse
 
 from folio_lattice.auth import AuthenticationError, MembershipStore, Principal
+from folio_lattice.identity import IdentityClaims
 from folio_lattice.server import FolioHttpApp
 from folio_lattice.sessions import SESSION_COOKIE_NAME, SessionStore
 
@@ -65,7 +66,7 @@ class _IdentityAdapter:
         self.starts.append(values)
         return "https://idp.example/authorize?" + urlencode(values)
 
-    def complete_callback(self, **values: str) -> Principal:
+    def complete_callback(self, **values: str) -> IdentityClaims:
         self.completions.append(values)
         if values["code"] != "good":
             raise AuthenticationError("authorization code rejected")
@@ -83,7 +84,18 @@ class _IdentityAdapter:
             or values["redirect_uri"] != self.redirect_uri
         ):
             raise AuthenticationError("authorization binding rejected")
-        return self.principal
+        return IdentityClaims(self.principal.issuer, self.principal.subject)
+
+
+class _MaliciousIdentityAdapter(_IdentityAdapter):
+    def complete_callback(self, **_values: str) -> Principal:
+        return Principal(
+            "attacker-tenant",
+            "attacker-actor",
+            self.principal.issuer,
+            self.principal.subject,
+            frozenset({"admin:all"}),
+        )
 
 
 def _free_port() -> int:
@@ -139,9 +151,10 @@ class HostedAuthHttpTests(unittest.TestCase):
             subject=self.subject.subject,
             tenant_id="tenant-a",
             actor_id="actor-a",
+            scopes={"artifact:read"},
         )
         self.sessions = SessionStore(self.db_path, self.memberships)
-        self.redirect_uri = "http://127.0.0.1/auth/callback"
+        self.redirect_uri = "https://127.0.0.1/auth/callback"
         self.adapter = _IdentityAdapter(self.subject, self.redirect_uri)
         downstream = JSONResponse({"downstream": True})
         self.app = FolioHttpApp(
@@ -239,6 +252,7 @@ class HostedAuthHttpTests(unittest.TestCase):
         resolved = self.sessions.lookup(new_session)
         self.assertIsNotNone(resolved)
         self.assertEqual((resolved.tenant_id, resolved.actor_id), ("tenant-a", "actor-a"))
+        self.assertEqual(resolved.principal.scopes, frozenset({"artifact:read"}))
         self.assertEqual(self.adapter.completions[-1]["redirect_uri"], self.redirect_uri)
 
         status, headers, body = self.request("GET", callback)
@@ -392,6 +406,27 @@ class SessionHttpTests(unittest.IsolatedAsyncioTestCase):
         session_id = session_cookie.split(";", 1)[0].split("=", 1)[1]
         self.assertIsNotNone(self.sessions.lookup(session_id))
 
+    async def test_auth_callback_rejects_unverified_principal_and_scopes(self) -> None:
+        redirect_uri = "https://folio.test/auth/callback"
+        adapter = _MaliciousIdentityAdapter(self.principal, redirect_uri)
+        self.app.identity_adapter = adapter
+        self.app.auth_redirect_uri = redirect_uri
+
+        status, headers, _ = await self.call("/auth/start")
+        self.assertEqual(status, 302)
+        auth_cookie = headers["set-cookie"].split(";", 1)[0]
+        state = parse_qs(urlsplit(headers["location"]).query)["state"][0]
+        callback = f"/auth/callback?{urlencode({'state': state, 'code': 'good'})}"
+
+        status, _, body = await self.call(
+            callback,
+            headers=[(b"cookie", auth_cookie.encode("latin-1"))],
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(body)["code"], "authentication_failed")
+        with sqlite3.connect(self.db_path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM browser_sessions").fetchone()[0], 0)
+
     async def test_auth_state_consumption_is_exactly_once_under_concurrency(self) -> None:
         transaction = self.sessions.begin_auth(
             return_to="/", redirect_uri="https://folio.test/auth/callback"
@@ -480,6 +515,12 @@ class SessionHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.sessions.lookup(absolute_session))
         self.clock.value = 1_121
         self.assertIsNone(self.sessions.lookup(absolute_session))
+
+        membership_session = self.sessions.create(self.principal)
+        self.memberships.set_scopes(
+            self.principal.issuer, self.principal.subject, {"artifact:write"}
+        )
+        self.assertIsNone(self.sessions.lookup(membership_session))
 
         membership_session = self.sessions.create(self.principal)
         self.memberships.set_status(self.principal.issuer, self.principal.subject, "disabled")

@@ -26,6 +26,16 @@ from .auth import (
     set_request_principal,
 )
 from .bridge import AttachedMcpBridge
+from .identity import (
+    DEFAULT_IDENTITY_MAX_RESPONSE_BYTES,
+    DEFAULT_IDENTITY_TIMEOUT_SECONDS,
+    MAX_IDENTITY_RESPONSE_BYTES,
+    MAX_IDENTITY_TIMEOUT_SECONDS,
+    HostedIdentityAdapter,
+    HostedIdentityConfig,
+    HttpHostedIdentityAdapter,
+    IdentityClaims,
+)
 from .inspection import InspectionApp
 from .mcp_protocol import build_mcp_server
 from .public_mcp import HttpMcpClient
@@ -36,7 +46,6 @@ from .sessions import (
     AUTH_TRANSACTION_TTL_SECONDS,
     SESSION_COOKIE_NAME,
     SESSION_COOKIE_PATH,
-    HostedIdentityAdapter,
     SessionStore,
 )
 
@@ -65,6 +74,16 @@ class Settings:
     oidc_jwks_timeout_seconds: float = 5
     oidc_jwks_cache_seconds: float = 300
     oidc_clock_skew_seconds: float = 0
+    auth_authorization_endpoint: str | None = None
+    auth_token_endpoint: str | None = None
+    auth_client_id: str | None = None
+    auth_redirect_uri: str | None = None
+    auth_timeout_seconds: float = DEFAULT_IDENTITY_TIMEOUT_SECONDS
+    auth_max_response_bytes: int = DEFAULT_IDENTITY_MAX_RESPONSE_BYTES
+
+    @property
+    def browser_auth_configured(self) -> bool:
+        return self.auth_authorization_endpoint is not None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -77,6 +96,12 @@ class Settings:
         oidc_jwks_timeout_seconds = 5.0
         oidc_jwks_cache_seconds = 300.0
         oidc_clock_skew_seconds = 0.0
+        auth_authorization_endpoint = None
+        auth_token_endpoint = None
+        auth_client_id = None
+        auth_redirect_uri = None
+        auth_timeout_seconds = DEFAULT_IDENTITY_TIMEOUT_SECONDS
+        auth_max_response_bytes = DEFAULT_IDENTITY_MAX_RESPONSE_BYTES
         if deployment_mode == "local":
             if not tenant_id.strip() or not actor.strip():
                 raise ValueError("FOLIO_TENANT_ID and FOLIO_ACTOR must not be empty")
@@ -96,6 +121,33 @@ class Settings:
                 )
                 oidc_jwks_cache_seconds = _positive_float_env("FOLIO_OIDC_JWKS_CACHE_SECONDS", 300)
                 oidc_clock_skew_seconds = _nonnegative_float_env("FOLIO_OIDC_CLOCK_SKEW_SECONDS", 0)
+                browser_env = (
+                    "FOLIO_OIDC_AUTHORIZATION_ENDPOINT",
+                    "FOLIO_OIDC_TOKEN_ENDPOINT",
+                    "FOLIO_OIDC_CLIENT_ID",
+                    "FOLIO_OIDC_REDIRECT_URI",
+                    "FOLIO_OIDC_AUTH_TIMEOUT_SECONDS",
+                    "FOLIO_OIDC_AUTH_MAX_RESPONSE_BYTES",
+                )
+                if any(os.environ.get(name) is not None for name in browser_env):
+                    oidc_issuer = _https_url_env("FOLIO_OIDC_ISSUER")
+                    oidc_jwks_url = _https_url_env("FOLIO_OIDC_JWKS_URL")
+                    auth_authorization_endpoint = _https_url_env(
+                        "FOLIO_OIDC_AUTHORIZATION_ENDPOINT"
+                    )
+                    auth_token_endpoint = _https_url_env("FOLIO_OIDC_TOKEN_ENDPOINT")
+                    auth_client_id = _required_env("FOLIO_OIDC_CLIENT_ID")
+                    auth_redirect_uri = _https_callback_env("FOLIO_OIDC_REDIRECT_URI")
+                    auth_timeout_seconds = _bounded_positive_float_env(
+                        "FOLIO_OIDC_AUTH_TIMEOUT_SECONDS",
+                        DEFAULT_IDENTITY_TIMEOUT_SECONDS,
+                        MAX_IDENTITY_TIMEOUT_SECONDS,
+                    )
+                    auth_max_response_bytes = _bounded_positive_int_env(
+                        "FOLIO_OIDC_AUTH_MAX_RESPONSE_BYTES",
+                        DEFAULT_IDENTITY_MAX_RESPONSE_BYTES,
+                        MAX_IDENTITY_RESPONSE_BYTES,
+                    )
             except ValueError as exc:
                 raise ValueError(f"hosted mode requires an authentication adapter; {exc}") from exc
         return cls(
@@ -119,6 +171,12 @@ class Settings:
             oidc_jwks_timeout_seconds=oidc_jwks_timeout_seconds,
             oidc_jwks_cache_seconds=oidc_jwks_cache_seconds,
             oidc_clock_skew_seconds=oidc_clock_skew_seconds,
+            auth_authorization_endpoint=auth_authorization_endpoint,
+            auth_token_endpoint=auth_token_endpoint,
+            auth_client_id=auth_client_id,
+            auth_redirect_uri=auth_redirect_uri,
+            auth_timeout_seconds=auth_timeout_seconds,
+            auth_max_response_bytes=auth_max_response_bytes,
         )
 
 
@@ -133,6 +191,23 @@ def _positive_float_env(name: str, default: float) -> float:
     value = float(os.environ.get(name, str(default)))
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be positive")
+    return value
+
+
+def _bounded_positive_float_env(name: str, default: float, maximum: float) -> float:
+    value = _positive_float_env(name, default)
+    if value > maximum:
+        raise ValueError(f"{name} must not exceed {maximum:g}")
+    return value
+
+
+def _bounded_positive_int_env(name: str, default: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < 1 or value > maximum:
+        raise ValueError(f"{name} must be between 1 and {maximum}")
     return value
 
 
@@ -180,6 +255,41 @@ def _oidc_url_env(name: str, *, required: bool) -> str | None:
         _ = parsed.port
     except ValueError as exc:
         raise ValueError(f"{name} must be an HTTP URL without credentials") from exc
+    return value
+
+
+def _https_url_env(name: str) -> str:
+    value = os.environ.get(name)
+    if (
+        value is None
+        or not value
+        or value != value.strip()
+        or len(value) > 4 * 1024
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+    ):
+        raise ValueError(f"{name} must be an exact HTTPS URL")
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"{name} must be an exact HTTPS URL")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an exact HTTPS URL") from exc
+    return value
+
+
+def _https_callback_env(name: str) -> str:
+    value = _https_url_env(name)
+    if urlsplit(value).path != "/auth/callback":
+        raise ValueError(f"{name} must use the exact /auth/callback path")
     return value
 
 
@@ -507,15 +617,15 @@ class FolioHttpApp:
             )
             return
         try:
-            principal = self.identity_adapter.complete_callback(
+            identity = self.identity_adapter.complete_callback(
                 code=code,
                 nonce=transaction.nonce,
                 code_verifier=transaction.code_verifier,
                 redirect_uri=transaction.redirect_uri,
             )
-            if not isinstance(principal, Principal):
-                raise AuthenticationError("identity provider returned no principal")
-            session_id = self.session_store.create(principal)
+            if not isinstance(identity, IdentityClaims):
+                raise AuthenticationError("identity provider returned no verified identity")
+            session_id = self.session_store.create_for_identity(identity)
         except AuthenticationError:
             await self._error(
                 scope,
@@ -677,7 +787,7 @@ def _auth_redirect_uri(value: str | None) -> str | None:
         return None
     parsed = urlsplit(value)
     if (
-        parsed.scheme not in {"http", "https"}
+        parsed.scheme != "https"
         or not parsed.netloc
         or not parsed.hostname
         or parsed.username is not None
@@ -749,8 +859,35 @@ def run_http(host: str, port: int) -> None:
     settings = Settings.from_env()
     service, mcp, authenticator = build_runtime(settings)
     session_store = None
+    identity_adapter = None
+    auth_redirect_uri = None
     if settings.deployment_mode == "hosted":
         session_store = SessionStore(settings.db_path, MembershipStore(settings.db_path))
+        if settings.browser_auth_configured:
+            assert (
+                settings.oidc_issuer
+                and settings.oidc_jwks_url
+                and settings.auth_authorization_endpoint
+                and settings.auth_token_endpoint
+                and settings.auth_client_id
+                and settings.auth_redirect_uri
+            )
+            identity_config = HostedIdentityConfig(
+                issuer=settings.oidc_issuer,
+                jwks_url=settings.oidc_jwks_url,
+                authorization_endpoint=settings.auth_authorization_endpoint,
+                token_endpoint=settings.auth_token_endpoint,
+                client_id=settings.auth_client_id,
+                redirect_uri=settings.auth_redirect_uri,
+                timeout_seconds=settings.auth_timeout_seconds,
+                max_response_bytes=settings.auth_max_response_bytes,
+            )
+            identity_adapter = HttpHostedIdentityAdapter(
+                identity_config,
+                clock_skew_seconds=settings.oidc_clock_skew_seconds,
+            )
+            identity_adapter.warm_up()
+            auth_redirect_uri = identity_config.redirect_uri
     app = mcp.streamable_http_app(
         json_response=True,
         max_request_body_size=settings.max_request_bytes,
@@ -779,6 +916,8 @@ def run_http(host: str, port: int) -> None:
             deployment_mode=settings.deployment_mode,
             authenticator=authenticator,
             session_store=session_store,
+            identity_adapter=identity_adapter,
+            auth_redirect_uri=auth_redirect_uri,
         ),
         host=host,
         port=port,

@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +69,7 @@ class Membership:
     tenant_id: str
     actor_id: str
     status: str
+    scopes: frozenset[str]
 
 
 def _required_text(field: str, value: object) -> str:
@@ -77,8 +78,28 @@ def _required_text(field: str, value: object) -> str:
     return value
 
 
+def _server_scopes(value: object) -> frozenset[str]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
+        raise MembershipError("membership scopes must be a list of strings")
+    try:
+        scopes = frozenset(value)
+    except TypeError as exc:
+        raise MembershipError("membership scopes must be a list of strings") from exc
+    if len(scopes) > 128 or any(
+        not isinstance(scope, str)
+        or not scope
+        or any(
+            ord(character) < 0x21 or ord(character) > 0x7E or character in {'"', "\\"}
+            for character in scope
+        )
+        for scope in scopes
+    ):
+        raise MembershipError("membership scopes are invalid")
+    return scopes
+
+
 class MembershipStore:
-    """Server-owned `(issuer, subject)` mapping with mutable status only."""
+    """Server-owned identity mapping, scopes, and mutable status."""
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
@@ -100,6 +121,7 @@ class MembershipStore:
                     tenant_id TEXT NOT NULL,
                     actor_id TEXT NOT NULL,
                     status TEXT NOT NULL CHECK(status IN ('active', 'disabled', 'revoked')),
+                    scopes TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (issuer, subject)
@@ -112,6 +134,11 @@ class MembershipStore:
                 END;
                 """
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(oidc_memberships)")}
+            if "scopes" not in columns:
+                db.execute(
+                    "ALTER TABLE oidc_memberships ADD COLUMN scopes TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def add(
         self,
@@ -121,6 +148,7 @@ class MembershipStore:
         tenant_id: str,
         actor_id: str,
         status: str = "active",
+        scopes: Iterable[str] = (),
     ) -> Membership:
         issuer = _required_text("issuer", issuer)
         subject = _required_text("subject", subject)
@@ -128,16 +156,26 @@ class MembershipStore:
         actor_id = _required_text("actor_id", actor_id)
         if not isinstance(status, str) or status not in MEMBERSHIP_STATUSES:
             raise MembershipError("membership status is invalid")
+        scopes = _server_scopes(scopes)
         now = str(time.time())
         try:
             with self.connect() as db:
                 db.execute(
                     """
                     INSERT INTO oidc_memberships(
-                        issuer, subject, tenant_id, actor_id, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        issuer, subject, tenant_id, actor_id, status, scopes, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (issuer, subject, tenant_id, actor_id, status, now, now),
+                    (
+                        issuer,
+                        subject,
+                        tenant_id,
+                        actor_id,
+                        status,
+                        json.dumps(sorted(scopes), separators=(",", ":")),
+                        now,
+                        now,
+                    ),
                 )
         except sqlite3.IntegrityError as exc:
             existing = self.lookup(issuer, subject)
@@ -146,7 +184,7 @@ class MembershipStore:
             ):
                 raise MembershipError("OIDC membership mapping is immutable") from exc
             raise MembershipError("OIDC membership already exists") from exc
-        return Membership(issuer, subject, tenant_id, actor_id, status)
+        return Membership(issuer, subject, tenant_id, actor_id, status, scopes)
 
     def set_status(self, issuer: str, subject: str, status: str) -> Membership:
         issuer = _required_text("issuer", issuer)
@@ -164,16 +202,44 @@ class MembershipStore:
         assert membership is not None
         return membership
 
+    def set_scopes(self, issuer: str, subject: str, scopes: Iterable[str]) -> Membership:
+        issuer = _required_text("issuer", issuer)
+        subject = _required_text("subject", subject)
+        scopes = _server_scopes(scopes)
+        with self.connect() as db:
+            result = db.execute(
+                "UPDATE oidc_memberships SET scopes = ?, updated_at = ? "
+                "WHERE issuer = ? AND subject = ?",
+                (
+                    json.dumps(sorted(scopes), separators=(",", ":")),
+                    str(time.time()),
+                    issuer,
+                    subject,
+                ),
+            )
+            if result.rowcount != 1:
+                raise MembershipError("OIDC membership not found")
+        membership = self.lookup(issuer, subject)
+        assert membership is not None
+        return membership
+
     def lookup(self, issuer: str, subject: str) -> Membership | None:
         with self.connect() as db:
             row = db.execute(
                 """
-                SELECT issuer, subject, tenant_id, actor_id, status
+                SELECT issuer, subject, tenant_id, actor_id, status, scopes
                 FROM oidc_memberships WHERE issuer = ? AND subject = ?
                 """,
                 (issuer, subject),
             ).fetchone()
-        return Membership(**dict(row)) if row is not None else None
+        if row is None:
+            return None
+        values = dict(row)
+        try:
+            values["scopes"] = _server_scopes(json.loads(values["scopes"]))
+        except (TypeError, ValueError) as exc:
+            raise MembershipError("membership scopes are invalid") from exc
+        return Membership(**values)
 
     def seed_file(self, path: str | Path) -> None:
         try:
@@ -192,6 +258,7 @@ class MembershipStore:
                 "tenant_id": record.get("tenant_id"),
                 "actor_id": record.get("actor_id"),
                 "status": record.get("status", "active"),
+                "scopes": record.get("scopes", []),
             }
             issuer = _required_text("issuer", values["issuer"])
             subject = _required_text("subject", values["subject"])
@@ -203,8 +270,11 @@ class MembershipStore:
                 values["actor_id"],
             ):
                 raise MembershipError("OIDC membership mapping is immutable")
-            elif existing.status != values["status"]:
-                self.set_status(issuer, subject, values["status"])
+            else:
+                if existing.status != values["status"]:
+                    self.set_status(issuer, subject, values["status"])
+                if existing.scopes != _server_scopes(values["scopes"]):
+                    self.set_scopes(issuer, subject, values["scopes"])
 
 
 class JwksClient:
@@ -354,7 +424,6 @@ class OidcVerifier:
             raise AuthenticationError("invalid bearer token")
         if not self._audience_matches(claims.get("aud")):
             raise AuthenticationError("invalid bearer token")
-        scopes = self._scope_claim(claims.get("scope"))
         subject = claims.get("sub")
         if not isinstance(subject, str) or not subject:
             raise AuthenticationError("invalid bearer token")
@@ -369,7 +438,10 @@ class OidcVerifier:
         issued_at = self._numeric_claim(claims, "iat")
         if issued_at is not None and issued_at > now + self.clock_skew_seconds:
             raise AuthenticationError("invalid bearer token")
-        membership = self.memberships.lookup(self.issuer, subject)
+        try:
+            membership = self.memberships.lookup(self.issuer, subject)
+        except MembershipError as exc:
+            raise AuthenticationError("principal is not active") from exc
         if membership is None or membership.status != "active":
             raise AuthenticationError("principal is not active")
         return Principal(
@@ -377,7 +449,7 @@ class OidcVerifier:
             actor_id=membership.actor_id,
             issuer=self.issuer,
             subject=subject,
-            scopes=scopes,
+            scopes=membership.scopes,
         )
 
     def _audience_matches(self, value: object) -> bool:
@@ -388,24 +460,6 @@ class OidcVerifier:
             and all(isinstance(item, str) for item in value)
             and (self.audience in value)
         )
-
-    @staticmethod
-    def _scope_claim(value: object) -> frozenset[str]:
-        if not isinstance(value, str) or not value or value != value.strip():
-            raise AuthenticationError("invalid bearer token")
-        if any(character.isspace() and character != " " for character in value):
-            raise AuthenticationError("invalid bearer token")
-        scopes = frozenset(value.split(" "))
-        if any(
-            not scope
-            or any(
-                ord(character) < 0x21 or ord(character) > 0x7E or character in {'"', "\\"}
-                for character in scope
-            )
-            for scope in scopes
-        ):
-            raise AuthenticationError("invalid bearer token")
-        return scopes
 
     @staticmethod
     def _numeric_claim(
