@@ -229,6 +229,11 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertIn(b"Sign in to continue.", page)
         self.assertIn(b"local workspace is running without sign-in", page)
+        self.assertIn(b'data-return-to="/workspace/art_123"', page)
+        self.assertIn(b'<script src="/ui.js"></script>', page)
+        _, _, script = await call(self.inspection, "GET", "/ui.js")
+        self.assertIn(b"/v1/me", script)
+        self.assertIn(b"/auth/logout", script)
         self.assertNotIn(b"/auth/start", page)
 
         hosted = ui_html(
@@ -237,11 +242,17 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             sign_in=True,
             return_to="/workspace/art_123",
         )
-        self.assertIn(
-            'href="/auth/start?return_to=%2Fworkspace%2Fart_123"', hosted
-        )
+        self.assertIn('href="/auth/start?return_to=%2Fworkspace%2Fart_123"', hosted)
+        self.assertIn('data-return-to="/workspace/art_123"', hosted)
+        self.assertIn('id="auth-session"', hosted)
         self.assertNotIn("/auth/start?return_to=https", hosted)
         self.assertNotIn("document.cookie", hosted)
+
+        unsafe = ui_html(
+            RENDER_ORIGIN, auth_state="hosted", sign_in=True, return_to="https://evil.example"
+        )
+        self.assertIn('data-return-to="/"', unsafe)
+        self.assertNotIn("evil.example", unsafe)
 
     async def test_ui_contract_has_nontechnical_orientation_and_safe_status_copy(self) -> None:
         status, _, page = await call(self.inspection, "GET", "/")

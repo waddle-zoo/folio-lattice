@@ -17,6 +17,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 from mcp import Client
 from websockets.sync.client import connect
@@ -47,7 +48,7 @@ def browser_path() -> str | None:
             probe = subprocess.run(
                 [candidate, "--version"], capture_output=True, timeout=5, check=False
             )
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             continue
         if probe.returncode == 0:
             return candidate
@@ -257,7 +258,7 @@ class DevTools:
 
 
 class BrowserHostedAuthE2ETests(unittest.TestCase):
-    def test_auth_states_are_accessible_safe_and_preserve_input(self) -> None:
+    def test_auth_states_are_accessible_safe_and_recoverable(self) -> None:
         browser = browser_path()
         if browser is None:
             self.skipTest("set FOLIO_BROWSER to Chrome or Chromium for hosted auth UI evidence")
@@ -290,6 +291,10 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 self.assertFalse(
                     chrome.evaluate("Boolean(document.querySelector('#auth-context'))")
                 )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('.mode-status')?.textContent"),
+                    "Local",
+                )
                 self.assertIn(
                     chrome.evaluate("getComputedStyle(document.body).backgroundColor"),
                     {"rgb(245, 247, 249)", "rgb(16, 23, 32)"},
@@ -297,73 +302,30 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 self.assertGreaterEqual(
                     chrome.evaluate("document.querySelectorAll('.surface').length"), 2
                 )
-                handler.api_status = 401
-                chrome.command("Page.navigate", {"url": f"{origin}/inspect/opaque-reference"})
-                chrome.wait("!document.querySelector('#error').hidden")
-                self.assertTrue(chrome.evaluate("Boolean(document.querySelector('#auth-context'))"))
-                self.assertIn(
-                    "Unauthenticated local development",
-                    chrome.evaluate("document.querySelector('#local-warning').textContent"),
-                )
-
-                handler.page_auth_state = "unauthenticated"
+                handler.page_auth_state = "hosted"
                 handler.page_organization = None
                 handler.page_actor = None
                 handler.api_status = 401
+                handler.me_status = 401
                 chrome.command("Page.navigate", {"url": origin})
-                chrome.wait("!document.querySelector('#error').hidden")
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#error').textContent"),
-                    "Sign-in required. Sign in to continue.",
-                )
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#status').textContent"), ""
-                )
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#error').getAttribute('role')"),
-                    "alert",
-                )
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#status').getAttribute('role')"),
-                    "status",
-                )
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#status').getAttribute('aria-live')"),
-                    "polite",
-                )
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#error').getAttribute('aria-live')"),
-                    "assertive",
-                )
-                self.assertEqual(chrome.evaluate("document.activeElement.id"), "error")
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#auth-action').getAttribute('href')"),
-                    "/sign-in?return_to=%2F",
-                )
-                chrome.evaluate(
-                    "document.querySelector('#create-name').value='draft.txt'; document.querySelector('#create-text').value='unsaved document'; document.querySelector('#create').requestSubmit()"
-                )
-                chrome.wait(
-                    "document.querySelector('#error').textContent === 'Sign-in required. Sign in to continue.'"
-                )
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#create-name').value"), "draft.txt"
-                )
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#create-text').value"),
-                    "unsaved document",
-                )
-                chrome.key("Tab", "Tab", 9)
-                self.assertEqual(chrome.evaluate("document.activeElement.id"), "auth-action")
-                chrome.key("Enter", "Enter", 13)
                 chrome.wait(
                     "location.pathname === '/sign-in' && location.search === '?return_to=%2F'"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#auth-status').textContent"),
+                    "Sign-in required. Sign in to continue.",
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('#auth-provider').textContent.includes('Continue with your organization')"
+                    )
                 )
 
                 handler.page_auth_state = "authenticated"
                 handler.page_organization = "Acme Operations"
                 handler.page_actor = "Ada Lovelace"
                 handler.api_status = 200
+                handler.me_status = 200
                 chrome.command("Page.navigate", {"url": origin})
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 self.assertNotIn(
@@ -373,42 +335,36 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                     chrome.evaluate("Boolean(document.querySelector('#auth-context'))")
                 )
                 handler.api_status = 401
+                handler.me_status = 401
                 chrome.evaluate(
-                    "document.querySelector('#create-name').value='expired-draft.txt'; document.querySelector('#create-text').value='unsaved search'; document.querySelector('#create').requestSubmit()"
+                    "document.querySelector('#create-name').value='expired-draft.txt'; "
+                    "document.querySelector('#create-text').value='unsaved document'; "
+                    "document.querySelector('#create').requestSubmit()"
                 )
                 chrome.wait(
-                    "document.querySelector('#error').textContent === 'Your session expired. Sign in again.'"
-                )
-                self.assertEqual(chrome.evaluate("document.activeElement.id"), "error")
-                self.assertFalse(
-                    chrome.evaluate("Boolean(document.querySelector('#auth-context'))")
+                    "location.pathname === '/sign-in' && location.search === '?return_to=%2F'"
                 )
                 self.assertEqual(
-                    chrome.evaluate("document.querySelector('#create-text').value"),
-                    "unsaved search",
-                )
-                self.assertEqual(
-                    chrome.evaluate("document.querySelector('#auth-action').textContent"), "Sign in"
+                    chrome.evaluate("document.querySelector('#auth-status').textContent"),
+                    "Your session expired. Sign in again.",
                 )
 
                 handler.api_status = 401
+                handler.me_status = 401
                 chrome.command("Page.navigate", {"url": f"{origin}/inspect/opaque-reference"})
                 chrome.wait(
-                    "document.querySelector('#error').textContent === 'Your session expired. Sign in again.'"
+                    "location.pathname === '/sign-in' && location.search === '?return_to=%2Finspect%2Fopaque-reference'"
                 )
                 self.assertEqual(
-                    chrome.evaluate("document.querySelector('#auth-action').getAttribute('href')"),
-                    "/sign-in?return_to=%2Finspect%2Fopaque-reference",
+                    chrome.evaluate("document.body.dataset.returnTo"),
+                    "/inspect/opaque-reference",
                 )
-                self.assertNotIn(
-                    "Acme", chrome.evaluate("document.querySelector('#auth-action').href")
-                )
-                self.assertNotIn(
-                    "private", chrome.evaluate("document.querySelector('#auth-action').href")
-                )
+                self.assertNotIn("Acme", chrome.evaluate("document.body.innerText"))
+                self.assertNotIn("private", chrome.evaluate("document.body.innerText"))
 
                 handler.api_status = 403
-                chrome.command("Page.reload")
+                handler.me_status = 200
+                chrome.command("Page.navigate", {"url": f"{origin}/inspect/opaque-reference"})
                 chrome.wait(
                     "document.querySelector('#error').textContent === 'This document is not available to you.'"
                 )
@@ -436,6 +392,59 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_sign_in_shell_reads_identity_and_logs_out(self) -> None:
+        browser = browser_path()
+        if browser is None:
+            self.skipTest("set FOLIO_BROWSER to Chrome or Chromium for hosted auth UI evidence")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            port = free_port()
+            origin = f"http://127.0.0.1:{port}"
+            handler = self._handler(origin)
+            handler.page_auth_state = "hosted"
+            handler.page_organization = "Acme Operations"
+            handler.page_actor = "Ada Lovelace"
+            handler.me_status = 200
+            server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            chrome: DevTools | None = None
+            try:
+                chrome = DevTools(
+                    browser,
+                    f"{origin}/sign-in?return_to=%2Fworkspace%2Fopaque-reference",
+                    root / "chrome-session",
+                )
+                chrome.wait("!document.querySelector('#auth-session').hidden")
+                self.assertGreaterEqual(handler.me_calls, 1)
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#auth-actor').textContent"),
+                    "Ada Lovelace",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#auth-organization').textContent"),
+                    "Acme Operations",
+                )
+                self.assertTrue(chrome.evaluate("document.querySelector('#auth-provider').hidden"))
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#auth-session-return').getAttribute('href')"
+                    ),
+                    "/workspace/opaque-reference",
+                )
+                chrome.evaluate("document.querySelector('#auth-logout').click()")
+                chrome.wait(
+                    "document.querySelector('#auth-session').hidden && document.querySelector('#auth-status').textContent === 'You’re signed out.'"
+                )
+                self.assertEqual(handler.logout_calls, 1)
+            finally:
+                if chrome is not None:
+                    chrome.close()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     @staticmethod
     def _handler(origin: str) -> type[BaseHTTPRequestHandler]:
         class Handler(BaseHTTPRequestHandler):
@@ -443,11 +452,46 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
             page_organization: str | None = None
             page_actor: str | None = None
             api_status = 401
+            me_status = 401
+            me_calls = 0
+            logout_calls = 0
 
             def do_GET(self) -> None:
                 path = self.path.split("?", 1)[0]
                 if path == "/sign-in":
-                    self._send(b"<!doctype html><p id='signed-in'>Sign-in seam</p>", "text/html")
+                    query = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                    return_to = query.get("return_to", ["/"])[0]
+                    self._send(
+                        ui_html(
+                            origin,
+                            auth_state=self.page_auth_state,
+                            sign_in=True,
+                            return_to=return_to,
+                        ).encode(),
+                        "text/html",
+                    )
+                    return
+                if path == "/v1/me":
+                    type(self).me_calls += 1
+                    if self.me_status == 200:
+                        body = json.dumps(
+                            {
+                                "authenticated": True,
+                                "tenant_id": self.page_organization or "Acme Operations",
+                                "actor_id": self.page_actor or "Ada Lovelace",
+                            }
+                        ).encode()
+                    else:
+                        body = json.dumps(
+                            {
+                                "code": "authentication_required",
+                                "message": "Sign-in required. Sign in to continue.",
+                                "request_id": "browser-me",
+                                "retryable": False,
+                                "reauthenticate": True,
+                            }
+                        ).encode()
+                    self._send_json(self.me_status, body)
                     return
                 if path == "/ui.css":
                     self._send(UI_CSS.encode(), "text/css")
@@ -472,6 +516,11 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 self.end_headers()
 
             def do_POST(self) -> None:
+                if self.path == "/auth/logout":
+                    type(self).logout_calls += 1
+                    self.me_status = 401
+                    self._send_json(204, b"")
+                    return
                 if self.path == "/api/mcp":
                     body = json.dumps(
                         [] if self.api_status == 200 else {"error": "private server detail"}
@@ -491,6 +540,14 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def _send_json(self, status: int, body: bytes) -> None:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if body:
+                    self.wfile.write(body)
 
             def log_message(self, format: str, *args: object) -> None:
                 pass

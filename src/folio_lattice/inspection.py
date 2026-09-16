@@ -133,6 +133,13 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .auth-note { margin: 1rem 0 0; color: var(--muted); font-size: .76rem; line-height: 1.55; }
 .auth-local-note { border-top: 1px solid var(--line); padding-top: 1rem; }
 .auth-back-link { display: inline-block; margin-top: 1.4rem; color: var(--ink); font-size: .82rem; font-weight: 800; }
+.auth-session { margin-top: 1.25rem; border-top: 1px solid var(--line); padding-top: 1.1rem; }
+.auth-session h2 { margin-bottom: .35rem; font-size: 1rem; }
+.auth-session-identity { margin-bottom: .9rem; color: var(--muted); font-size: .84rem; }
+.auth-session-actions { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.auth-session-actions form { margin: 0; }
+.auth-session-actions .button-secondary { min-height: 42px; }
+.auth-error { margin: 1rem 0 0; border: 1px solid #e9b5b5; border-radius: 7px; padding: .65rem .8rem; background: #fff2f2; color: #a12828; font-size: .84rem; font-weight: 700; }
 .mode-status { border: 1px solid var(--line-strong); border-radius: 999px; padding: .35rem .6rem; color: var(--muted); font-size: .72rem; font-weight: 800; }
 .page { max-width: 1240px; margin: auto; padding: 1.5rem 1.5rem 4rem; }
 .live-region { min-height: 2rem; }
@@ -1425,11 +1432,14 @@ const debugMode = parts[0] === 'inspect';
 const workspaceMode = parts[0] === 'workspace';
 const standaloneMode = parts[0] === 'standalone';
 const humanArtifactMode = parts[0] === 'artifacts' || standaloneMode || workspaceMode;
+const signInMode = document.body.classList.contains('auth-route');
 const artifactId = debugMode || humanArtifactMode ? decodeURIComponent(parts[1] || '') : '';
 const renderOrigin = document.body.dataset.renderOrigin;
+const authReturnTo = document.body.dataset.returnTo || '/';
 let wasAuthenticated = document.body.dataset.authState === 'authenticated';
 let activeRequests = 0;
 let workspaceWeb = false;
+let authRedirectStarted = false;
 
 function artifactPath(id) {
   const prefix = debugMode ? 'inspect' : workspaceMode ? 'workspace' : 'artifacts';
@@ -1448,6 +1458,16 @@ function safeReturnPath() {
 }
 function authLink(path = safeReturnPath()) {
   return `/sign-in?return_to=${encodeURIComponent(path)}`;
+}
+function rememberAuthMessage(message) {
+  try { sessionStorage.setItem('folio-auth-message', message); } catch (_error) {}
+}
+function takeAuthMessage() {
+  try {
+    const message = sessionStorage.getItem('folio-auth-message');
+    sessionStorage.removeItem('folio-auth-message');
+    return message;
+  } catch (_error) { return ''; }
 }
 function clearAuthRecovery() {
   byId('auth-recovery').hidden = true;
@@ -1472,19 +1492,14 @@ function hideProtectedView() {
   byId('human-preview')?.removeAttribute('src');
 }
 function showAuthFailure() {
+  if (signInMode || authRedirectStarted) return;
   const message = wasAuthenticated
     ? 'Your session expired. Sign in again.'
     : 'Sign-in required. Sign in to continue.';
   wasAuthenticated = false;
-  hideProtectedView();
-  byId('auth-context')?.setAttribute('hidden', '');
-  failure(message);
-  byId('auth-recovery-title').textContent = 'Authentication required';
-  byId('auth-recovery-message').textContent = message;
-  byId('auth-action').textContent = 'Sign in';
-  byId('auth-action').href = authLink();
-  byId('auth-action').hidden = false;
-  byId('auth-recovery').hidden = false;
+  rememberAuthMessage(message);
+  authRedirectStarted = true;
+  location.assign(authLink());
 }
 function showForbiddenFailure() {
   hideProtectedView();
@@ -1546,12 +1561,72 @@ async function call(tool, args, endpoint = '/api/mcp') {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const error = new Error(result.error || `Request failed (${response.status})`);
+      const error = new Error(result.message || result.error || `Request failed (${response.status})`);
       error.status = response.status; throw error;
     }
     return result;
   } finally { busy(false); }
 }
+async function requestSession(path, options = {}) {
+  const response = await fetch(path, {...options, credentials: 'same-origin'});
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(result.message || result.error || `Request failed (${response.status})`);
+    error.status = response.status; throw error;
+  }
+  return result;
+}
+function setSessionStatus(message) {
+  const status = byId('auth-status');
+  if (status) status.textContent = message;
+}
+function setSessionError(message) {
+  const error = byId('auth-error');
+  if (!error) return;
+  error.textContent = message;
+  error.hidden = !message;
+  if (message) error.focus();
+}
+function showSignedIn(session) {
+  if (session.authenticated !== true || typeof session.actor_id !== 'string' ||
+      typeof session.tenant_id !== 'string') throw new Error('Session identity is unavailable.');
+  byId('auth-actor').textContent = session.actor_id;
+  byId('auth-organization').textContent = session.tenant_id;
+  byId('auth-session-return').href = authReturnTo;
+  byId('auth-session').hidden = false;
+  byId('auth-provider')?.setAttribute('hidden', '');
+  setSessionError('');
+  setSessionStatus('');
+}
+async function loadSession() {
+  const message = takeAuthMessage();
+  setSessionStatus(message || 'Checking your session…');
+  byId('main')?.setAttribute('aria-busy', 'true');
+  try {
+    showSignedIn(await requestSession('/v1/me', {headers: {Accept: 'application/json'}}));
+  } catch (error) {
+    if (error.status !== 401) setSessionError('We couldn’t check your session. Try again.');
+    else if (!message) setSessionStatus('');
+  } finally { byId('main')?.setAttribute('aria-busy', 'false'); }
+}
+async function signOut(event) {
+  event.preventDefault();
+  const button = byId('auth-logout');
+  button.disabled = true;
+  setSessionError('');
+  try {
+    const response = await fetch('/auth/logout', {method: 'POST', credentials: 'same-origin'});
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.message || result.error || `Request failed (${response.status})`);
+    byId('auth-session').hidden = true;
+    byId('auth-provider')?.removeAttribute('hidden');
+    setSessionStatus('You’re signed out.');
+  } catch (error) {
+    setSessionError(error.message || 'Sign-out failed. Try again.');
+    button.disabled = false;
+  }
+}
+byId('auth-logout-form')?.addEventListener('submit', signOut);
 function list(id, items, render, empty) {
   const target = byId(id); if (!target) return;
   target.replaceChildren();
@@ -2280,7 +2355,8 @@ addEventListener('message', async (event) => {
   }
 });
 
-loadArtifact().catch(handleFailure);
+if (signInMode) loadSession().catch(() => setSessionError('We couldn’t check your session. Try again.'));
+else loadArtifact().catch(handleFailure);
 """.strip()
 
 
@@ -2328,17 +2404,18 @@ def ui_html(
     if sign_in:
         safe_return_to = _safe_return_to(return_to)
         return_query = escape(quote(safe_return_to, safe=""), quote=True)
+        return_path = escape(safe_return_to, quote=True)
         hosted = auth_state in {"hosted", "authenticated"}
         sign_in_action = (
-            f'<a class="auth-provider-button" href="/auth/start?return_to={return_query}">'
+            f'<a id="auth-provider" class="auth-provider-button" href="/auth/start?return_to={return_query}">'
             'Continue with your organization <span aria-hidden="true">→</span></a>'
             if hosted
-            else '<p class="auth-note auth-local-note">This local workspace is running without sign-in. Hosted deployments connect your organization identity provider here.</p>'
+            else '<p id="auth-provider" class="auth-note auth-local-note">This local workspace is running without sign-in. Hosted deployments connect your organization identity provider here.</p>'
         )
         return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in — Folio Lattice</title><link rel="stylesheet" href="/ui.css"></head>
-<body class="auth-route" data-auth-state="{state}">
+<body class="auth-route" data-auth-state="{state}" data-return-to="{return_path}">
 <div class="auth-shell">
 <header class="auth-topbar"><div class="brand-lockup"><span class="brand-mark" aria-hidden="true">F</span><div><div class="brand-name">Folio Lattice</div><div class="brand-subtitle">Knowledge workspace</div></div></div><a class="button-secondary" href="/">Back to library</a></header>
 <main id="main" class="auth-page" aria-labelledby="sign-in-title">
@@ -2347,9 +2424,16 @@ def ui_html(
   <p class="auth-lede">Your graphs and artifacts stay inside your organization. Use the identity provider your company already trusts.</p>
   {sign_in_action}
   <p class="auth-note">No password to remember here. Access is managed by your organization.</p>
+  <section id="auth-session" class="auth-session" aria-labelledby="auth-session-title" hidden>
+    <h2 id="auth-session-title">You’re already signed in.</h2>
+    <p id="auth-session-identity" class="auth-session-identity">Signed in as <strong id="auth-actor"></strong> in <strong id="auth-organization"></strong>.</p>
+    <div class="auth-session-actions"><a id="auth-session-return" class="auth-provider-button" href="/">Continue to workspace <span aria-hidden="true">→</span></a><form id="auth-logout-form"><button id="auth-logout" class="button-secondary" type="submit">Sign out</button></form></div>
+  </section>
+  <p id="auth-status" class="auth-note" role="status" aria-live="polite">Checking your session…</p>
+  <p id="auth-error" class="auth-error" role="alert" aria-live="assertive" tabindex="-1" hidden></p>
   <a class="auth-back-link" href="/">← Return to library</a>
 </main>
-</div></body></html>"""
+</div><script src="/ui.js"></script></body></html>"""
     if standalone:
         return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2487,7 +2571,9 @@ def ui_html(
         else ""
     )
     workspace_nav = (
-        '<a id="back-to-library" class="button-secondary" href="/">' + ("← Graphs" if workspace else "Back to library") + '</a>'
+        '<a id="back-to-library" class="button-secondary" href="/">'
+        + ("← Graphs" if workspace else "Back to library")
+        + "</a>"
         + (
             '<div class="view-switch" role="tablist" aria-label="Workspace view">'
             '<button id="read-mode" type="button" role="tab" aria-selected="true" aria-controls="reader" tabindex="0" class="is-active">Read</button>'
@@ -2579,7 +2665,7 @@ def ui_html(
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Folio Lattice</title><link rel="stylesheet" href="/ui.css"></head>
-<body class="{'debug-route' if debug else 'workspace-route' if workspace else ''}" data-render-origin="{origin}" data-auth-state="{state}">
+<body class="{"debug-route" if debug else "workspace-route" if workspace else ""}" data-render-origin="{origin}" data-auth-state="{state}">
 <a class="skip-link" href="#main">Skip to content</a>
 <div class="app-shell">
 <header class="topbar">
@@ -2597,12 +2683,12 @@ def ui_html(
     <div class="welcome-grid">
       {root_library}
       <div class="library-actions">{root_library_actions}{debug_open}</div>
-      {'' if debug else '<section id="shared" class="shared-empty" aria-labelledby="shared-title"><div class="section-heading"><div><p class="eyebrow">SHARED WITH YOU</p><h2 id="shared-title">Shared with me</h2></div></div><p class="muted">Nothing shared with you yet.</p></section>'}
+      {"" if debug else '<section id="shared" class="shared-empty" aria-labelledby="shared-title"><div class="section-heading"><div><p class="eyebrow">SHARED WITH YOU</p><h2 id="shared-title">Shared with me</h2></div></div><p class="muted">Nothing shared with you yet.</p></section>'}
     </div>
   </section>
   <article id="workspace" class="workspace{" has-tree" if workspace else ""}" hidden>
     <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1>{'<div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div>' if debug else ""}</div></div></div><nav class="workspace-nav" aria-label="Artifact sections">{workspace_nav}</nav></header>
-    {('<section id="workspace-search-results" class="workspace-search-results" role="region" aria-label="Graph search results" aria-live="polite" hidden><div class="search-popover-heading"><strong id="workspace-search-results-title">Search this graph</strong><button id="workspace-search-close" type="button" class="panel-close" aria-label="Close search results">×</button></div><p id="workspace-search-summary" class="search-popover-summary">Search this graph.</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></section>' if workspace else '')}
+    {('<section id="workspace-search-results" class="workspace-search-results" role="region" aria-label="Graph search results" aria-live="polite" hidden><div class="search-popover-heading"><strong id="workspace-search-results-title">Search this graph</strong><button id="workspace-search-close" type="button" class="panel-close" aria-label="Close search results">×</button></div><p id="workspace-search-summary" class="search-popover-summary">Search this graph.</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></section>' if workspace else "")}
     <div class="workspace-layout">{workspace_tree}<div class="primary-column">
       <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Readable document</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Loading readable content…</p><div id="readable-content" class="document-slot">Loading content…</div></section>
       <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div><div class="preview-actions">{preview_debug}</div></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>
