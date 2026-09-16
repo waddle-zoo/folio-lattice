@@ -242,6 +242,9 @@ class FolioHttpApp:
         if scope["type"] != "http":
             await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
             return
+        if scope["method"] == "GET" and scope["path"] == "/sign-in":
+            await self.inspection(scope, receive, send)
+            return
         if scope["path"] in {"/health", "/ready"}:
             health = self.service.health()
             identity_ready = self.authenticator is None or self.authenticator.ready()
@@ -341,7 +344,7 @@ def run_http(host: str, port: int) -> None:
         render_origin=settings.render_origin,
         max_request_bytes=settings.max_request_bytes,
         bridge=AttachedMcpBridge(caller, timeout_seconds=settings.bridge_timeout_seconds),
-        auth_state="authenticated" if authenticator is not None else "local",
+        auth_state="hosted" if authenticator is not None else "local",
         organization=settings.tenant_id if authenticator is None else None,
         actor=settings.actor if authenticator is None else None,
     )

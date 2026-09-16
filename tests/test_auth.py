@@ -329,6 +329,8 @@ class HttpAuthBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         self.assertNotIn(b"issuer", body)
         self.assertNotIn(b"subject", body)
+        status, _ = await call("/sign-in")
+        self.assertEqual(status, 200)
         status, _ = await call("/mcp")
         self.assertEqual(status, 401)
         status, body = await call("/mcp", [(b"authorization", b"Bearer signed-token")])
