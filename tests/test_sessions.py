@@ -252,7 +252,7 @@ class HostedAuthHttpTests(unittest.TestCase):
         resolved = self.sessions.lookup(new_session)
         self.assertIsNotNone(resolved)
         self.assertEqual((resolved.tenant_id, resolved.actor_id), ("tenant-a", "actor-a"))
-        self.assertEqual(resolved.principal.scopes, frozenset({"artifact:read"}))
+        self.assertEqual(resolved.scopes, frozenset({"artifact:read"}))
         self.assertEqual(self.adapter.completions[-1]["redirect_uri"], self.redirect_uri)
 
         status, headers, body = self.request("GET", callback)
