@@ -840,6 +840,41 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "authentication adapter"):
                 Settings.from_env()
 
+        browser_config = {
+            "FOLIO_DEPLOYMENT_MODE": "hosted",
+            "FOLIO_OIDC_ISSUER": "https://issuer.example",
+            "FOLIO_OIDC_AUDIENCE": "folio-api",
+            "FOLIO_OIDC_JWKS_URL": "https://issuer.example/jwks.json",
+            "FOLIO_OIDC_AUTHORIZATION_ENDPOINT": "https://issuer.example/authorize",
+            "FOLIO_OIDC_TOKEN_ENDPOINT": "https://issuer.example/token",
+            "FOLIO_OIDC_CLIENT_ID": "folio-browser",
+            "FOLIO_OIDC_REDIRECT_URI": "https://folio.example/auth/callback",
+        }
+        bearer_only_config = {
+            key: value
+            for key, value in browser_config.items()
+            if "AUTHORIZATION_ENDPOINT" not in key
+            and "TOKEN_ENDPOINT" not in key
+            and "CLIENT_ID" not in key
+            and "REDIRECT_URI" not in key
+        }
+        with patch.dict(os.environ, bearer_only_config, clear=True):
+            self.assertFalse(Settings.from_env().browser_auth_configured)
+        with patch.dict(os.environ, browser_config, clear=True):
+            settings = Settings.from_env()
+        self.assertTrue(settings.browser_auth_configured)
+        self.assertEqual(settings.auth_client_id, "folio-browser")
+        self.assertEqual(settings.auth_redirect_uri, "https://folio.example/auth/callback")
+
+        incomplete_config = {
+            key: value
+            for key, value in browser_config.items()
+            if key != "FOLIO_OIDC_TOKEN_ENDPOINT"
+        }
+        with patch.dict(os.environ, incomplete_config, clear=True):
+            with self.assertRaisesRegex(ValueError, "authentication adapter"):
+                Settings.from_env()
+
 
 if __name__ == "__main__":
     unittest.main()

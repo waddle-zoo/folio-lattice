@@ -64,6 +64,7 @@ class OidcTests(unittest.TestCase):
             subject="subject-1",
             tenant_id="tenant-a",
             actor_id="actor-a",
+            scopes={"artifact:read", "artifact:write"},
         )
         self._serve_keys("key-1")
         self.verifier = OidcVerifier(
@@ -121,10 +122,10 @@ class OidcTests(unittest.TestCase):
         with self.assertRaises(AuthenticationError):
             self.verifier.verify(jwt.encode({"iss": self.issuer}, b"x" * 32, algorithm="HS256"))
 
-    def test_scope_claim_is_required_and_strictly_parsed(self) -> None:
+    def test_server_scopes_ignore_untrusted_token_claims(self) -> None:
         self.assertEqual(
             self.verifier.verify(self._token(scope="artifact:read graph:read")).scopes,
-            frozenset({"artifact:read", "graph:read"}),
+            frozenset({"artifact:read", "artifact:write"}),
         )
         for scope in (
             None,
@@ -134,8 +135,11 @@ class OidcTests(unittest.TestCase):
             "artifact:\tread",
             "artifact:\\read",
         ):
-            with self.assertRaises(AuthenticationError):
-                self.verifier.verify(self._token(scope=scope))
+            with self.subTest(scope=scope):
+                self.assertEqual(
+                    self.verifier.verify(self._token(scope=scope)).scopes,
+                    frozenset({"artifact:read", "artifact:write"}),
+                )
         missing_scope = {
             "iss": self.issuer,
             "aud": self.audience,
@@ -144,7 +148,7 @@ class OidcTests(unittest.TestCase):
             "nbf": 999_900,
             "exp": 1_000_100,
         }
-        with self.assertRaises(AuthenticationError):
+        self.assertEqual(
             self.verifier.verify(
                 jwt.encode(
                     missing_scope,
@@ -152,7 +156,9 @@ class OidcTests(unittest.TestCase):
                     algorithm="RS256",
                     headers={"kid": "key-1"},
                 )
-            )
+            ).scopes,
+            frozenset({"artifact:read", "artifact:write"}),
+        )
 
     def test_signature_and_key_rotation_are_real_jwks_checks(self) -> None:
         with self.assertRaises(AuthenticationError):
@@ -187,6 +193,31 @@ class OidcTests(unittest.TestCase):
         self.memberships.set_status(self.issuer, "subject-1", "disabled")
         with self.assertRaises(AuthenticationError):
             self.verifier.verify(self._token())
+
+    def test_membership_scopes_are_server_owned_and_seed_updates_them(self) -> None:
+        self.memberships.set_scopes(self.issuer, "subject-1", {"graph:read"})
+        self.assertEqual(self.memberships.lookup(self.issuer, "subject-1").scopes, {"graph:read"})
+        seed = Path(self.temp.name) / "memberships.json"
+        seed.write_text(
+            json.dumps(
+                {
+                    "memberships": [
+                        {
+                            "issuer": self.issuer,
+                            "subject": "subject-1",
+                            "tenant_id": "tenant-a",
+                            "actor_id": "actor-a",
+                            "scopes": ["artifact:read"],
+                        }
+                    ]
+                }
+            )
+        )
+        self.memberships.seed_file(seed)
+        self.assertEqual(
+            self.memberships.lookup(self.issuer, "subject-1").scopes,
+            {"artifact:read"},
+        )
 
     def test_membership_seed_and_validation_fail_closed(self) -> None:
         self.assertEqual(Principal("t", "a", "i", "s").actor, "a")
