@@ -161,6 +161,24 @@ class BackupRestoreTests(unittest.TestCase):
             self.assertFalse(target_db.exists())
             self.assertFalse(target_blobs.exists())
 
+    def test_backup_failure_removes_partial_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = FolioLattice(root / "folio.db", root / "blobs")
+            created = service.create_artifact(
+                tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a"
+            )
+            source_blob = (
+                root / "blobs" / created["version"]["blob_hash"][:2] / created["version"]["blob_hash"]
+            )
+            source_blob.unlink()
+            backup_path = root / "backup"
+            with self.assertRaisesRegex(BackupError, "missing or unsafe"):
+                create_backup(root / "folio.db", root / "blobs", backup_path)
+            self.assertFalse((backup_path / "metadata.sqlite").exists())
+            self.assertFalse((backup_path / "manifest.json").exists())
+            self.assertFalse((backup_path / "blobs").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

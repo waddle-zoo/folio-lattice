@@ -209,12 +209,20 @@ def create_backup(db_path: str | Path, blob_root: str | Path, output: str | Path
         temporary_manifest.write_bytes(encoded + b"\n")
         os.replace(temporary_manifest, output_path / MANIFEST_NAME)
         return manifest
-    except (OSError, sqlite3.Error) as exc:
-        for temporary in (temporary_database, output_path / f".{MANIFEST_NAME}.tmp"):
+    except (BackupError, OSError, sqlite3.Error) as exc:
+        for temporary in (
+            temporary_database,
+            output_path / f".{MANIFEST_NAME}.tmp",
+            database_path,
+            output_path / MANIFEST_NAME,
+        ):
             try:
                 temporary.unlink()
             except FileNotFoundError:
                 pass
+        shutil.rmtree(output_path / BLOBS_DIR_NAME, ignore_errors=True)
+        if isinstance(exc, BackupError):
+            raise
         raise BackupError(f"backup failed: {exc}") from exc
 
 
