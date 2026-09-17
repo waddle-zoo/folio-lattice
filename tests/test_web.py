@@ -1214,11 +1214,25 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "authentication adapter"):
                 Settings.from_env()
 
+        tls_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tls_dir.cleanup)
+        tls_cert = Path(tls_dir.name) / "cert.pem"
+        tls_key = Path(tls_dir.name) / "key.pem"
+        tls_cert.write_text("test certificate", encoding="utf-8")
+        tls_key.write_text("test key", encoding="utf-8")
+        tls_config = {
+            "FOLIO_CONTROL_ORIGIN": "https://folio.example",
+            "FOLIO_RENDER_ORIGIN": "https://render.example",
+            "FOLIO_TLS_CERTFILE": str(tls_cert),
+            "FOLIO_TLS_KEYFILE": str(tls_key),
+        }
+
         bearer_config = {
             "FOLIO_DEPLOYMENT_MODE": "hosted",
             "FOLIO_OIDC_ISSUER": "https://issuer.example",
             "FOLIO_OIDC_AUDIENCE": "folio-api",
             "FOLIO_OIDC_JWKS_URL": "https://issuer.example/jwks.json",
+            **tls_config,
         }
         hostile_values = (
             ("FOLIO_OIDC_ISSUER", "http://issuer.example"),
@@ -1246,6 +1260,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             "FOLIO_OIDC_TOKEN_ENDPOINT": "https://issuer.example/token",
             "FOLIO_OIDC_CLIENT_ID": "folio-browser",
             "FOLIO_OIDC_REDIRECT_URI": "https://folio.example/auth/callback",
+            **tls_config,
         }
         bearer_only_config = {
             key: value
