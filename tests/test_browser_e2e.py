@@ -58,7 +58,7 @@ def browser_path() -> str | None:
 def wait_ready(origin: str, process: subprocess.Popen[bytes]) -> None:
     for _ in range(150):
         try:
-            with urllib.request.urlopen(f"{origin}/health", timeout=0.2) as response:
+            with urllib.request.urlopen(f"{origin}/readyz", timeout=0.2) as response:
                 if json.loads(response.read())["ready"]:
                     return
         except Exception:
