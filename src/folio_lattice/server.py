@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+import ssl
 import string
 import threading
 import time
@@ -15,6 +16,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -84,6 +86,7 @@ AUTH_CALLBACK_RATE_LIMIT = 20
 AUTH_LOGOUT_RATE_LIMIT = 20
 AUTH_RATE_LIMIT_CODE = "auth_rate_limited"
 AUTH_RATE_LIMIT_MESSAGE = "Too many authentication requests. Try again later."
+DEFAULT_HSTS_MAX_AGE = 31_536_000
 
 
 class _BoundedRateLimiter:
@@ -191,6 +194,10 @@ class Settings:
     auth_redirect_uri: str | None = None
     auth_timeout_seconds: float = DEFAULT_IDENTITY_TIMEOUT_SECONDS
     auth_max_response_bytes: int = DEFAULT_IDENTITY_MAX_RESPONSE_BYTES
+    tls_certfile: str | None = None
+    tls_keyfile: str | None = None
+    hsts_max_age: int = DEFAULT_HSTS_MAX_AGE
+    session_cookie_secure: bool = True
 
     @property
     def browser_auth_configured(self) -> bool:
@@ -261,9 +268,9 @@ class Settings:
                     )
             except ValueError as exc:
                 raise ValueError(f"hosted mode requires an authentication adapter; {exc}") from exc
-        return cls(
-            db_path=os.environ.get("FOLIO_DB_PATH", ".data/folio.db"),
-            blob_root=os.environ.get("FOLIO_BLOB_ROOT", ".data/blobs"),
+        settings = cls(
+            db_path=_path_env("FOLIO_DB_PATH", ".data/folio.db"),
+            blob_root=_path_env("FOLIO_BLOB_ROOT", ".data/blobs"),
             tenant_id=tenant_id,
             actor=actor,
             max_artifact_bytes=_positive_env(
@@ -293,7 +300,78 @@ class Settings:
             auth_redirect_uri=auth_redirect_uri,
             auth_timeout_seconds=auth_timeout_seconds,
             auth_max_response_bytes=auth_max_response_bytes,
+            tls_certfile=_optional_file_env("FOLIO_TLS_CERTFILE"),
+            tls_keyfile=_optional_file_env("FOLIO_TLS_KEYFILE"),
+            hsts_max_age=_nonnegative_int_env("FOLIO_HSTS_MAX_AGE", DEFAULT_HSTS_MAX_AGE),
+            session_cookie_secure=_strict_bool_env("FOLIO_SESSION_COOKIE_SECURE", "true"),
         )
+        settings.validate()
+        return settings
+
+    def validate(self) -> None:
+        if not self.db_path.strip() or not self.blob_root.strip():
+            raise ValueError("FOLIO_DB_PATH and FOLIO_BLOB_ROOT must not be empty")
+        if _has_control(self.db_path + self.blob_root):
+            raise ValueError("Folio paths must not contain control characters")
+        if not self.session_cookie_secure:
+            raise ValueError("FOLIO_SESSION_COOKIE_SECURE must be true")
+        if (self.tls_certfile is None) != (self.tls_keyfile is None):
+            raise ValueError("FOLIO_TLS_CERTFILE and FOLIO_TLS_KEYFILE must be set together")
+        if self.tls_certfile is not None and (
+            not Path(self.tls_certfile).is_file()
+            or not Path(self.tls_keyfile or "").is_file()
+            or not os.access(self.tls_certfile, os.R_OK)
+            or not os.access(self.tls_keyfile or "", os.R_OK)
+        ):
+            raise ValueError("TLS certificate and key must be readable files")
+        if self.tls_certfile is not None and (
+            not self.control_origin.startswith("https://")
+            or not self.render_origin.startswith("https://")
+        ):
+            raise ValueError("TLS requires HTTPS control and render origins")
+        if self.tls_certfile is not None and self.mcp_url is not None:
+            if not self.mcp_url.startswith("https://"):
+                raise ValueError("TLS requires an HTTPS FOLIO_MCP_URL")
+        if self.tls_certfile is not None and self.hsts_max_age < 1:
+            raise ValueError("TLS requires a positive FOLIO_HSTS_MAX_AGE")
+
+
+def _has_control(value: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in value)
+
+
+def _path_env(name: str, default: str) -> str:
+    value = os.environ.get(name, default)
+    if not value.strip() or _has_control(value):
+        raise ValueError(f"{name} must be a non-empty path without control characters")
+    return value
+
+
+def _nonnegative_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < 0:
+        raise ValueError(f"{name} must not be negative")
+    return value
+
+
+def _strict_bool_env(name: str, default: str) -> bool:
+    value = os.environ.get(name, default).strip().lower()
+    if value not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false")
+    return value == "true"
+
+
+def _optional_file_env(name: str) -> str | None:
+    if name not in os.environ:
+        return None
+    value = _path_env(name, "")
+    path = Path(value)
+    if not path.is_file() or not os.access(path, os.R_OK):
+        raise ValueError(f"{name} must name a readable file")
+    return value
 
 
 def _positive_env(name: str, default: int) -> int:
@@ -411,8 +489,12 @@ def _https_callback_env(name: str) -> str:
 
 def _origin_env(name: str, default: str) -> str:
     value = os.environ.get(name, default).rstrip("/")
-    parsed = urlsplit(value)
-    host = parsed.hostname or ""
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except (UnicodeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an HTTP origin without a path") from exc
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.netloc
@@ -422,13 +504,10 @@ def _origin_env(name: str, default: str) -> str:
         or parsed.path
         or parsed.query
         or parsed.fragment
+        or _has_control(value)
         or any(character not in string.ascii_letters + string.digits + ".:-" for character in host)
     ):
         raise ValueError(f"{name} must be an HTTP origin without a path")
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an HTTP origin without a path") from exc
     bracketed_host = f"[{host}]" if ":" in host else host
     return f"{parsed.scheme}://{bracketed_host}{f':{port}' if port is not None else ''}"
 
@@ -437,22 +516,27 @@ def _optional_mcp_url_env(name: str) -> str | None:
     value = os.environ.get(name)
     if value is None:
         return None
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except (UnicodeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an HTTP URL ending in /mcp without credentials") from exc
     if (
         parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
+        or not parsed.netloc
+        or not host
         or parsed.username is not None
         or parsed.password is not None
         or parsed.path != "/mcp"
         or parsed.query
         or parsed.fragment
+        or _has_control(value)
+        or any(character not in string.ascii_letters + string.digits + ".:-" for character in host)
     ):
         raise ValueError(f"{name} must be an HTTP URL ending in /mcp without credentials")
-    try:
-        _ = parsed.port
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an HTTP URL ending in /mcp without credentials") from exc
-    return value
+    bracketed_host = f"[{host}]" if ":" in host else host
+    return f"{parsed.scheme}://{bracketed_host}{f':{port}' if port is not None else ''}/mcp"
 
 
 class FolioHttpApp:
@@ -476,6 +560,8 @@ class FolioHttpApp:
         public_mcp_concurrency_limit: int = PUBLIC_MCP_CONCURRENCY_LIMIT,
         public_mcp_concurrency_per_key: int = PUBLIC_MCP_CONCURRENCY_PER_KEY,
         public_mcp_timeout_seconds: float = PUBLIC_MCP_TIMEOUT_SECONDS,
+        hsts_max_age: int = 0,
+        config_ready: bool = True,
     ):
         if max_request_bytes < 1:
             raise ValueError("max_request_bytes must be positive")
@@ -499,6 +585,8 @@ class FolioHttpApp:
         self.identity_adapter = identity_adapter
         self.auth_redirect_uri = _auth_redirect_uri(auth_redirect_uri)
         self.control_origin = control_origin
+        self.hsts_max_age = hsts_max_age
+        self.config_ready = config_ready
         self.audit_logger = audit_logger or logging.getLogger("folio_lattice.audit")
         self.audit_logger.setLevel(logging.INFO)
         self._auth_rate_limiters = {
@@ -525,19 +613,35 @@ class FolioHttpApp:
         if scope["type"] != "http":
             await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
             return
+
+        async def secure_send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                names = {key.lower() for key, _ in headers}
+                if self.hsts_max_age and scope.get("scheme") == "https":
+                    if b"strict-transport-security" not in names:
+                        headers.append(
+                            (
+                                b"strict-transport-security",
+                                f"max-age={self.hsts_max_age}; includeSubDomains".encode(),
+                            )
+                        )
+                message["headers"] = headers
+            await send(message)
+
         public_mcp = scope["path"] == "/mcp"
         public_receive = receive
         if public_mcp and scope["method"] == "POST":
             try:
                 async with asyncio.timeout(self.public_mcp_timeout_seconds):
                     accepted, public_receive = await self._check_public_mcp_body(
-                        scope, receive, send
+                        scope, receive, secure_send
                     )
             except TimeoutError:
                 await self._public_mcp_error(
                     scope,
                     receive,
-                    send,
+                    secure_send,
                     status_code=504,
                     code=MCP_TIMEOUT_CODE,
                     message=MCP_TIMEOUT_MESSAGE,
@@ -549,23 +653,19 @@ class FolioHttpApp:
             if not accepted:
                 return
         if scope["method"] == "GET" and scope["path"] == "/sign-in":
-            await self.inspection(scope, receive, send)
+            await self.inspection(scope, receive, secure_send)
             return
         if scope["method"] == "GET" and scope["path"] == "/auth/start":
-            await self._auth_start(scope, receive, send)
+            await self._auth_start(scope, receive, secure_send)
             return
         if scope["method"] == "GET" and scope["path"] == "/auth/callback":
-            await self._auth_callback(scope, receive, send)
+            await self._auth_callback(scope, receive, secure_send)
             return
-        if scope["path"] in {"/health", "/ready"}:
-            health = self.service.health()
-            identity_ready = self.authenticator is None or self.authenticator.ready()
-            if self.identity_adapter is not None or self.auth_redirect_uri is not None:
-                identity_ready = identity_ready and self._identity_ready()
-            health["ready"] = bool(health["ready"] and identity_ready)
-            health["status"] = "ok" if health["ready"] else "not_ready"
-            health.update(
+        if scope["method"] == "GET" and scope["path"] == "/health":
+            await JSONResponse(
                 {
+                    "status": "ok",
+                    "live": True,
                     "deployment_mode": self.deployment_mode,
                     "authentication": (
                         "oidc-bearer"
@@ -573,9 +673,13 @@ class FolioHttpApp:
                         else "none-local-development"
                     ),
                 }
+            )(scope, receive, secure_send)
+            return
+        if scope["method"] == "GET" and scope["path"] in {"/readyz", "/ready"}:
+            readiness = self._readiness()
+            await JSONResponse(readiness, status_code=200 if readiness["ready"] else 503)(
+                scope, receive, secure_send
             )
-            status = 200 if health["ready"] else 503
-            await JSONResponse(health, status_code=status)(scope, receive, send)
             return
         if scope["method"] == "GET" and scope["path"] == "/v1/me":
             try:
@@ -584,7 +688,7 @@ class FolioHttpApp:
                 await self._error(
                     scope,
                     receive,
-                    send,
+                    secure_send,
                     401,
                     "authentication_required",
                     "Sign-in required. Sign in to continue.",
@@ -598,10 +702,10 @@ class FolioHttpApp:
                     "actor_id": me_principal.actor_id,
                 },
                 headers={"Cache-Control": "no-store"},
-            )(scope, receive, send)
+            )(scope, receive, secure_send)
             return
         if scope["method"] == "POST" and scope["path"] == "/auth/logout":
-            if not await self._check_auth_rate(scope, receive, send, "/auth/logout"):
+            if not await self._check_auth_rate(scope, receive, secure_send, "/auth/logout"):
                 return
             if not self._same_origin(scope):
                 request_id = uuid.uuid4().hex
@@ -615,7 +719,7 @@ class FolioHttpApp:
                 await self._error(
                     scope,
                     receive,
-                    send,
+                    secure_send,
                     403,
                     "csrf_failed",
                     "This sign-out request is not allowed.",
@@ -643,7 +747,7 @@ class FolioHttpApp:
                 httponly=True,
                 samesite="lax",
             )
-            await response(scope, receive, send)
+            await response(scope, receive, secure_send)
             return
         principal_token = None
         principal: Principal | None = None
@@ -652,13 +756,13 @@ class FolioHttpApp:
                 principal = self._authenticate(scope, allow_session=scope["path"] != "/mcp")
             except AuthenticationError:
                 if public_mcp and not await self._check_public_mcp_rate(
-                    scope, public_receive, send, None
+                    scope, public_receive, secure_send, None
                 ):
                     return
                 await self._error(
                     scope,
                     receive,
-                    send,
+                    secure_send,
                     401,
                     "authentication_required",
                     "Sign-in required. Sign in to continue.",
@@ -679,10 +783,12 @@ class FolioHttpApp:
                 or path.startswith("/workspace/")
                 or path in {"/api/mcp", "/api/bridge", "/ui.css", "/ui.js"}
             ):
-                await self.inspection(scope, receive, send)
+                await self.inspection(scope, receive, secure_send)
                 return
             if path == "/mcp":
-                if not await self._check_public_mcp_rate(scope, public_receive, send, principal):
+                if not await self._check_public_mcp_rate(
+                    scope, public_receive, secure_send, principal
+                ):
                     return
                 key = _public_mcp_key(scope, principal)
                 if not self._public_mcp_concurrency_limiter.try_acquire(key):
@@ -697,7 +803,7 @@ class FolioHttpApp:
                     await self._error(
                         scope,
                         public_receive,
-                        send,
+                        secure_send,
                         429,
                         MCP_CONCURRENCY_LIMIT_CODE,
                         MCP_CONCURRENCY_LIMIT_MESSAGE,
@@ -713,7 +819,7 @@ class FolioHttpApp:
                         nonlocal response_started
                         if message["type"] == "http.response.start":
                             response_started = True
-                        await send(message)
+                        await secure_send(message)
 
                     try:
                         async with asyncio.timeout(self.public_mcp_timeout_seconds):
@@ -723,7 +829,7 @@ class FolioHttpApp:
                             await self._public_mcp_error(
                                 scope,
                                 public_receive,
-                                send,
+                                secure_send,
                                 status_code=504,
                                 code=MCP_TIMEOUT_CODE,
                                 message=MCP_TIMEOUT_MESSAGE,
@@ -734,7 +840,7 @@ class FolioHttpApp:
                 finally:
                     self._public_mcp_concurrency_limiter.release(key)
                 return
-            await self.app(scope, receive, send)
+            await self.app(scope, receive, secure_send)
         finally:
             if principal_token is not None:
                 reset_request_principal(principal_token)
@@ -751,6 +857,45 @@ class FolioHttpApp:
         if self.authenticator is not None:
             return self.authenticator.authenticate(scope)
         raise AuthenticationError("authentication is required")
+
+    def _readiness(self) -> dict[str, Any]:
+        checker = getattr(self.service, "readiness", None)
+        if not callable(checker):
+            checker = self.service.health
+        try:
+            readiness = dict(checker())
+        except Exception:
+            readiness = {"status": "not_ready", "ready": False, "dependencies": {}}
+        dependencies = dict(readiness.get("dependencies", {}))
+        dependencies["config"] = {"ready": self.config_ready}
+        provider_required = self.authenticator is not None
+        provider_ready = True
+        if self.authenticator is not None:
+            try:
+                provider_ready = bool(self.authenticator.ready())
+            except Exception:
+                provider_ready = False
+        identity_required = self.identity_adapter is not None or self.auth_redirect_uri is not None
+        identity_ready = True
+        if self.identity_adapter is not None or self.auth_redirect_uri is not None:
+            identity_ready = self._identity_ready()
+        dependencies["provider"] = {"ready": provider_ready, "required": provider_required}
+        dependencies["identity"] = {"ready": identity_ready, "required": identity_required}
+        readiness["dependencies"] = dependencies
+        readiness["ready"] = all(
+            isinstance(dependency, dict) and dependency.get("ready") is True
+            for dependency in dependencies.values()
+        )
+        readiness["status"] = "ok" if readiness["ready"] else "not_ready"
+        readiness.update(
+            {
+                "deployment_mode": self.deployment_mode,
+                "authentication": (
+                    "oidc-bearer" if self.authenticator is not None else "none-local-development"
+                ),
+            }
+        )
+        return readiness
 
     def _identity_ready(self) -> bool:
         if (
@@ -1334,6 +1479,7 @@ def _valid_provider_url(value: object) -> bool:
 
 
 def build_runtime(settings: Settings) -> tuple[FolioLattice, Any, OidcAuthenticator | None]:
+    settings.validate()
     service = FolioLattice(
         settings.db_path,
         settings.blob_root,
@@ -1404,8 +1550,9 @@ def run_http(host: str, port: int) -> None:
         host=host,
     )
     connect_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    scheme = "https" if settings.tls_certfile else "http"
     caller = HttpMcpClient(
-        settings.mcp_url or f"http://{connect_host}:{port}/mcp",
+        settings.mcp_url or f"{scheme}://{connect_host}:{port}/mcp",
         max_result_bytes=settings.max_request_bytes,
     )
     inspection = InspectionApp(
@@ -1431,9 +1578,12 @@ def run_http(host: str, port: int) -> None:
             control_origin=settings.control_origin,
             max_request_bytes=settings.max_request_bytes,
             public_mcp_timeout_seconds=settings.public_mcp_timeout_seconds,
+            hsts_max_age=settings.hsts_max_age,
+            config_ready=True,
         ),
         host=host,
         port=port,
+        **_tls_options(settings),
     )
 
 
@@ -1441,15 +1591,27 @@ def run_renderer(host: str, port: int) -> None:
     settings = Settings.from_env()
     if settings.deployment_mode == "hosted":
         raise ValueError("hosted renderer is not implemented")
+    scheme = "https" if settings.tls_certfile else "http"
     caller = HttpMcpClient(
-        settings.mcp_url or "http://127.0.0.1:8000/mcp",
+        settings.mcp_url or f"{scheme}://127.0.0.1:8000/mcp",
         max_result_bytes=settings.max_request_bytes,
     )
     app = RendererApp(
         caller,
         control_origin=settings.control_origin,
+        hsts_max_age=settings.hsts_max_age,
     )
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, **_tls_options(settings))
+
+
+def _tls_options(settings: Settings) -> dict[str, Any]:
+    if settings.tls_certfile is None or settings.tls_keyfile is None:
+        return {}
+    return {
+        "ssl_certfile": settings.tls_certfile,
+        "ssl_keyfile": settings.tls_keyfile,
+        "ssl_version": ssl.PROTOCOL_TLS_SERVER,
+    }
 
 
 def run_stdio() -> None:

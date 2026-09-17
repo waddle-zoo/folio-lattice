@@ -52,12 +52,13 @@ def post_json(url: str, payload: dict[str, Any], origin: str) -> Any:
         return json.loads(response.read())
 
 
-def wait_ready(base_url: str) -> None:
+def wait_ready(base_url: str) -> dict[str, Any]:
     for _ in range(60):
         try:
-            with urlopen(f"{base_url}/health", timeout=1) as response:
-                if json.loads(response.read())["ready"]:
-                    return
+            with urlopen(f"{base_url}/readyz", timeout=1) as response:
+                readiness = json.loads(response.read())
+                if readiness["ready"]:
+                    return readiness
         except Exception:
             pass
         time.sleep(0.25)
@@ -67,8 +68,13 @@ def wait_ready(base_url: str) -> None:
 def main() -> None:
     base_url = os.environ.get("FOLIO_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
     render_url = os.environ.get("FOLIO_RENDER_URL", "http://127.0.0.1:8001").rstrip("/")
-    wait_ready(base_url)
-    wait_ready(render_url)
+    readiness = wait_ready(base_url)
+    renderer_readiness = wait_ready(render_url)
+    assert readiness["dependencies"]["database"]["ready"] is True
+    assert readiness["dependencies"]["blob"]["ready"] is True
+    assert readiness["dependencies"]["migration"]["ready"] is True
+    assert readiness["dependencies"]["acl"]["ready"] is True
+    assert readiness["dependencies"]["external_mcp"]["ready"] is True
     created = asyncio.run(exercise(base_url))
     html = asyncio.run(create_html(base_url))
 
@@ -96,8 +102,8 @@ def main() -> None:
     assert inspect_service("renderer")["Mounts"] == []
 
     subprocess.run([*compose, "restart", "folio", "renderer"], check=True, timeout=90)
-    wait_ready(base_url)
-    wait_ready(render_url)
+    readiness_after_restart = wait_ready(base_url)
+    renderer_readiness_after_restart = wait_ready(render_url)
 
     persisted = asyncio.run(read_artifact(base_url, created["artifact_id"]))
     assert persisted["version"]["id"] == created["version_id"]
@@ -151,6 +157,12 @@ def main() -> None:
         json.dumps(
             {
                 "status": "ok",
+                "readiness": {
+                    "folio": readiness,
+                    "renderer": renderer_readiness,
+                    "folio_after_restart": readiness_after_restart,
+                    "renderer_after_restart": renderer_readiness_after_restart,
+                },
                 "persistence": "verified",
                 "public_ui_gateway": "verified",
                 "attached_bridge": "verified",

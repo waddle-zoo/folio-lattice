@@ -25,7 +25,7 @@ def free_port() -> int:
 def wait_ready(base_url: str, process: subprocess.Popen[bytes]) -> dict[str, Any]:
     for _ in range(150):
         try:
-            with urllib.request.urlopen(f"{base_url}/health", timeout=0.2) as response:
+            with urllib.request.urlopen(f"{base_url}/readyz", timeout=0.2) as response:
                 value = json.loads(response.read())
                 if value["ready"]:
                     return value

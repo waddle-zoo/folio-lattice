@@ -48,6 +48,49 @@ EXTERNAL_MCP_POLICY_VERSION = "external-mcp-v1"
 ACL_ACTIONS = frozenset({"read", "write", "share"})
 ACL_SUBJECT_TYPE = "actor"
 OWNER_GRANT_REASON = "artifact owner"
+REQUIRED_SCHEMA_OBJECTS = frozenset(
+    {
+        "tenants",
+        "artifacts",
+        "versions",
+        "chunks",
+        "chunk_fts",
+        "edges",
+        "acl_grants",
+        "external_mcp_connections",
+        "external_mcp_audit",
+    }
+)
+REQUIRED_SCHEMA_INDEXES = frozenset(
+    {
+        "versions_artifact_idx",
+        "edges_source_idx",
+        "edges_target_idx",
+        "acl_grants_lookup_idx",
+        "acl_grants_active_idx",
+        "external_mcp_connections_name_idx",
+        "external_mcp_connections_tenant_idx",
+        "external_mcp_audit_lookup_idx",
+    }
+)
+REQUIRED_SCHEMA_COLUMNS = {
+    "acl_grants": frozenset(
+        {
+            "tenant_id",
+            "artifact_id",
+            "subject_type",
+            "subject_id",
+            "action",
+            "status",
+        }
+    ),
+    "external_mcp_connections": frozenset(
+        {"tenant_id", "endpoint", "origin", "status", "health_status", "policy_version"}
+    ),
+    "external_mcp_audit": frozenset(
+        {"tenant_id", "connection_id", "actor_id", "action", "outcome"}
+    ),
+}
 
 
 class _UseCallerActor:
@@ -1793,13 +1836,85 @@ class FolioLattice:
                 ).fetchall()
         return [dict(row) for row in rows]
 
-    def health(self) -> dict[str, Any]:
-        """Check persistent state without exposing tenant data."""
+    def readiness(self) -> dict[str, Any]:
+        """Check durable dependencies without exposing tenant data."""
+        database_ready = False
+        migration_ready = False
+        acl_ready = False
+        external_mcp_ready = False
         try:
             with self.connect() as db:
-                db.execute("SELECT 1").fetchone()
-            access = os.R_OK if self.read_only else os.W_OK
-            ready = os.access(self.blob_root, access)
-        except sqlite3.Error:
-            ready = False
-        return {"status": "ok" if ready else "not_ready", "ready": ready}
+                objects = {
+                    row[0]
+                    for row in db.execute("SELECT name FROM sqlite_master WHERE name IS NOT NULL")
+                }
+                indexes = {
+                    row[0]
+                    for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'index' AND name IS NOT NULL"
+                    )
+                }
+                columns_ready = all(
+                    required <= {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+                    for table, required in REQUIRED_SCHEMA_COLUMNS.items()
+                )
+                quick_check = db.execute("PRAGMA quick_check").fetchone()
+                database_ready = quick_check is not None and quick_check[0] == "ok"
+                migration_ready = (
+                    REQUIRED_SCHEMA_OBJECTS <= objects
+                    and REQUIRED_SCHEMA_INDEXES <= indexes
+                    and columns_ready
+                )
+                acl_ready = (
+                    "acl_grants" in objects
+                    and "acl_grants_lookup_idx" in indexes
+                    and "acl_grants_active_idx" in indexes
+                    and REQUIRED_SCHEMA_COLUMNS["acl_grants"]
+                    <= {row[1] for row in db.execute("PRAGMA table_info(acl_grants)")}
+                )
+                external_mcp_ready = {
+                    "external_mcp_connections",
+                    "external_mcp_audit",
+                } <= objects and {
+                    "external_mcp_connections_name_idx",
+                    "external_mcp_connections_tenant_idx",
+                    "external_mcp_audit_lookup_idx",
+                } <= indexes
+        except (OSError, sqlite3.Error):
+            pass
+
+        database_parent = self.db_path.parent
+        if self.read_only:
+            database_access = (
+                self.db_path.is_file()
+                and os.access(self.db_path, os.R_OK)
+                and os.access(database_parent, os.R_OK | os.X_OK)
+            )
+        else:
+            database_access = (
+                self.db_path.is_file()
+                and os.access(self.db_path, os.R_OK | os.W_OK)
+                and os.access(database_parent, os.R_OK | os.W_OK | os.X_OK)
+            )
+        database_ready = database_ready and database_access
+
+        blob_access = os.R_OK | os.X_OK if self.read_only else os.R_OK | os.W_OK | os.X_OK
+        blob_ready = self.blob_root.is_dir() and os.access(self.blob_root, blob_access)
+        ready = (
+            database_ready and blob_ready and migration_ready and acl_ready and external_mcp_ready
+        )
+        return {
+            "status": "ok" if ready else "not_ready",
+            "ready": ready,
+            "dependencies": {
+                "database": {"ready": database_ready},
+                "blob": {"ready": blob_ready},
+                "migration": {"ready": migration_ready},
+                "acl": {"ready": acl_ready},
+                "external_mcp": {"ready": external_mcp_ready},
+            },
+        }
+
+    def health(self) -> dict[str, Any]:
+        """Backward-compatible durable-state response for direct callers."""
+        return self.readiness()

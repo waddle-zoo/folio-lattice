@@ -4,7 +4,7 @@ from html import escape
 from urllib.parse import parse_qs, quote
 
 from starlette.responses import HTMLResponse, JSONResponse, Response
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 from .public_mcp import PublicMcpError, ToolCaller
 from .sandbox import sandbox_headers
@@ -42,9 +42,10 @@ def _wrapper(artifact_id: str, version_id: str, media_type: str) -> str:
 class RendererApp:
     """Origin-isolated renderer that reads only through public MCP."""
 
-    def __init__(self, caller: ToolCaller, *, control_origin: str):
+    def __init__(self, caller: ToolCaller, *, control_origin: str, hsts_max_age: int = 0):
         self.caller = caller
         self.headers = sandbox_headers(control_origin)
+        self.hsts_max_age = hsts_max_age
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -58,16 +59,34 @@ class RendererApp:
         if scope["type"] != "http":
             await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
             return
+
+        async def response_send(message: Message) -> None:
+            if message["type"] == "http.response.start" and scope.get("scheme") == "https":
+                headers = list(message.get("headers", []))
+                if self.hsts_max_age and not any(
+                    key.lower() == b"strict-transport-security" for key, _ in headers
+                ):
+                    headers.append(
+                        (
+                            b"strict-transport-security",
+                            f"max-age={self.hsts_max_age}; includeSubDomains".encode(),
+                        )
+                    )
+                message["headers"] = headers
+            await send(message)
+
         path = scope["path"]
-        if path == "/health":
+        if path in {"/health", "/readyz"}:
             ready = await self.caller.ready()
             health = {"status": "ok" if ready else "not_ready", "ready": ready}
-            await JSONResponse(health, status_code=200 if ready else 503)(scope, receive, send)
+            await JSONResponse(health, status_code=200 if ready else 503)(
+                scope, receive, response_send
+            )
             return
         if scope["method"] != "GET":
             await JSONResponse(
                 {"error": "method not allowed"}, status_code=405, headers=self.headers
-            )(scope, receive, send)
+            )(scope, receive, response_send)
             return
         try:
             if path.startswith("/render/"):
@@ -76,29 +95,29 @@ class RendererApp:
                 if request_headers.get(b"sec-fetch-dest") != b"iframe":
                     await JSONResponse(
                         {"error": "not found"}, status_code=404, headers=self.headers
-                    )(scope, receive, send)
+                    )(scope, receive, response_send)
                     return
                 artifact_id = path.removeprefix("/render/")
                 if not artifact_id or "/" in artifact_id:
                     raise PublicMcpError("artifact not found")
                 query = parse_qs(scope["query_string"].decode())
                 version_id = query.get("version_id", [None])[0]
-                await self._render(scope, receive, send, artifact_id, version_id)
+                await self._render(scope, receive, response_send, artifact_id, version_id)
                 return
             if path.startswith("/content/"):
                 parts = path.split("/")
                 if len(parts) != 4 or not parts[2] or not parts[3]:
                     raise PublicMcpError("artifact not found")
-                await self._content(scope, receive, send, parts[2], parts[3])
+                await self._content(scope, receive, response_send, parts[2], parts[3])
                 return
         except PublicMcpError as exc:
             status = 404 if str(exc).endswith("not found") else 400
             await JSONResponse({"error": str(exc)}, status_code=status, headers=self.headers)(
-                scope, receive, send
+                scope, receive, response_send
             )
             return
         await JSONResponse({"error": "not found"}, status_code=404, headers=self.headers)(
-            scope, receive, send
+            scope, receive, response_send
         )
 
     async def _render(

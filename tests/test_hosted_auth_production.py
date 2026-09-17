@@ -201,7 +201,7 @@ class HostedAuthProductionTests(unittest.TestCase):
                         if process.poll() is not None:
                             break
                         try:
-                            status, health = _request_json(f"{base_url}/health")
+                            status, health = _request_json(f"{base_url}/readyz")
                             if status == 200 and isinstance(health, dict) and health.get("ready"):
                                 break
                         except OSError:
