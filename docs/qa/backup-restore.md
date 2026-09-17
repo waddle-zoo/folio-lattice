@@ -16,10 +16,13 @@ default to `FOLIO_DB_PATH` and `FOLIO_BLOB_ROOT`:
 python -m folio_lattice.ops migrate check
 python -m folio_lattice.ops backup create --output /evidence/backup
 python -m folio_lattice.ops backup verify --input /evidence/backup
+python -m folio_lattice.ops backup verify --input /evidence/backup \
+  --key-id "$RECOVERY_KEY_ID" --tenant-id "$EXPECTED_TENANT_ID"
 python -m folio_lattice.ops dr restore \
   --input /evidence/backup \
   --db /evidence/recovered/folio.db \
-  --blobs /evidence/recovered/blobs
+  --blobs /evidence/recovered/blobs \
+  --key-id "$RECOVERY_KEY_ID" --tenant-id "$EXPECTED_TENANT_ID"
 ```
 
 The restore command refuses existing database or blob targets. Restore into a
@@ -28,8 +31,8 @@ negative tenant/ACL matrix before serving traffic.
 
 ## Consistency and failure behavior
 
-The backup manifest records `folio-backup-v1`, a schema signature, SQLite
-quick/foreign-key checks, row counts, SHA-256 for the metadata database and
+The backup manifest records `folio-backup-v1`, a schema signature, tenant
+scope, SQLite quick/foreign-key checks, row counts, SHA-256 for the metadata database and
 each referenced blob, and the restore order. Metadata preserves versions and
 parents, provenance, graph edges, ACL/grant history, external-connection
 policy and audit records. FTS/index definitions and their rebuild inputs are
@@ -38,10 +41,13 @@ credential fields remain references only.
 
 `backup verify` fails closed on a missing or unexpected top-level file,
 checksum/size mismatch, SQLite corruption, foreign-key failure, schema/count
-mismatch, missing referenced blob, symlink, duplicate path, or out-of-bound
-blob count/bytes. A changed manifest can only be detected by an external
-signature or immutable-store policy; the local format does not pretend that a
-checksum alone is an authenticity proof.
+mismatch, missing referenced blob, symlink, duplicate path, wrong recovery-key
+identity, or out-of-bound blob count/bytes. A changed manifest can only be
+detected by an external signature or immutable-store policy; the local format
+does not pretend that a checksum alone is an authenticity proof. Restore
+refuses existing targets, which is the rollback guard: restore a verified
+snapshot into a new isolated target and switch over only after post-restore
+ACL/tenant checks.
 
 `migrate check` invokes the existing forward-compatible initializer twice and
 checks readiness after each run. It performs no down-migration or destructive

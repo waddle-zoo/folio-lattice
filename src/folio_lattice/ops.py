@@ -35,6 +35,8 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--blobs")
     verify = backup_subcommands.add_parser("verify")
     verify.add_argument("--input", required=True)
+    verify.add_argument("--key-id")
+    verify.add_argument("--tenant-id", action="append", dest="tenant_ids")
 
     restore = commands.add_parser("dr")
     restore_subcommands = restore.add_subparsers(dest="dr_command", required=True)
@@ -42,6 +44,8 @@ def _parser() -> argparse.ArgumentParser:
     dr_restore.add_argument("--input", required=True)
     dr_restore.add_argument("--db")
     dr_restore.add_argument("--blobs")
+    dr_restore.add_argument("--key-id")
+    dr_restore.add_argument("--tenant-id", action="append", dest="tenant_ids")
 
     audit = commands.add_parser("audit")
     audit_subcommands = audit.add_subparsers(dest="audit_command", required=True)
@@ -67,12 +71,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output,
             )
         elif args.command == "backup" and args.backup_command == "verify":
-            result = verify_backup(args.input)
+            result = verify_backup(
+                args.input,
+                expected_key_id=args.key_id,
+                expected_tenant_scope=set(args.tenant_ids) if args.tenant_ids is not None else None,
+            )
         elif args.command == "dr" and args.dr_command == "restore":
             result = restore_backup(
                 args.input,
                 _path(args.db, "FOLIO_DB_PATH", ".data/recovered/folio.db"),
                 _path(args.blobs, "FOLIO_BLOB_ROOT", ".data/recovered/blobs"),
+                expected_key_id=args.key_id,
+                expected_tenant_scope=set(args.tenant_ids) if args.tenant_ids is not None else None,
             )
         elif args.command == "audit" and args.audit_command == "purge":
             service = FolioLattice(

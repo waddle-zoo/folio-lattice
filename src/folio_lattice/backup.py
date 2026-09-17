@@ -146,6 +146,7 @@ def create_backup(db_path: str | Path, blob_root: str | Path, output: str | Path
             blob_hashes = _referenced_blobs(snapshot_db)
             counts = _table_counts(snapshot_db)
             schema_signature = _schema_signature(snapshot_db)
+            tenant_scope = sorted(row[0] for row in snapshot_db.execute("SELECT id FROM tenants"))
         _remove_sqlite_sidecars(database_path)
 
         if len(blob_hashes) > MAX_BACKUP_BLOBS:
@@ -191,10 +192,15 @@ def create_backup(db_path: str | Path, blob_root: str | Path, output: str | Path
                 "sha256": _sha256(database_path),
                 "schema_signature": schema_signature,
                 "table_counts": counts,
+                "tenant_scope": tenant_scope,
             },
             "blobs": {"count": len(blob_entries), "bytes": blob_bytes, "entries": blob_entries},
             "timing": {"elapsed_seconds": round(time.monotonic() - started, 6)},
-            "integrity": {"algorithm": "sha256", "manifest_is_signed": False},
+            "integrity": {
+                "algorithm": "sha256",
+                "manifest_is_signed": False,
+                "encryption_key_id": None,
+            },
         }
         encoded = _canonical(manifest)
         if len(encoded) > MAX_MANIFEST_BYTES:
@@ -232,11 +238,19 @@ def _load_manifest(backup: Path) -> dict[str, Any]:
     return manifest
 
 
-def verify_backup(backup: str | Path) -> dict[str, Any]:
+def verify_backup(
+    backup: str | Path,
+    *,
+    expected_key_id: str | None = None,
+    expected_tenant_scope: set[str] | None = None,
+) -> dict[str, Any]:
     """Verify checksums, SQLite invariants, references, and bounded layout."""
 
     backup_path = Path(backup)
     manifest = _load_manifest(backup_path)
+    integrity = manifest["integrity"]
+    if expected_key_id is not None and integrity.get("encryption_key_id") != expected_key_id:
+        raise BackupError("backup encryption key identity does not match")
     allowed = {MANIFEST_NAME, DATABASE_NAME, BLOBS_DIR_NAME}
     actual = {entry.name for entry in backup_path.iterdir()}
     if actual != allowed:
@@ -261,6 +275,11 @@ def verify_backup(backup: str | Path) -> dict[str, Any]:
             counts = _table_counts(db)
             if counts != database.get("table_counts"):
                 raise BackupError("backup metadata table counts do not match")
+            tenant_scope = sorted(row[0] for row in db.execute("SELECT id FROM tenants"))
+            if tenant_scope != database.get("tenant_scope"):
+                raise BackupError("backup tenant scope does not match metadata")
+            if expected_tenant_scope is not None and set(tenant_scope) != expected_tenant_scope:
+                raise BackupError("backup tenant scope does not match restore request")
             expected_blobs = set(_referenced_blobs(db))
     except sqlite3.Error as exc:
         raise BackupError(f"backup metadata cannot be opened: {exc}") from exc
@@ -309,12 +328,21 @@ def verify_backup(backup: str | Path) -> dict[str, Any]:
 
 
 def restore_backup(
-    backup: str | Path, db_path: str | Path, blob_root: str | Path
+    backup: str | Path,
+    db_path: str | Path,
+    blob_root: str | Path,
+    *,
+    expected_key_id: str | None = None,
+    expected_tenant_scope: set[str] | None = None,
 ) -> dict[str, Any]:
     """Restore into absent targets after a complete verification pass."""
 
     started = time.monotonic()
-    manifest = verify_backup(backup)
+    manifest = verify_backup(
+        backup,
+        expected_key_id=expected_key_id,
+        expected_tenant_scope=expected_tenant_scope,
+    )
     target_db = Path(db_path)
     target_blobs = Path(blob_root)
     if target_db.exists() or target_blobs.exists():

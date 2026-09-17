@@ -70,6 +70,9 @@ class BackupRestoreTests(unittest.TestCase):
                 resource_id=first["artifact"]["id"],
                 details={"status_code": 200},
             )
+            service.record_audit_event(
+                tenant_id="tenant-b", actor_id="owner-b", action="fixture", outcome="allowed"
+            )
             migration = migration_check(db_path, blob_root)
             self.assertTrue(migration["after"]["ready"])
             self.assertFalse(migration["destructive_down_migrations"])
@@ -85,6 +88,15 @@ class BackupRestoreTests(unittest.TestCase):
             self.assertTrue(verified["verified"])
             self.assertIn("audit_events", verified["database"]["table_counts"])
             self.assertEqual(verified["consistency_set"]["acl"], "included in metadata.sqlite")
+            with self.assertRaisesRegex(BackupError, "encryption key identity"):
+                verify_backup(backup_path, expected_key_id="kms://production")
+            with self.assertRaisesRegex(BackupError, "tenant scope"):
+                restore_backup(
+                    backup_path,
+                    root / "wrong-tenant" / "folio.db",
+                    root / "wrong-tenant" / "blobs",
+                    expected_tenant_scope={"tenant-a"},
+                )
 
             recovered_db = root / "recovered" / "folio.db"
             recovered_blobs = root / "recovered" / "blobs"
@@ -119,6 +131,10 @@ class BackupRestoreTests(unittest.TestCase):
             )
             backup_path = root / "backup"
             create_backup(root / "folio.db", root / "blobs", backup_path)
+            target_db = root / "restored.db"
+            target_db.write_text("must not overwrite", encoding="utf-8")
+            with self.assertRaisesRegex(BackupError, "targets must not"):
+                restore_backup(backup_path, target_db, root / "restored-blobs")
             blob = (
                 backup_path
                 / "blobs"
@@ -128,10 +144,6 @@ class BackupRestoreTests(unittest.TestCase):
             blob.write_bytes(b"tampered")
             with self.assertRaises(BackupError):
                 verify_backup(backup_path)
-            target_db = root / "restored.db"
-            target_db.write_text("must not overwrite", encoding="utf-8")
-            with self.assertRaises(BackupError):
-                restore_backup(backup_path, target_db, root / "restored-blobs")
 
 
 if __name__ == "__main__":
