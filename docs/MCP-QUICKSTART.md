@@ -21,18 +21,27 @@ operation.
   readable artifacts and neither exposes nor crosses an inaccessible artifact.
   Any readable member of the same component may be used as the start.
 - `artifact_search(graph_root_artifact_id=...)` applies the same readable,
-  undirected component rule and searches current indexed bodies only inside
-  that component. The root is an anchor, not an additional query term.
+  undirected component rule and searches names, media types, and current
+  bodies only inside that component. The root is an anchor, not an additional
+  query term.
 - `artifact_grep` is a tenant- and ACL-scoped literal body scan; it currently
   has no graph-root parameter. Use `artifact_search` when server-enforced graph
   scoping is required.
 
-Metadata is separate from body search. `artifact_list` accepts optional exact
-`name` and `media_type` filters, applied before its 1–100 result bound.
-`artifact_search` and `artifact_grep` intentionally do not index filenames or
-media types. To continue a full page, pass the final item's
-`<updated_at>|<id>` as `cursor` while retaining the same filters. The response
-remains a list; an empty or short page ends enumeration.
+`artifact_search` is the primary discovery operation. It performs one
+case-insensitive substring search across the artifact filename, media type,
+and current body, then returns at most one result per stable `artifact_id`.
+Each result includes the current `version_id`, `match_kind`, `match_kinds`,
+`snippet`, `path`, `graph_context`, and `updated_at` (plus the artifact's name
+and media type). A `graph_root_artifact_id` restricts the same operation to
+that root's readable connected component; the root is an anchor, not a query
+term. A `cursor` continues the same query after the final result's
+`<updated_at>|<artifact_id>`.
+
+`artifact_grep` remains the literal current-body scan and has no graph-root
+parameter. `artifact_list` remains available for catalog listing and
+backward-compatible clients, but is not the primary metadata discovery
+contract. Both operations are ACL- and tenant-scoped by server context.
 
 ## Copyable end-to-end graph recipe
 
@@ -111,41 +120,108 @@ root, while component membership is readable in either direction.
 {"source_artifact_id":"<markdown_artifact_id>","target_artifact_id":"<binary_artifact_id>","edge_type":"references"}
 ```
 
-### 3. Discover metadata, then search bodies
+### 3. Discover metadata and bodies with artifact_search
 
-Metadata discovery and indexed body search are distinct operations. Use
-`artifact_list` for exact metadata; search and grep do not search filenames or
-media types.
+Use the same `artifact_search` contract for a filename label and a media type.
+The query is case-insensitive and searches the name, media type, and current
+body; `match_kind` identifies one dimension or `multiple`, and `match_kinds`
+retains all matching dimensions. These requests use the exact filename and
+media type values as queries:
+
+```json
+{"query":"agent-graph.html","limit":20}
+```
+
+```json
+{"query":"text/html","limit":20}
+```
+
+Both responses are lists. A filename result has `match_kind: "name"`; a
+media-type result has `match_kind: "media_type"`. Retain the stable IDs from
+the response rather than resolving a filename later:
+
+```json
+[
+  {
+    "artifact_id":"<html_artifact_id>",
+    "version_id":"<html_version_id>",
+    "artifact_name":"agent-graph.html",
+    "media_type":"text/html",
+    "match_kind":"name",
+    "match_kinds":["name"],
+    "snippet":"[agent-graph.html]",
+    "chunk_id":null,
+    "score":null,
+    "path":"agent-graph.html",
+    "graph_context":{"root_artifact_id":null,"scoped":false,"edge_count":1},
+    "graph_edges":1,
+    "graph_root_artifact_id":null,
+    "updated_at":"<timestamp>"
+  }
+]
+```
+
+The `text/html` request returns the same fields with
+`match_kind: "media_type"` and a media-type snippet:
+
+```json
+[
+  {
+    "artifact_id":"<html_artifact_id>",
+    "version_id":"<html_version_id>",
+    "artifact_name":"agent-graph.html",
+    "media_type":"text/html",
+    "match_kind":"media_type",
+    "match_kinds":["media_type"],
+    "snippet":"[text/html]",
+    "path":"agent-graph.html",
+    "graph_context":{"root_artifact_id":null,"scoped":false,"edge_count":1},
+    "updated_at":"<timestamp>"
+  }
+]
+```
+
+For a bounded page, retain the same query and pass the final result's
+`updated_at|artifact_id` as `cursor`. The response remains a list:
+
+```json
+{"query":"text/html","limit":2,"cursor":"<last_page_item.updated_at>|<last_page_item.artifact_id>"}
+```
+
+For backward-compatible catalog listing, `artifact_list` still accepts exact
+metadata filters. Use it to enumerate a list, not as the primary discovery
+operation:
 
 ```json
 {"name":"agent-graph.html","media_type":"text/html","limit":20}
 ```
 
-The response is a list, including the stable ID and current version:
+Use `artifact_search` for body discovery scoped to the readable component
+anchored at the Markdown artifact. The response keeps the same metadata and
+graph fields while setting `match_kind` to `"body"`:
 
 ```json
-[
-  {"id":"<html_artifact_id>","name":"agent-graph.html","media_type":"text/html","current_version_id":"<html_version_id>","updated_at":"<timestamp>","graph_edges":1}
-]
-```
-
-For a bounded page, retain the exact filters and continue from the final
-item. The cursor is `<updated_at>|<id>` and the response remains a list:
-
-```json
-{"name":"agent-graph.html","media_type":"text/html","limit":2,"cursor":"<last_page_item.updated_at>|<last_page_item.id>"}
-```
-
-Use `artifact_search` for indexed natural-language body search scoped to the
-readable component anchored at the Markdown artifact:
-
-```json
-{"query":"Agent graph","graph_root_artifact_id":"<markdown_artifact_id>","limit":20}
+{"query":"quickstart body marker","graph_root_artifact_id":"<markdown_artifact_id>","limit":20}
 ```
 
 ```json
 [
-  {"chunk_id":"<chunk_id>","artifact_id":"<html_artifact_id>","version_id":"<html_version_id>","artifact_name":"agent-graph.html","snippet":"[Agent graph]","score":-1.0}
+  {
+    "artifact_id":"<markdown_artifact_id>",
+    "version_id":"<markdown_version_id>",
+    "artifact_name":"agent-graph.md",
+    "media_type":"text/markdown",
+    "match_kind":"body",
+    "match_kinds":["body"],
+    "snippet":"[quickstart body marker]",
+    "chunk_id":"<markdown_chunk_id>",
+    "score":0.0,
+    "path":"agent-graph.md",
+    "graph_context":{"root_artifact_id":"<markdown_artifact_id>","scoped":true,"edge_count":4},
+    "graph_edges":4,
+    "graph_root_artifact_id":"<markdown_artifact_id>",
+    "updated_at":"<timestamp>"
+  }
 ]
 ```
 
@@ -308,8 +384,8 @@ returned by create, not a filename.
 `tests/public_contract_quickstart.py` runs this same flow against fresh local
 HTTP state using only MCP and renderer endpoints. It creates a unique Markdown
 root linked to HTML, CSS, JavaScript, and binary artifacts; verifies stable
-artifact/version IDs, exact metadata filters with bounded cursors, component
-and graph-root search scope, literal grep, chunk reads, renderer headers, and
-the attached-MCP allow path. It also verifies bridge rejection for an
-out-of-graph artifact ID and for a filename used as an ambiguous duplicate-name
-target.
+artifact/version IDs, unified filename/media-type/body discovery with bounded
+search cursors, component and graph-root scope, backward-compatible listing,
+literal grep, chunk reads, renderer headers, and the attached-MCP allow path.
+It also verifies bridge rejection for an out-of-graph artifact ID and for a
+filename used as an ambiguous duplicate-name target.
