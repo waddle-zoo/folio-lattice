@@ -19,6 +19,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import uvicorn
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
+from starlette.authentication import AuthCredentials
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -664,6 +667,8 @@ class FolioHttpApp:
                 )
                 return
             principal_token = set_request_principal(principal)
+            if scope["path"] == "/mcp":
+                _bind_mcp_actor(scope, principal)
         path = scope["path"]
         try:
             if (
@@ -1177,6 +1182,27 @@ def _public_mcp_key(scope: Scope, principal: Principal | None) -> str:
     if principal is None:
         return f"ip:{client}"
     return f"identity:{principal.tenant_id}\x1f{principal.actor_id}\x1f{client}"
+
+
+def _bind_mcp_actor(scope: Scope, principal: Principal) -> None:
+    """Expose the verified principal to MCP's stateful transport session guard.
+
+    The SDK binds a stateful MCP session to ``scope['user']``.  Our OIDC layer
+    runs outside that middleware, so leaving this unset would make every
+    session owner ``None`` and allow a different bearer to reuse the session.
+    The token value is deliberately a non-secret sentinel; only the stable
+    issuer/subject identity is used for the SDK's ownership comparison.
+    """
+    scope["auth"] = AuthCredentials(sorted(principal.scopes))
+    scope["user"] = AuthenticatedUser(
+        AccessToken(
+            token="request-bound",
+            client_id="folio-lattice-hosted",
+            scopes=sorted(principal.scopes),
+            subject=principal.subject,
+            claims={"iss": principal.issuer},
+        )
+    )
 
 
 def _cookie(scope: Scope, name: str) -> str | None:

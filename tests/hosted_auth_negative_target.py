@@ -110,6 +110,7 @@ ROZobUhEnN1Ie6yZVxZI70o=
 }
 
 PRINCIPALS = {
+    "owner_a": ("owner-a", "tenant-a", "owner-a"),
     "member_a": ("member-a", "tenant-a", "actor-a"),
     "member_b": ("member-b", "tenant-b", "actor-b"),
     "limited": ("limited", "tenant-a", "limited"),
@@ -124,6 +125,7 @@ ALL_SCOPES = {
     "artifact:search",
     "graph:read",
     "graph:write",
+    "artifact:share",
 }
 LIMITED_SCOPES = frozenset({"artifact:read", "artifact:search", "graph:read"})
 
@@ -256,7 +258,7 @@ class HostedAuthNegativeTarget:
         self.identity_adapter.warm_up()
         self._seed_adapter_identity()
         memberships = _FixtureMembershipStore(db_path)
-        for name in ("member_a", "member_b", "ambiguous", "disabled", "revoked"):
+        for name in ("owner_a", "member_a", "member_b", "ambiguous", "disabled", "revoked"):
             subject, tenant, actor = PRINCIPALS[name]
             memberships.add(
                 issuer=ISSUER,

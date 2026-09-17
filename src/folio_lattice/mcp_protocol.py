@@ -79,6 +79,11 @@ def build_mcp_server(
         return tenant_id, actor
 
     def policy_actor(request_actor: str) -> str | None:
+        # A verified request principal always wins, even when a caller embeds
+        # this server with legacy fixed defaults.  Never turn an authenticated
+        # actor into the local-policy bypass path.
+        if get_request_principal() is not None:
+            return request_actor
         return None if fixed_local_identity else request_actor
 
     broker = external_broker or ExternalMcpBroker(service)

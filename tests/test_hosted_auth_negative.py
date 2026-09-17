@@ -168,6 +168,54 @@ class PublicMcpHttpClient:
             raise AssertionError(f"hosted auth target unavailable: {exc.reason}") from exc
 
 
+class LiveMcpHttpSession:
+    """A raw client that keeps one MCP session across ACL changes."""
+
+    def __init__(self, client: PublicMcpHttpClient, token: str):
+        self.client = client
+        self.headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": "2025-06-18",
+            "Authorization": f"Bearer {token}",
+        }
+        initialize = client._post(
+            {
+                "jsonrpc": "2.0",
+                "id": client._id(),
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "folio-live-session-regression", "version": "1"},
+                },
+            },
+            self.headers,
+        )
+        assert initialize.status in {200, 201, 202}, initialize.text
+        session_id = next(
+            (value for key, value in initialize.headers.items() if key.lower() == "mcp-session-id"),
+            None,
+        )
+        assert session_id
+        self.headers["Mcp-Session-Id"] = session_id
+        initialized = client._post(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.headers
+        )
+        assert initialized.status < 400, initialized.text
+
+    def call_tool(self, tool: str, arguments: Mapping[str, Any]) -> HttpResponse:
+        return self.client._post(
+            {
+                "jsonrpc": "2.0",
+                "id": self.client._id(),
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": dict(arguments)},
+            },
+            self.headers,
+        )
+
+
 def _load_target() -> HostedAuthTestTarget:
     spec = os.environ.get(TARGET_ENV)
     if not spec:
@@ -560,6 +608,42 @@ def test_cross_tenant_artifact_chunk_version_search_grep_graph_and_write_ids_do_
         token=token_b,
     )
     _assert_same_public_error(link_other, link_unknown, token_b, PRIVATE_MARKER)
+
+
+@pytest.mark.integration
+def test_acl_04_same_live_session_sees_share_then_immediate_revoke(
+    target: HostedAuthTestTarget, mcp: PublicMcpHttpClient
+) -> None:
+    token_owner = _token(target, "owner_a")
+    fixture = _seed_private_graph(mcp, token_owner)
+    token_member = _token(target, "member_a")
+    live = LiveMcpHttpSession(mcp, token_member)
+    denied = live.call_tool("artifact_read", {"artifact_id": fixture["artifact_id"]})
+    _public_error_key(denied, token_member, PRIVATE_MARKER)
+
+    shared = _result(
+        mcp.call_tool(
+            "artifact_share",
+            {"artifact_id": fixture["artifact_id"], "subject_actor_id": ACTOR_A},
+            token=token_owner,
+        )
+    )
+    allowed = live.call_tool("artifact_read", {"artifact_id": fixture["artifact_id"]})
+    assert allowed.status < 400
+    revoked = _result(
+        mcp.call_tool(
+            "artifact_revoke",
+            {"artifact_id": fixture["artifact_id"], "grant_id": shared["id"]},
+            token=token_owner,
+        )
+    )
+    assert revoked["status"] == "revoked"
+    for tool, arguments in (
+        ("artifact_read", {"artifact_id": fixture["artifact_id"]}),
+        ("artifact_versions", {"artifact_id": fixture["artifact_id"]}),
+    ):
+        after = live.call_tool(tool, arguments)
+        _public_error_key(after, token_member, PRIVATE_MARKER)
 
 
 @pytest.mark.integration

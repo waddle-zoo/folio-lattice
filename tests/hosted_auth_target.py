@@ -350,8 +350,8 @@ def _requested_tools(body: bytes) -> set[str]:
 
 
 class AuthenticatedMcpApp:
-    def __init__(self, apps: dict[str, Any], tenant: str, issuer: Issuer, memberships: Memberships):
-        self.apps = apps
+    def __init__(self, app: Any, tenant: str, issuer: Issuer, memberships: Memberships):
+        self.app = app
         self.tenant = tenant
         self.issuer = issuer
         self.memberships = memberships
@@ -381,10 +381,7 @@ class AuthenticatedMcpApp:
         ):
             await self._deny(scope, receive, send, 403)
             return
-        app = self.apps.get(subject)
-        if app is None:
-            await self._deny(scope, receive, send, 403)
-            return
+        profile = membership
         body = b""
         if scope.get("method") == "POST":
             body = await _read_body(receive)
@@ -407,7 +404,22 @@ class AuthenticatedMcpApp:
             delivered = True
             return {"type": "http.request", "body": body, "more_body": False}
 
-        await app(scope, replay if scope.get("method") == "POST" else receive, send)
+        from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
+        from folio_lattice.server import _bind_mcp_actor
+
+        principal = Principal(
+            self.tenant,
+            str(profile["actor"]),
+            self.issuer.issuer_url,
+            subject,
+            frozenset(str(profile.get("scope", "")).split()),
+        )
+        principal_token = set_request_principal(principal)
+        _bind_mcp_actor(scope, principal)
+        try:
+            await self.app(scope, replay if scope.get("method") == "POST" else receive, send)
+        finally:
+            reset_request_principal(principal_token)
 
 
 def _server_app(
@@ -433,22 +445,15 @@ def _server_app(
     )
     child_apps = {}
     session_apps = []
-    for route, tenant, profiles in (
-        ("tenant-a", TENANT_A, ("A_OWNER", "A_MEMBER")),
-        ("tenant-b", TENANT_B, ("B",)),
-    ):
-        apps = {}
-        for profile in profiles:
-            profile_data = PROFILES[profile]
-            child = build_mcp_server(
-                service,
-                tenant_id=tenant,
-                actor=profile_data["actor"],
-                external_broker=broker,
-            ).streamable_http_app(json_response=True)
-            apps[profile_data["subject"]] = child
-            session_apps.append(child)
-        child_apps[route] = AuthenticatedMcpApp(apps, tenant, issuer, memberships)
+    for route, tenant in (("tenant-a", TENANT_A), ("tenant-b", TENANT_B)):
+        # Keep the fixture transport faithful to hosted production: one
+        # tenant MCP app derives actor/tenant from the verified request
+        # principal.  Per-profile fixed servers masked actor/session bugs.
+        child = build_mcp_server(service, external_broker=broker).streamable_http_app(
+            json_response=True
+        )
+        session_apps.append(child)
+        child_apps[route] = AuthenticatedMcpApp(child, tenant, issuer, memberships)
 
     async def health(_: Any) -> Any:
         return JSONResponse(
