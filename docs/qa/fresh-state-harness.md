@@ -12,6 +12,12 @@ harness does not redact the separate log files, so the supplied gate command
 must already exclude tokens, credentials, cookies, and sensitive content. A nonzero gate result
 fails the harness after all repetitions have been captured.
 
+Each run also receives a unique `COMPOSE_PROJECT_NAME` and
+`FOLIO_COMPOSE_PROJECT`. When Docker is available, the harness removes that
+exact project with volumes after the run and fails if labeled containers or
+volumes remain. Gate commands must honor these variables; hard-coded Compose
+project names are outside this harness contract.
+
 Example, only after the release candidate and blocker manifest are approved:
 
 ```sh
@@ -25,3 +31,5 @@ scripts/repeat-fresh-state.sh -- make docker-test
 
 The harness itself is preparation evidence only. Execution, release-candidate
 approval, and bead closure require the Mayor's exact SHA and blocker sign-off.
+The blocker manifest is an input, not independent proof; the Mayor must
+generate and retain it from the canonical Beads state for the exact candidate.

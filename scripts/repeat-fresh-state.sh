@@ -51,6 +51,7 @@ overall_status=pass
 for run in $(seq 1 "$runs"); do
   root="$(mktemp -d "${fresh_prefix}XXXXXX")"
   roots+=("$root")
+  compose_project="folio-fresh-${candidate_sha:0:12}-${run}-$(basename "$root" | tr -cd 'a-zA-Z0-9' | tail -c 9)"
   run_evidence="${evidence%.json}.run-${run}"
   mkdir -p "$run_evidence"
 
@@ -60,10 +61,28 @@ for run in $(seq 1 "$runs"); do
     export FOLIO_DB_PATH="$root/folio.db"
     export FOLIO_BLOB_ROOT="$root/blobs"
     export FOLIO_FRESH_STATE_RUN="$run"
+    export FOLIO_COMPOSE_PROJECT="$compose_project"
+    export COMPOSE_PROJECT_NAME="$compose_project"
     "$@"
   ) >"$run_evidence/stdout.log" 2>"$run_evidence/stderr.log"
   exit_code=$?
   set -e
+
+  cleanup_status="not_available"
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    cleanup_status="pass"
+    if ! docker compose -p "$compose_project" down -v --remove-orphans \
+      >"$run_evidence/compose-cleanup.log" 2>&1; then
+      cleanup_status="fail"
+    fi
+    if [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=$compose_project")" \
+      || -n "$(docker volume ls -q --filter "label=com.docker.compose.project=$compose_project")" ]]; then
+      cleanup_status="fail"
+    fi
+    if [[ "$cleanup_status" == "fail" ]]; then
+      exit_code=1
+    fi
+  fi
 
   stdout_sha=$(sha256_file "$run_evidence/stdout.log")
   stderr_sha=$(sha256_file "$run_evidence/stderr.log")
@@ -73,8 +92,11 @@ for run in $(seq 1 "$runs"); do
     --arg stdout_sha "$stdout_sha" \
     --arg stderr_sha "$stderr_sha" \
     --arg evidence "$run_evidence" \
+    --arg compose_project "$compose_project" \
+    --arg compose_cleanup "$cleanup_status" \
     '{run:$run, exit_code:$exit_code, stdout_sha256:$stdout_sha,
-      stderr_sha256:$stderr_sha, evidence_dir:$evidence}')")
+      stderr_sha256:$stderr_sha, evidence_dir:$evidence,
+      compose_project:$compose_project, compose_cleanup:$compose_cleanup}')")
   if [[ "$exit_code" -ne 0 ]]; then
     overall_status=fail
   fi
