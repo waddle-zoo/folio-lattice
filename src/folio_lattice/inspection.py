@@ -1604,6 +1604,7 @@ let workspaceComponent = [];
 let authRedirectStarted = false;
 let accessGrants = [];
 let pendingRevoke = null;
+let revokeTrigger = null;
 
 function artifactPath(id) {
   const prefix = debugMode ? 'inspect' : workspaceMode ? 'workspace' : 'artifacts';
@@ -1819,11 +1820,21 @@ function artifactNameCounts(items) {
   items.forEach((item) => {
     if (item?.name) counts.set(item.name, (counts.get(item.name) || 0) + 1);
   });
+  const duplicateIds = new Map();
+  items.forEach((item) => {
+    if (item?.name && item?.id && counts.get(item.name) > 1) {
+      const ids = duplicateIds.get(item.name) || [];
+      ids.push(item.id); duplicateIds.set(item.name, ids);
+    }
+  });
+  duplicateIds.forEach((ids, name) => counts.set(`${name}\u0000ids`, ids.sort()));
   return counts;
 }
 function stableArtifactLabel(name, id, counts) {
   if (!name || counts?.get(name) < 2) return name || 'Open artifact';
-  return `${name} · ${String(id || '').slice(0, 8)}`;
+  const ids = counts.get(`${name}\u0000ids`) || [];
+  const ordinal = ids.indexOf(id) + 1;
+  return `${name} · Copy ${ordinal > 0 ? ordinal : '?'} of ${ids.length || counts.get(name)}`;
 }
 function setWorkspaceMode(mode, persist = true) {
   const graph = mode === 'graph';
@@ -1918,6 +1929,7 @@ function setWorkspaceEditMode(active, focus = true) {
   byId('preview-card')?.toggleAttribute('hidden', active || !workspaceWeb);
   byId('graph-context')?.toggleAttribute('hidden', active || !byId('graph-mode')?.classList.contains('is-active'));
   if (active && focus) setTimeout(() => byId('human-content')?.focus(), 0);
+  if (!active && focus) setTimeout(() => byId('edit-entry')?.focus(), 0);
 }
 byId('workspace-share')?.addEventListener('close', () => {
   byId('workspace-share')?.classList.remove('is-open');
@@ -2224,7 +2236,7 @@ function renderAccess(grants) {
     item.querySelector('.access-person')?.append(meta);
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'access-action';
     remove.textContent = 'Remove access'; remove.setAttribute('aria-label', `Remove access for ${row.person}`);
-    remove.addEventListener('click', () => openRevokeDialog(row.person, row.actions, row.grants));
+    remove.addEventListener('click', () => openRevokeDialog(row.person, row.actions, row.grants, remove));
     item.append(remove); target.append(item);
   });
   if (!shared.size) {
@@ -2289,11 +2301,14 @@ function closeRevokeDialog() {
   if (typeof dialog.close === 'function' && dialog.open) dialog.close();
   else dialog.removeAttribute('open');
   pendingRevoke = null;
+  const trigger = revokeTrigger; revokeTrigger = null;
+  if (trigger && document.contains(trigger)) setTimeout(() => trigger.focus(), 0);
 }
-function openRevokeDialog(person, actions, grants) {
+function openRevokeDialog(person, actions, grants, trigger) {
   const dialog = byId('revoke-access');
   if (!dialog) return;
   pendingRevoke = {person, actions, grants};
+  revokeTrigger = trigger || null;
   byId('revoke-person').textContent = person;
   byId('revoke-role').textContent = actions.map(accessRole).join(', ');
   byId('revoke-artifact').textContent = byId('title')?.textContent || 'this artifact';
@@ -2623,7 +2638,7 @@ function renderResults(target, results, names) {
     const resultLabel = debugMode && result.artifact_name
       ? `${result.artifact_id} — ${result.artifact_name}`
       : duplicateName
-        ? `${result.artifact_name} — ${result.artifact_id}`
+        ? stableArtifactLabel(result.artifact_name, result.artifact_id, names)
         : result.artifact_name;
     const resultButton = button(resultLabel, () => location.assign(
       workspaceMode || !debugMode
@@ -2679,12 +2694,9 @@ async function discover(tool, field, inputId, resultsTarget) {
       rawResults = (await exactMetadataResults(query)).concat(rawResults);
     }
     const results = mergeSearchResults(rawResults);
-    const names = new Map();
-    results.forEach((result) => {
-      if (result.artifact_name) {
-        names.set(result.artifact_name, (names.get(result.artifact_name) || 0) + 1);
-      }
-    });
+    const names = artifactNameCounts(results.map((result) => ({
+      name: result.artifact_name, id: result.artifact_id,
+    })));
     if (workspaceMode) {
       const panel = byId('workspace-search-results');
       if (panel) panel.hidden = false;
@@ -2929,7 +2941,7 @@ def ui_html(
 <body class="auth-route" data-auth-state="{state}" data-return-to="{return_path}">
 <div class="auth-shell">
 <header class="auth-topbar"><div class="brand-lockup"><span class="brand-mark" aria-hidden="true">F</span><div><div class="brand-name">Folio Lattice</div><div class="brand-subtitle">Knowledge workspace</div></div></div><a class="button-secondary" href="/">Back to library</a></header>
-<main id="main" class="auth-page" aria-labelledby="sign-in-title">
+<main id="main" class="auth-page" tabindex="-1" aria-labelledby="sign-in-title">
   <p class="eyebrow">YOUR WORKSPACE</p>
   <h1 id="sign-in-title">Sign in to continue.</h1>
   <p class="auth-lede">Your graphs and artifacts stay inside your organization. Use the identity provider your company already trusts.</p>
@@ -2951,7 +2963,7 @@ def ui_html(
 <title>Artifact</title><link rel="stylesheet" href="/ui.css"></head>
 <body class="human-route standalone-route" data-render-origin="{origin}" data-auth-state="{state}">
 <a id="standalone-back" class="standalone-back" href="/">← Library</a>
-<main id="main" class="page" aria-busy="false">
+<main id="main" class="page" tabindex="-1" aria-busy="false">
   <div class="live-region sr-only"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
   <article id="human-viewer" class="human-viewer" hidden>
@@ -2967,7 +2979,7 @@ def ui_html(
 <a class="skip-link" href="#main">Skip to content</a>
 <div class="app-shell">
 <header class="topbar"><a id="back-to-library" class="button-secondary" href="/">← Library</a><h1 id="human-title" class="human-viewer-title">Opening artifact…</h1></header>
-<main id="main" class="page" aria-busy="false">
+<main id="main" class="page" tabindex="-1" aria-busy="false">
   <div class="live-region"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
   <article id="human-viewer" class="human-viewer" hidden>
@@ -3225,7 +3237,7 @@ def ui_html(
   <nav class="primary-nav" aria-label="Primary">{primary_nav}</nav>
 </header>
 {account_surface}
-<main id="main" class="page" aria-busy="false">
+<main id="main" class="page" tabindex="-1" aria-busy="false">
   <div class="live-region"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
   <section id="welcome" class="welcome-panel" aria-labelledby="welcome-title">

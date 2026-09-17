@@ -903,6 +903,13 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 chrome = DevTools(browser, control_origin, root / "chrome-graph")
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.wait("Boolean(document.querySelector('#graph-artifacts button'))")
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#main').getAttribute('tabindex')"),
+                    "-1",
+                )
+                chrome.evaluate("document.querySelector('.skip-link').focus()")
+                chrome.key("Enter", "Enter", 13)
+                chrome.wait("document.activeElement?.id === 'main'")
                 self.assertFalse(
                     chrome.evaluate("Boolean(document.querySelector('#recent-artifacts'))")
                 )
@@ -918,6 +925,13 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 )
                 chrome.wait("document.querySelector('#title')?.textContent === 'notes/decision.md'")
                 chrome.wait("Boolean(document.querySelector('#artifact-tree details'))")
+                chrome.evaluate("document.querySelector('#edit-entry').click()")
+                chrome.wait("!document.querySelector('#update').hidden")
+                chrome.wait("document.activeElement?.id === 'human-content'")
+                chrome.evaluate("document.querySelector('#human-cancel').click()")
+                chrome.wait(
+                    "document.querySelector('#update').hidden && document.activeElement?.id === 'edit-entry'"
+                )
                 self.assertIn(
                     "site",
                     chrome.evaluate("document.querySelector('#artifact-tree').textContent"),
@@ -1159,7 +1173,10 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                     "[...document.querySelectorAll('#artifact-library button')].map((button) => button.textContent).filter((text) => text.startsWith('same-name.md'))"
                 )
                 self.assertEqual(len(duplicate_labels), 2)
-                self.assertTrue(all(" · " in label for label in duplicate_labels))
+                self.assertEqual(
+                    set(duplicate_labels),
+                    {"same-name.md · Copy 1 of 2", "same-name.md · Copy 2 of 2"},
+                )
 
                 chrome.evaluate("document.querySelector('#find').open = true")
                 chrome.evaluate("""
@@ -1224,7 +1241,15 @@ document.querySelector('#search').requestSubmit();
                     },
                 )
                 result_text = chrome.evaluate("document.querySelector('#results').innerText")
-                self.assertTrue(all(artifact_id in result_text for artifact_id in duplicate_ids))
+                result_labels = chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.textContent)"
+                )
+                self.assertEqual(
+                    set(result_labels), {"same-name.md · Copy 1 of 2", "same-name.md · Copy 2 of 2"}
+                )
+                self.assertTrue(
+                    all(artifact_id not in result_text for artifact_id in duplicate_ids)
+                )
                 chrome.evaluate(
                     "[...document.querySelectorAll('#results button[data-artifact-id]')]"
                     f".find((button) => button.dataset.artifactId === {json.dumps(duplicate_two['artifact']['id'])}).click()"
@@ -1516,6 +1541,10 @@ document.querySelector('#share').requestSubmit();
                     "Can view, Can edit",
                     chrome.evaluate("document.querySelector('#revoke-role').textContent"),
                 )
+                chrome.evaluate("document.querySelector('#revoke-cancel').click()")
+                chrome.wait("document.activeElement?.matches('#people-with-access .access-action')")
+                chrome.evaluate("document.querySelector('#people-with-access button').click()")
+                chrome.wait("document.querySelector('#revoke-access')?.open === true")
                 chrome.evaluate("document.querySelector('#revoke-confirm').click()")
                 chrome.wait(
                     "document.querySelector('#status').textContent.includes('Removed access for browser-reader')"

@@ -431,6 +431,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="human-viewer"',
             b'id="human-document"',
             b'id="human-preview"',
+            b'<main id="main" class="page" tabindex="-1"',
         ):
             self.assertIn(marker, human_page)
         for forbidden in (
@@ -465,6 +466,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="graph-context"',
             b'id="revoke-access"',
             b"Approved person identifier",
+            b'<main id="main" class="page" tabindex="-1"',
         ):
             self.assertIn(marker, workspace_page)
         self.assertNotIn(b'id="human-viewer"', workspace_page)
@@ -496,6 +498,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b"markdownNoteName",
             b"graph_traverse",
             b"renderArtifactTree",
+            b"stableArtifactLabel",
+            b"revokeTrigger",
             b"setWorkspaceMode",
             b"workspacePath",
             b"/render/",
