@@ -211,6 +211,61 @@ class ServiceTests(unittest.TestCase):
             results = self.service.search("acme", "bounded", limit=100, actor="reader")
         self.assertEqual(len(results), 2)
 
+    def test_search_uses_ranked_fts_and_indexed_substring_discovery(self):
+        ranked = self.service.create_artifact(
+            tenant_id="acme",
+            name="ranked.md",
+            data=b"needle needle context",
+            actor="reader",
+        )
+        substring = self.service.create_artifact(
+            tenant_id="acme",
+            name="substring.md",
+            data=b"the docker-renderer payload",
+            actor="reader",
+        )
+
+        ranked_result = self.service.search("acme", "needle", actor="reader")
+        self.assertEqual(ranked_result[0]["artifact_id"], ranked["artifact"]["id"])
+        self.assertIsNotNone(ranked_result[0]["score"])
+        self.assertIn("[needle]", ranked_result[0]["snippet"])
+
+        substring_result = self.service.search("acme", "ocker-rend", actor="reader")
+        self.assertEqual(
+            [item["artifact_id"] for item in substring_result], [substring["artifact"]["id"]]
+        )
+        self.assertEqual(substring_result[0]["match_kinds"], ["body"])
+        self.assertIsNotNone(substring_result[0]["score"])
+
+    def test_short_punctuation_fallback_is_explicitly_bounded(self):
+        for index in range(4):
+            self.service.create_artifact(
+                tenant_id="acme",
+                name=f"punctuation-{index}.md",
+                data=f"body-{index} @".encode(),
+                actor="reader",
+            )
+        with patch("folio_lattice.service.MAX_SEARCH_CANDIDATES", 2):
+            results = self.service.search("acme", "@", limit=100, actor="reader")
+        self.assertLessEqual(len(results), 2)
+        self.assertTrue(all("body" in item["match_kinds"] for item in results))
+
+    def test_search_does_not_cross_tenant_body_index(self):
+        foreign = self.service.create_artifact(
+            tenant_id="other",
+            name="foreign.md",
+            data=b"tenant-isolation-marker",
+            actor="owner",
+        )
+        self.service.create_artifact(
+            tenant_id="acme", name="local.md", data=b"local body", actor="reader"
+        )
+        self.assertEqual(self.service.search("acme", "tenant-isolation-marker"), [])
+        self.assertEqual(
+            self.service.search("other", "tenant-isolation-marker")[0]["artifact_id"],
+            foreign["artifact"]["id"],
+        )
+
     def test_search_graph_context_counts_only_readable_neighbors(self):
         root = self.service.create_artifact(
             tenant_id="acme", name="reader-root.md", data=b"root marker", actor="reader"
