@@ -1011,7 +1011,9 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 )
                 self.assertIn(
                     "Graph: notes/decision.md / site/index.html",
-                    chrome.evaluate("document.querySelector('#workspace-search-results').innerText"),
+                    chrome.evaluate(
+                        "document.querySelector('#workspace-search-results').innerText"
+                    ),
                 )
                 scoped_context = chrome.evaluate(
                     "[...document.querySelectorAll('#workspace-search-results .result-context')].map((node) => node.textContent)"
@@ -1025,7 +1027,9 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 )
                 self.assertNotIn(
                     "links",
-                    chrome.evaluate("document.querySelector('#workspace-search-results').innerText"),
+                    chrome.evaluate(
+                        "document.querySelector('#workspace-search-results').innerText"
+                    ),
                 )
                 workspace_search_text = chrome.evaluate(
                     "document.querySelector('#workspace-search-results').innerText"
