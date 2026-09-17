@@ -1,3 +1,5 @@
+import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,8 +9,18 @@ from unittest.mock import AsyncMock, patch
 
 from mcp import Client
 
+try:
+    import httpx2 as upstream_httpx
+except ImportError:
+    import httpx as upstream_httpx
+
 from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
-from folio_lattice.external_mcp import ExternalMcpBroker, HttpExternalMcpTransport
+from folio_lattice.external_mcp import (
+    CredentialResolver,
+    ExternalMcpBroker,
+    ExternalMcpError,
+    HttpExternalMcpTransport,
+)
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.service import FolioError, FolioLattice
 
@@ -24,6 +36,78 @@ class FakeCredentials:
     def issue(self, **kwargs: str) -> str:
         self.last_request = kwargs
         return UPSTREAM_SECRET
+
+
+class FakeSecretStore:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, str]] = []
+
+    def resolve(self, **kwargs: str) -> str:
+        self.requests.append(kwargs)
+        return UPSTREAM_SECRET
+
+
+class MockUpstream:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, Any]] = []
+
+    async def __call__(self, request: Any) -> Any:
+        if request.method == "DELETE":
+            return upstream_httpx.Response(204)
+        payload = json.loads(request.content)
+        self.requests.append(payload)
+        method = payload["method"]
+        if method == "initialize":
+            return upstream_httpx.Response(
+                200,
+                headers={"content-type": "application/json", "mcp-session-id": "fixture"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "serverInfo": {"name": "fixture", "version": "1"},
+                    },
+                },
+            )
+        if method == "notifications/initialized":
+            return upstream_httpx.Response(202)
+        if method == "tools/list":
+            result = {
+                "tools": [
+                    {
+                        "name": TOOL,
+                        "description": "fixture tool",
+                        "inputSchema": {"type": "object", "additionalProperties": True},
+                    }
+                ]
+            }
+        elif method == "tools/call":
+            result = {
+                "content": [{"type": "text", "text": "tool-ok"}],
+                "structuredContent": {"value": "tool-ok"},
+                "isError": False,
+            }
+        elif method == "resources/read":
+            result = {
+                "contents": [{"uri": RESOURCE, "mimeType": "text/plain", "text": "resource-ok"}]
+            }
+        else:
+            return upstream_httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.get("id"),
+                    "error": {"code": -32601, "message": "method not found"},
+                },
+            )
+        return upstream_httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"jsonrpc": "2.0", "id": payload["id"], "result": result},
+        )
 
 
 class FakeTransport:
@@ -77,7 +161,10 @@ class HttpExternalMcpTransportTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch("mcp.client.session.ClientSession", return_value=session_context),
         ):
-            value = await HttpExternalMcpTransport()._request(
+            value = await HttpExternalMcpTransport(
+                dns_resolver=lambda host, port, **kwargs: [(2, 1, 6, "", ("93.184.216.34", port))],
+                http_transport=AsyncMock(),
+            )._request(
                 "https://calendar.example/mcp",
                 "credential",
                 "tool",
@@ -252,6 +339,145 @@ class ExternalMcpServiceTests(unittest.TestCase):
             self.service.revoke_external_connection(
                 "other", record["id"], actor="other", reason="attack"
             )
+
+
+class ExternalMcpHttpTransportTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.service = FolioLattice(root / "folio.db", root / "blobs")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    @staticmethod
+    def public_dns(host: str, port: int, **kwargs: Any) -> list[Any]:
+        del host, kwargs
+        return [(2, 1, 6, "", ("93.184.216.34", port))]
+
+    def test_resolver_passes_tenant_connection_and_audience_to_store(self) -> None:
+        store = FakeSecretStore()
+        resolver = CredentialResolver(store)
+        self.assertEqual(
+            resolver.issue(
+                tenant_id="acme",
+                connection_id="connection-1",
+                credential_ref=SECRET_REF,
+                audience=ORIGIN,
+            ),
+            UPSTREAM_SECRET,
+        )
+        self.assertEqual(
+            store.requests,
+            [
+                {
+                    "tenant_id": "acme",
+                    "connection_id": "connection-1",
+                    "credential_ref": SECRET_REF,
+                    "audience": ORIGIN,
+                }
+            ],
+        )
+
+    def test_http_transport_calls_upstream_tool_and_resource(self) -> None:
+        upstream = MockUpstream()
+        transport = HttpExternalMcpTransport(
+            dns_resolver=self.public_dns,
+            http_transport=upstream_httpx.MockTransport(upstream),
+        )
+        broker = ExternalMcpBroker(
+            self.service,
+            credentials=CredentialResolver(FakeSecretStore()),
+            transport=transport,
+        )
+        record = broker.register(
+            tenant_id="acme",
+            actor="admin",
+            name="calendar",
+            endpoint=ENDPOINT,
+            approved_tools=[TOOL],
+            approved_resources=[RESOURCE],
+            allowed_origins=[ORIGIN],
+            credential_ref=SECRET_REF,
+            reason="approved",
+        )
+
+        tool_result = broker.call_tool(
+            tenant_id="acme",
+            actor="admin",
+            connection_id=record["id"],
+            tool_name=TOOL,
+            arguments={"limit": 5},
+        )
+        resource_result = broker.read_resource(
+            tenant_id="acme",
+            actor="admin",
+            connection_id=record["id"],
+            resource_uri=RESOURCE,
+        )
+
+        self.assertEqual(tool_result, {"value": "tool-ok"})
+        self.assertIn("resource-ok", repr(resource_result))
+        self.assertEqual(
+            [request["method"] for request in upstream.requests],
+            [
+                "initialize",
+                "notifications/initialized",
+                "tools/call",
+                "tools/list",
+                "initialize",
+                "notifications/initialized",
+                "resources/read",
+            ],
+        )
+
+    def test_transport_rejects_private_and_rebinding_dns_answers(self) -> None:
+        def private_dns(host: str, port: int, **kwargs: Any) -> list[Any]:
+            del host, kwargs
+            return [(2, 1, 6, "", ("10.0.0.1", port))]
+
+        def rebinding_dns(host: str, port: int, **kwargs: Any) -> list[Any]:
+            del host, kwargs
+            return [
+                (2, 1, 6, "", ("93.184.216.34", port)),
+                (2, 1, 6, "", ("127.0.0.1", port)),
+            ]
+
+        with self.assertRaisesRegex(ExternalMcpError, "blocked address"):
+            HttpExternalMcpTransport(dns_resolver=private_dns)._resolve_endpoint(ENDPOINT)
+        with self.assertRaisesRegex(ExternalMcpError, "blocked address"):
+            HttpExternalMcpTransport(dns_resolver=rebinding_dns)._resolve_endpoint(ENDPOINT)
+        with self.assertRaisesRegex(ExternalMcpError, "blocked address"):
+            HttpExternalMcpTransport()._resolve_endpoint("https://127.0.0.1/mcp")
+
+    def test_transport_bounds_timeout_and_response_size(self) -> None:
+        async def slow_upstream(request: Any) -> Any:
+            del request
+            await asyncio.sleep(0.05)
+            return upstream_httpx.Response(200)
+
+        timeout_transport = HttpExternalMcpTransport(
+            timeout_seconds=0.001,
+            dns_resolver=self.public_dns,
+            http_transport=upstream_httpx.MockTransport(slow_upstream),
+        )
+        with self.assertRaisesRegex(ExternalMcpError, "timed out"):
+            timeout_transport.health(ENDPOINT, credential=None)
+
+        oversized = upstream_httpx.MockTransport(
+            lambda request: upstream_httpx.Response(
+                200,
+                headers={"content-length": "33"},
+                content=b"oversized",
+            )
+        )
+        oversized_transport = HttpExternalMcpTransport(
+            max_response_bytes=32,
+            dns_resolver=self.public_dns,
+            http_transport=oversized,
+        )
+        with self.assertRaisesRegex(ExternalMcpError, "exceeds the allowed size"):
+            oversized_transport.health(ENDPOINT, credential=None)
 
 
 class ExternalMcpPublicContractTests(unittest.IsolatedAsyncioTestCase):
