@@ -2626,7 +2626,9 @@ function renderResults(target, results, names) {
         ? `${result.artifact_name} — ${result.artifact_id}`
         : result.artifact_name;
     const resultButton = button(resultLabel, () => location.assign(
-      workspaceMode ? workspacePath(result.artifact_id) : artifactPath(result.artifact_id)
+      workspaceMode || !debugMode
+        ? workspacePath(result.artifact_id)
+        : artifactPath(result.artifact_id)
     ));
     resultButton.dataset.artifactId = result.artifact_id;
     resultButton.dataset.versionId = result.version_id;

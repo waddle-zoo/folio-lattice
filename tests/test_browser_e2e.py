@@ -1072,7 +1072,16 @@ document.querySelector('#search').requestSubmit();
                     "[...document.querySelectorAll('#results button[data-artifact-id]')]"
                     f".find((button) => button.dataset.artifactId === {json.dumps(duplicate_two['artifact']['id'])}).click()"
                 )
-                chrome.wait(f"location.pathname === '/artifacts/{duplicate_two['artifact']['id']}'")
+                chrome.wait(f"location.pathname === '/workspace/{duplicate_two['artifact']['id']}'")
+                chrome.wait("document.querySelector('#title')?.textContent === 'same-name.md'")
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#edit-entry').getAttribute('href')"),
+                    "#update",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#share-entry').getAttribute('href')"),
+                    "#workspace-share",
+                )
                 chrome.command("Page.navigate", {"url": control_origin})
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.evaluate("document.querySelector('#find').open = true")
@@ -1104,7 +1113,12 @@ document.querySelector('#search').requestSubmit();
                     "[...document.querySelectorAll('#results button[data-artifact-id]')]"
                     f".find((button) => button.dataset.artifactId === {json.dumps(typed_html['artifact']['id'])}).click()"
                 )
-                chrome.wait(f"location.pathname === '/artifacts/{typed_html['artifact']['id']}'")
+                chrome.wait(f"location.pathname === '/workspace/{typed_html['artifact']['id']}'")
+                chrome.wait("document.querySelector('#title')?.textContent === 'searchable.html'")
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#edit-entry').getAttribute('href')"),
+                    "#update",
+                )
                 chrome.command("Page.navigate", {"url": control_origin})
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.evaluate("document.querySelector('a[href=\"/#find\"]').click()")
