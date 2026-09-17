@@ -353,21 +353,21 @@ def _oidc_url_env(name: str, *, required: bool) -> str | None:
         or value != value.strip()
         or any(char.isspace() for char in value)
     ):
-        raise ValueError(f"{name} must be an HTTP URL without credentials")
+        raise ValueError(f"{name} must be an HTTPS URL without credentials")
     parsed = urlsplit(value)
     if (
-        parsed.scheme not in {"http", "https"}
+        parsed.scheme != "https"
         or not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
     ):
-        raise ValueError(f"{name} must be an HTTP URL without credentials")
+        raise ValueError(f"{name} must be an HTTPS URL without credentials")
     try:
         _ = parsed.port
     except ValueError as exc:
-        raise ValueError(f"{name} must be an HTTP URL without credentials") from exc
+        raise ValueError(f"{name} must be an HTTPS URL without credentials") from exc
     return value
 
 

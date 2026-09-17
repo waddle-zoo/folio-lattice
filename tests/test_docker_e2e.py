@@ -76,15 +76,24 @@ def main() -> None:
     project = os.environ.get("FOLIO_COMPOSE_PROJECT")
     if project:
         compose.extend(["-p", project])
-    renderer_id = subprocess.run(
-        [*compose, "ps", "-q", "renderer"], check=True, text=True, capture_output=True
-    ).stdout.strip()
-    inspected_container = json.loads(
-        subprocess.run(
-            ["docker", "inspect", renderer_id], check=True, text=True, capture_output=True
-        ).stdout
-    )[0]
-    assert inspected_container["Mounts"] == []
+
+    def inspect_service(name: str) -> dict[str, Any]:
+        container_id = subprocess.run(
+            [*compose, "ps", "-q", name], check=True, text=True, capture_output=True
+        ).stdout.strip()
+        return json.loads(
+            subprocess.run(
+                ["docker", "inspect", container_id], check=True, text=True, capture_output=True
+            ).stdout
+        )[0]
+
+    for name in ("folio", "renderer"):
+        inspected = inspect_service(name)
+        assert inspected["Config"]["User"] == "10001:10001"
+        assert inspected["HostConfig"]["ReadonlyRootfs"] is True
+        assert inspected["HostConfig"]["CapDrop"] == ["ALL"]
+        assert "no-new-privileges:true" in inspected["HostConfig"]["SecurityOpt"]
+    assert inspect_service("renderer")["Mounts"] == []
 
     subprocess.run([*compose, "restart", "folio", "renderer"], check=True, timeout=90)
     wait_ready(base_url)

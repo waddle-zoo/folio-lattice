@@ -1,6 +1,7 @@
 services:
   folio:
     build: .
+    user: "10001:10001"
     ports:
       - "127.0.0.1:${FOLIO_HOST_PORT:-8000}:8000"
     environment:
@@ -30,6 +31,7 @@ services:
 
   renderer:
     build: .
+    user: "10001:10001"
     command: ["python", "-m", "folio_lattice.server", "--transport", "renderer", "--host", "0.0.0.0", "--port", "8001"]
     ports:
       - "127.0.0.1:${FOLIO_RENDER_HOST_PORT:-8001}:8001"

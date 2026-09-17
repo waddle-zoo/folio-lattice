@@ -849,6 +849,29 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "authentication adapter"):
                 Settings.from_env()
 
+        bearer_config = {
+            "FOLIO_DEPLOYMENT_MODE": "hosted",
+            "FOLIO_OIDC_ISSUER": "https://issuer.example",
+            "FOLIO_OIDC_AUDIENCE": "folio-api",
+            "FOLIO_OIDC_JWKS_URL": "https://issuer.example/jwks.json",
+        }
+        hostile_values = (
+            ("FOLIO_OIDC_ISSUER", "http://issuer.example"),
+            ("FOLIO_OIDC_ISSUER", "https://user:pass@issuer.example"),
+            ("FOLIO_OIDC_JWKS_URL", "http://issuer.example/jwks.json"),
+            ("FOLIO_OIDC_JWKS_URL", "https://issuer.example/jwks.json?x=1"),
+            ("FOLIO_OIDC_AUDIENCE", "folio api"),
+            ("FOLIO_OIDC_ALGORITHM", "HS256"),
+            ("FOLIO_OIDC_JWKS_TIMEOUT_SECONDS", "0"),
+            ("FOLIO_OIDC_JWKS_CACHE_SECONDS", "nan"),
+            ("FOLIO_OIDC_CLOCK_SKEW_SECONDS", "-1"),
+        )
+        for name, value in hostile_values:
+            with self.subTest(name=name, value=value):
+                with patch.dict(os.environ, {**bearer_config, name: value}, clear=True):
+                    with self.assertRaisesRegex(ValueError, "authentication adapter"):
+                        Settings.from_env()
+
         browser_config = {
             "FOLIO_DEPLOYMENT_MODE": "hosted",
             "FOLIO_OIDC_ISSUER": "https://issuer.example",
