@@ -182,9 +182,9 @@ async def _run_official_http(endpoint: str, token: str, transcript: Transcript) 
         follow_redirects=False,
         trust_env=False,
     ) as http_client:
-        async with streamable_http_client(endpoint, http_client=http_client) as streams:
-            async with Client(*streams, raise_exceptions=False, read_timeout_seconds=10) as client:
-                return await _official_client_flow(client, transcript)
+        transport = streamable_http_client(endpoint, http_client=http_client)
+        async with Client(transport, raise_exceptions=False, read_timeout_seconds=10) as client:
+            return await _official_client_flow(client, transcript)
 
 
 def _run_official(transport: str) -> dict[str, Any]:
