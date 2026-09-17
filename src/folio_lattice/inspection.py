@@ -1833,26 +1833,25 @@ function button(label, action) {
   value.className = 'inline-action';
   value.textContent = label; value.addEventListener('click', action); return value;
 }
-function artifactNameCounts(items) {
-  const counts = new Map();
+function artifactLabelMap(items, complete = true) {
+  if (!complete) return new Map();
+  const groups = new Map();
   items.forEach((item) => {
-    if (item?.name) counts.set(item.name, (counts.get(item.name) || 0) + 1);
+    if (!item?.id || !item.name) return;
+    const ids = groups.get(item.name) || new Set();
+    ids.add(item.id); groups.set(item.name, ids);
   });
-  const duplicateIds = new Map();
-  items.forEach((item) => {
-    if (item?.name && item?.id && counts.get(item.name) > 1) {
-      const ids = duplicateIds.get(item.name) || [];
-      ids.push(item.id); duplicateIds.set(item.name, ids);
-    }
+  const labels = new Map();
+  groups.forEach((ids, name) => {
+    if (ids.size < 2) return;
+    [...ids].sort().forEach((id, index) => {
+      labels.set(id, `${name} · Copy ${index + 1} of ${ids.size}`);
+    });
   });
-  duplicateIds.forEach((ids, name) => counts.set(`${name}\u0000ids`, ids.sort()));
-  return counts;
+  return labels;
 }
-function stableArtifactLabel(name, id, counts) {
-  if (!name || counts?.get(name) < 2) return name || 'Open artifact';
-  const ids = counts.get(`${name}\u0000ids`) || [];
-  const ordinal = ids.indexOf(id) + 1;
-  return `${name} · Copy ${ordinal > 0 ? ordinal : '?'} of ${ids.length || counts.get(name)}`;
+function stableArtifactLabel(name, id, labels) {
+  return labels?.get(id) || name || 'Open artifact';
 }
 function setWorkspaceMode(mode, persist = true) {
   const graph = mode === 'graph';
@@ -1903,9 +1902,18 @@ function updatePrimaryNav() {
     if (active) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   });
+  syncFindPanel({focus: hash === '#find'});
 }
 addEventListener('hashchange', updatePrimaryNav);
 updatePrimaryNav();
+
+function syncFindPanel({focus = false, force = false} = {}) {
+  if (!force && location.hash !== '#find') return;
+  const panel = byId('find');
+  if (!panel) return;
+  panel.open = true;
+  if (focus) setTimeout(() => byId('search-query')?.focus(), 0);
+}
 
 let lastPanelTrigger = null;
 function clearWorkspaceSearch({focus = false} = {}) {
@@ -1973,7 +1981,7 @@ function renderArtifactTree(artifacts) {
     const empty = document.createElement('p'); empty.className = 'muted';
     empty.textContent = 'No artifacts yet.'; target.append(empty); return;
   }
-  const names = artifactNameCounts(artifacts);
+  const names = artifactLabelMap(artifacts, artifacts.length < 100);
   const root = {folders: new Map(), files: []};
   artifacts.forEach((artifact) => {
     const parts = String(artifact.name || artifact.id).split('/').filter(Boolean);
@@ -2025,7 +2033,7 @@ function renderGraphMap(edges, component = []) {
     empty.textContent = 'No connected artifacts.'; map.append(empty); return;
   }
   const links = document.createElement('div'); links.className = 'graph-links';
-  const names = artifactNameCounts([...targets.values()]);
+  const names = artifactLabelMap([...targets.values()], component.length < 100);
   targets.forEach((artifact, id) => {
     const edge = edgeById.get(id);
     const target = stableArtifactLabel(artifact.name, id, names);
@@ -2438,7 +2446,7 @@ async function loadLibrary() {
   status('Loading recent artifacts…');
   try {
     const artifacts = await call('artifact_list', {limit: 20});
-    const nameCounts = artifactNameCounts(artifacts);
+    const nameCounts = artifactLabelMap(artifacts, artifacts.length < 20);
     const renderArtifact = (artifact, destination = (debugMode ? artifactPath : workspacePath)) => {
       const li = document.createElement('li'); li.className = 'library-item';
       const label = stableArtifactLabel(artifact.name, artifact.id, nameCounts);
@@ -2462,7 +2470,11 @@ async function loadLibrary() {
     const renderGraphCard = (artifact) => {
       const li = document.createElement('li'); li.className = 'graph-picker-card';
       const open = document.createElement('button'); open.type = 'button';
-      const label = stableArtifactLabel(artifact.name, artifact.id, nameCounts);
+      const componentLabels = artifactLabelMap(
+        artifact.component_items || [],
+        (artifact.component_size || 0) < 100,
+      );
+      const label = stableArtifactLabel(artifact.name, artifact.id, componentLabels);
       open.className = 'graph-card-action'; open.setAttribute('aria-label', `Open graph ${label}`);
       open.addEventListener('click', () => location.assign(workspacePath(artifact.id)));
       const top = document.createElement('span'); top.className = 'graph-card-top';
@@ -2482,7 +2494,7 @@ async function loadLibrary() {
       if (relatedItems.length) {
         const related = document.createElement('div'); related.className = 'graph-related';
         relatedItems.slice(0, 4).forEach((item) => {
-          const relatedLabel = stableArtifactLabel(item.name, item.id, nameCounts);
+          const relatedLabel = stableArtifactLabel(item.name, item.id, componentLabels);
           const relatedButton = button(relatedLabel, () => location.assign(workspacePath(item.id)));
           relatedButton.setAttribute('aria-label', `Open graph item ${relatedLabel}`);
           related.append(relatedButton);
@@ -2677,9 +2689,9 @@ function filteredLibrarySearchResults(results) {
 function renderLibrarySearch() {
   const allResults = librarySearchResults || [];
   const results = filteredLibrarySearchResults(allResults);
-  const names = artifactNameCounts(results.map((result) => ({
+  const names = artifactLabelMap(results.map((result) => ({
     name: result.artifact_name, id: result.artifact_id,
-  })));
+  })), results.length < 20);
   renderResults(byId('results'), results, names);
   const filter = librarySearchFilter();
   const summary = byId('search-result-summary');
@@ -2716,12 +2728,9 @@ function renderResults(target, results, names) {
     const result = searchResultShape(rawResult);
     const li = document.createElement('li'); li.className = 'result-item';
     const heading = document.createElement('div'); heading.className = 'result-heading';
-    const duplicateName = result.artifact_name && names.get(result.artifact_name) > 1;
     const resultLabel = debugMode && result.artifact_name
       ? `${result.artifact_id} — ${result.artifact_name}`
-      : duplicateName
-        ? stableArtifactLabel(result.artifact_name, result.artifact_id, names)
-        : result.artifact_name;
+      : stableArtifactLabel(result.artifact_name, result.artifact_id, names);
     const resultButton = button(resultLabel, () => location.assign(
       workspaceMode || !debugMode
         ? workspacePath(result.artifact_id)
@@ -2789,9 +2798,9 @@ async function discover(tool, field, inputId, resultsTarget) {
           ? `${results.length} artifact${results.length === 1 ? '' : 's'} found.`
           : 'No artifacts match that search.';
       }
-      const names = artifactNameCounts(results.map((result) => ({
+      const names = artifactLabelMap(results.map((result) => ({
         name: result.artifact_name, id: result.artifact_id,
-      })));
+      })), results.length < 20);
       renderResults(resultsTarget, results, names);
     } else {
       librarySearchResults = results;
@@ -2817,11 +2826,7 @@ byId('new-entry')?.addEventListener('click', () => {
   }
 });
 document.querySelectorAll('a[href="/#find"]').forEach((link) => link.addEventListener('click', () => {
-  const panel = byId('find');
-  if (panel) {
-    panel.open = true;
-    setTimeout(() => byId('search-query')?.focus(), 0);
-  }
+  syncFindPanel({focus: true, force: true});
 }));
 byId('workspace-search')?.addEventListener('submit', (event) => {
   event.preventDefault();

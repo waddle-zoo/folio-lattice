@@ -1540,7 +1540,22 @@ document.querySelector('#search').requestSubmit();
                 )
                 chrome.command("Page.navigate", {"url": control_origin})
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.command("Page.navigate", {"url": f"{control_origin}/#find"})
+                chrome.wait(
+                    "document.querySelector('#find').open && "
+                    "document.activeElement?.id === 'search-query'"
+                )
+                chrome.command("Page.navigate", {"url": control_origin})
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.evaluate("document.querySelector('a[href=\"/#find\"]').click()")
+                chrome.wait(
+                    "document.querySelector('#find').open && "
+                    "document.activeElement?.id === 'search-query'"
+                )
+                chrome.command("Page.navigate", {"url": control_origin})
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.evaluate("document.querySelector('a[href=\"/#find\"]').focus()")
+                chrome.key("Enter", "Enter", 13)
                 chrome.wait(
                     "document.querySelector('#find').open && "
                     "document.activeElement?.id === 'search-query'"

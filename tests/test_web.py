@@ -521,7 +521,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b"markdownNoteName",
             b"graph_traverse",
             b"renderArtifactTree",
+            b"artifactLabelMap",
             b"stableArtifactLabel",
+            b"syncFindPanel",
             b"revokeTrigger",
             b"setWorkspaceMode",
             b"workspacePath",
@@ -532,6 +534,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(marker, script)
         for forbidden in (b"Traceback", b"console.log", b"document.cookie"):
             self.assertNotIn(forbidden, script)
+        self.assertNotIn(b"artifactNameCounts", script)
 
     async def test_library_returns_named_recent_artifacts(self) -> None:
         status, _, body = await call(
