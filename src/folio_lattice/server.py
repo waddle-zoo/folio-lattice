@@ -382,6 +382,8 @@ class Settings:
             raise ValueError("FOLIO_RENDERER_CAPABILITY_SECRET must be at least 32 characters")
         if (self.tls_certfile is None) != (self.tls_keyfile is None):
             raise ValueError("FOLIO_TLS_CERTFILE and FOLIO_TLS_KEYFILE must be set together")
+        if self.deployment_mode == "hosted" and self.tls_certfile is None:
+            raise ValueError("hosted mode requires TLS certificate and key")
         if self.tls_certfile is not None and (
             not Path(self.tls_certfile).is_file()
             or not Path(self.tls_keyfile or "").is_file()

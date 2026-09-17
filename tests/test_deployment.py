@@ -191,6 +191,10 @@ class DeploymentTests(unittest.TestCase):
         folio = compose.split("  folio:\n", 1)[1].split("\n  renderer:\n", 1)[0]
         self.assertNotIn("\n    volumes:", renderer)
         self.assertIn("\n      - renderer\n", renderer)
+        self.assertIn(
+            "FOLIO_RENDER_ORIGIN: ${FOLIO_RENDER_ORIGIN:?set the hosted renderer origin}",
+            renderer,
+        )
         self.assertNotIn("\n    ports:", renderer)
         self.assertIn("\n      - control\n      - renderer\n", folio)
         self.assertIn("  renderer:\n    internal: true", compose)
@@ -228,6 +232,20 @@ class DeploymentTests(unittest.TestCase):
                 clear=True,
             ):
                 with self.assertRaisesRegex(ValueError, "HTTPS control"):
+                    Settings.from_env()
+            with patch.dict(
+                os.environ,
+                {
+                    "FOLIO_DEPLOYMENT_MODE": "hosted",
+                    "FOLIO_OIDC_ISSUER": "https://issuer.example",
+                    "FOLIO_OIDC_AUDIENCE": "folio-api",
+                    "FOLIO_OIDC_JWKS_URL": "https://issuer.example/jwks.json",
+                    "FOLIO_CONTROL_ORIGIN": "https://control.example",
+                    "FOLIO_RENDER_ORIGIN": "https://render.example",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(ValueError, "hosted mode requires TLS"):
                     Settings.from_env()
             with patch.dict(
                 os.environ,

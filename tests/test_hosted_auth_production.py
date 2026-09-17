@@ -80,6 +80,7 @@ class _HttpsIssuer:
             )
         )
         self.cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+        self.key_path = key_path
         self.signing_key = signing_key
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _issuer_handler(jwks))
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -114,9 +115,14 @@ def _write_memberships(path: Path, issuer: str) -> None:
     )
 
 
-def _request_json(url: str, *, headers: dict[str, str] | None = None) -> tuple[int, Any]:
+def _request_json(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    context: ssl.SSLContext | None = None,
+) -> tuple[int, Any]:
     try:
-        with urlopen(Request(url, headers=headers or {}), timeout=1) as response:
+        with urlopen(Request(url, headers=headers or {}), timeout=1, context=context) as response:
             return response.status, json.loads(response.read())
     except HTTPError as exc:
         return exc.code, json.loads(exc.read())
@@ -170,8 +176,11 @@ class HostedAuthProductionTests(unittest.TestCase):
                         "FOLIO_OIDC_ALGORITHM": "RS256",
                         "FOLIO_OIDC_JWKS_URL": f"{issuer_server.issuer}/jwks.json",
                         "FOLIO_OIDC_MEMBERSHIPS_FILE": str(memberships_path),
-                        "FOLIO_CONTROL_ORIGIN": "https://control.example",
-                        "FOLIO_RENDER_ORIGIN": "https://render.example",
+                        "FOLIO_CONTROL_ORIGIN": f"https://127.0.0.1:{product_port}",
+                        "FOLIO_RENDER_ORIGIN": f"https://127.0.0.1:{product_port}",
+                        "FOLIO_TLS_CERTFILE": str(issuer_server.cert_path),
+                        "FOLIO_TLS_KEYFILE": str(issuer_server.key_path),
+                        "FOLIO_HSTS_MAX_AGE": "60",
                         "SSL_CERT_FILE": str(issuer_server.cert_path),
                         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
                     }
@@ -194,14 +203,19 @@ class HostedAuthProductionTests(unittest.TestCase):
                     stderr=subprocess.PIPE,
                 )
                 try:
-                    base_url = f"http://127.0.0.1:{product_port}"
+                    base_url = f"https://127.0.0.1:{product_port}"
+                    product_context = ssl.create_default_context(
+                        cafile=str(issuer_server.cert_path)
+                    )
                     deadline = time.monotonic() + 10
                     health: Any = None
                     while time.monotonic() < deadline:
                         if process.poll() is not None:
                             break
                         try:
-                            status, health = _request_json(f"{base_url}/readyz")
+                            status, health = _request_json(
+                                f"{base_url}/readyz", context=product_context
+                            )
                             if (
                                 status in {200, 503}
                                 and isinstance(health, dict)
@@ -219,7 +233,9 @@ class HostedAuthProductionTests(unittest.TestCase):
                     self.assertEqual(status, 503)
                     self.assertFalse(health["ready"])
                     self.assertFalse(health["dependencies"]["backup_operations"]["ready"])
-                    metrics_status, metrics = _request_json(f"{base_url}/metrics")
+                    metrics_status, metrics = _request_json(
+                        f"{base_url}/metrics", context=product_context
+                    )
                     self.assertEqual(metrics_status, 200)
                     self.assertEqual(metrics["backup_ready"], 0)
 
@@ -240,6 +256,7 @@ class HostedAuthProductionTests(unittest.TestCase):
                     status, me = _request_json(
                         f"{base_url}/v1/me",
                         headers={"Authorization": f"Bearer {token}"},
+                        context=product_context,
                     )
                     self.assertEqual(status, 200)
                     self.assertEqual(
@@ -250,7 +267,9 @@ class HostedAuthProductionTests(unittest.TestCase):
                             "actor_id": "membership-actor",
                         },
                     )
-                    unauthorized_status, unauthorized = _request_json(f"{base_url}/v1/me")
+                    unauthorized_status, unauthorized = _request_json(
+                        f"{base_url}/v1/me", context=product_context
+                    )
                     self.assertEqual(unauthorized_status, 401)
                     self.assertEqual(unauthorized["code"], "authentication_required")
                     evidence = {
