@@ -64,6 +64,8 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(created["version"]["actor"], "hyperset")
             library = await self.call(client, "artifact_list", {})
             self.assertEqual([item["name"] for item in library], ["note.md"])
+            self.assertIs(library[0]["has_readable_neighbors"], False)
+            self.assertNotIn("graph_edges", library[0])
             read = await self.call(
                 client, "artifact_read", {"artifact_id": created["artifact"]["id"]}
             )
@@ -86,6 +88,23 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(filename_search[0]["match_kind"], "name")
             self.assertEqual(filename_search[0]["version_id"], asset["version"]["id"])
+            self.assertTrue(
+                {
+                    "artifact_id",
+                    "version_id",
+                    "name",
+                    "media_type",
+                    "path",
+                    "match_kind",
+                    "match_kinds",
+                    "snippet",
+                    "score",
+                    "graph_path",
+                    "graph_context",
+                }.issubset(filename_search[0])
+            )
+            self.assertNotIn("graph_edges", filename_search[0])
+            self.assertNotIn("edge_count", filename_search[0]["graph_context"])
             self.assertEqual(
                 await self.call(client, "artifact_grep", {"pattern": "agent-launch-board.html"}),
                 [],
@@ -158,6 +177,17 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
                     {"query": "updated", "graph_root_artifact_id": artifact_id},
                 )
             )
+            scoped = await self.call(
+                client,
+                "artifact_search",
+                {"query": "updated", "graph_root_artifact_id": artifact_id},
+            )
+            self.assertEqual(
+                [node["artifact_id"] for node in scoped[0]["graph_path"]],
+                [artifact_id],
+            )
+            self.assertNotIn("graph_edges", scoped[0])
+            self.assertNotIn("edge_count", scoped[0]["graph_context"])
             missing_component = await client.call_tool(
                 "graph_component", {"start_artifact_id": "art_missing"}
             )

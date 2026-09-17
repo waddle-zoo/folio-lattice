@@ -903,6 +903,12 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 chrome = DevTools(browser, control_origin, root / "chrome-graph")
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.wait("Boolean(document.querySelector('#graph-artifacts button'))")
+                graph_card_text = chrome.evaluate(
+                    "document.querySelector('#graph-artifacts').innerText"
+                )
+                self.assertIn("1 linked item", graph_card_text)
+                self.assertNotIn("edge_count", graph_card_text)
+                self.assertNotIn("graph_edges", graph_card_text)
                 self.assertFalse(
                     chrome.evaluate("Boolean(document.querySelector('#recent-artifacts'))")
                 )
@@ -952,6 +958,13 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')].map((button) => button.textContent)"
                 )
                 self.assertEqual(set(visible_names), {"notes/decision.md", "site/index.html"})
+                graph_paths = chrome.evaluate(
+                    "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')].map((button) => button.dataset.graphPath)"
+                )
+                self.assertEqual(
+                    set(graph_paths),
+                    {"notes/decision.md", "notes/decision.md / site/index.html"},
+                )
                 self.assertNotIn(
                     "No search run yet.",
                     chrome.evaluate(
@@ -972,10 +985,38 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     site["artifact"]["id"],
                 )
                 self.assertIn(
-                    "In this graph",
+                    "Graph: notes/decision.md / site/index.html",
                     chrome.evaluate(
                         "document.querySelector('#workspace-search-results').innerText"
                     ),
+                )
+                scoped_context = chrome.evaluate(
+                    "[...document.querySelectorAll('#workspace-search-results .result-context')].map((node) => node.textContent)"
+                )
+                self.assertTrue(
+                    all(source["artifact"]["id"] not in text for text in scoped_context)
+                )
+                self.assertTrue(all(site["artifact"]["id"] not in text for text in scoped_context))
+                self.assertTrue(
+                    all(";" not in text and "links" not in text for text in scoped_context)
+                )
+                self.assertNotIn(
+                    "links",
+                    chrome.evaluate(
+                        "document.querySelector('#workspace-search-results').innerText"
+                    ),
+                )
+                workspace_search_text = chrome.evaluate(
+                    "document.querySelector('#workspace-search-results').innerText"
+                )
+                self.assertNotIn("Graph: Graph path:", workspace_search_text)
+                self.assertNotIn("Graph art_", workspace_search_text)
+                self.assertNotIn(";", workspace_search_text)
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#workspace-search-results-list button').dataset.graphPath"
+                    ),
+                    "notes/decision.md / site/index.html",
                 )
                 chrome.evaluate(
                     "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')]"
@@ -1178,6 +1219,15 @@ document.querySelector('#search').requestSubmit();
                 chrome.wait(
                     "document.querySelectorAll('#results button[data-artifact-id]').length === 2"
                 )
+                self.assertNotIn(
+                    "links", chrome.evaluate("document.querySelector('#results').innerText")
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.graphPath)"
+                    ),
+                    ["", ""],
+                )
                 self.assertEqual(
                     chrome.evaluate("window.__folioSearchCalls[0].tool"), "artifact_search"
                 )
@@ -1225,6 +1275,19 @@ document.querySelector('#search').requestSubmit();
                 )
                 result_text = chrome.evaluate("document.querySelector('#results').innerText")
                 self.assertTrue(all(artifact_id in result_text for artifact_id in duplicate_ids))
+                library_context = chrome.evaluate(
+                    "[...document.querySelectorAll('#results .result-context')].map((node) => node.textContent)"
+                )
+                self.assertTrue(
+                    all(
+                        artifact_id not in text
+                        for text in library_context
+                        for artifact_id in duplicate_ids
+                    )
+                )
+                self.assertTrue(
+                    all(";" not in text and "links" not in text for text in library_context)
+                )
                 chrome.evaluate(
                     "[...document.querySelectorAll('#results button[data-artifact-id]')]"
                     f".find((button) => button.dataset.artifactId === {json.dumps(duplicate_two['artifact']['id'])}).click()"
@@ -1262,9 +1325,19 @@ document.querySelector('#search').requestSubmit();
                     chrome.evaluate("document.querySelector('#results button').dataset.versionId"),
                     typed_html["artifact"]["current_version_id"],
                 )
+                self.assertNotIn(
+                    "links", chrome.evaluate("document.querySelector('#results').innerText")
+                )
                 self.assertIn(
                     "media_type",
                     chrome.evaluate("document.querySelector('#results button').dataset.matchKind"),
+                )
+                type_context = chrome.evaluate(
+                    "[...document.querySelectorAll('#results .result-context')].map((node) => node.textContent)"
+                )
+                self.assertTrue(any("searchable.html" in text for text in type_context))
+                self.assertTrue(
+                    all("Graph" not in text and ";" not in text for text in type_context)
                 )
                 chrome.evaluate(
                     "[...document.querySelectorAll('#results button[data-artifact-id]')]"

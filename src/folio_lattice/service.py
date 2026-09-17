@@ -96,6 +96,7 @@ REQUIRED_SCHEMA_OBJECTS = frozenset(
         "versions",
         "chunks",
         "chunk_fts",
+        "chunk_substring_fts",
         "edges",
         "acl_grants",
         "external_mcp_connections",
@@ -337,6 +338,14 @@ class FolioLattice:
                     content,
                     tokenize = 'unicode61'
                 );
+                CREATE VIRTUAL TABLE IF NOT EXISTS chunk_substring_fts USING fts5(
+                    chunk_id UNINDEXED,
+                    tenant_id UNINDEXED,
+                    artifact_id UNINDEXED,
+                    version_id UNINDEXED,
+                    content,
+                    tokenize = 'trigram'
+                );
                 CREATE TABLE IF NOT EXISTS edges (
                     id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -449,6 +458,18 @@ class FolioLattice:
                 );
                 CREATE INDEX IF NOT EXISTS audit_exports_lookup_idx
                     ON audit_exports(tenant_id, created_at, id);
+                """
+            )
+            db.execute(
+                """
+                INSERT INTO chunk_substring_fts(
+                    chunk_id, tenant_id, artifact_id, version_id, content
+                )
+                SELECT c.id, c.tenant_id, c.artifact_id, c.version_id, c.content
+                FROM chunks c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM chunk_substring_fts s WHERE s.chunk_id = c.id
+                )
                 """
             )
             grant_columns = {row["name"] for row in db.execute("PRAGMA table_info(acl_grants)")}
@@ -761,13 +782,28 @@ class FolioLattice:
             cursor_params = (cursor_timestamp, cursor_timestamp, cursor_artifact_id)
         with self.connect() as db:
             access_sql, access_params = self._access_clause(actor, "read")
+            neighbor_access_sql, neighbor_access_params = self._access_clause(
+                actor, "read", artifact_alias="neighbor"
+            )
             rows = db.execute(
                 """
                 SELECT a.id, a.name, a.media_type, a.created_at,
                        a.current_version_id, v.created_at AS updated_at,
-                       (SELECT COUNT(*) FROM edges e
-                        WHERE e.tenant_id = a.tenant_id
-                          AND (e.source_artifact_id = a.id OR e.target_artifact_id = a.id)) AS graph_edges
+                       CASE WHEN EXISTS (
+                           SELECT 1 FROM edges e
+                           JOIN artifacts neighbor
+                             ON neighbor.tenant_id = e.tenant_id
+                            AND neighbor.id = CASE
+                                WHEN e.source_artifact_id = a.id
+                                THEN e.target_artifact_id
+                                ELSE e.source_artifact_id
+                            END
+                           WHERE e.tenant_id = a.tenant_id
+                             AND (e.source_artifact_id = a.id OR e.target_artifact_id = a.id)
+                             AND """
+                + neighbor_access_sql
+                + """
+                       ) THEN 1 ELSE 0 END AS has_readable_neighbors
                 FROM artifacts a
                 LEFT JOIN versions v
                   ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
@@ -781,6 +817,7 @@ class FolioLattice:
                 LIMIT ?
                 """,
                 (
+                    *neighbor_access_params,
                     tenant_id,
                     *access_params,
                     *cursor_params,
@@ -791,7 +828,12 @@ class FolioLattice:
                     max(1, min(limit, 100)),
                 ),
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["has_readable_neighbors"] = bool(item["has_readable_neighbors"])
+            result.append(item)
+        return result
 
     def write_version(
         self,
@@ -903,6 +945,10 @@ class FolioLattice:
                 )
                 db.execute(
                     "INSERT INTO chunk_fts(chunk_id, tenant_id, artifact_id, version_id, content) VALUES (?, ?, ?, ?, ?)",
+                    (chunk_id, tenant_id, artifact_id, version_id, content),
+                )
+                db.execute(
+                    "INSERT INTO chunk_substring_fts(chunk_id, tenant_id, artifact_id, version_id, content) VALUES (?, ?, ?, ?, ?)",
                     (chunk_id, tenant_id, artifact_id, version_id, content),
                 )
         db.execute(
@@ -1075,6 +1121,83 @@ class FolioLattice:
                     break
         return ordered
 
+    @staticmethod
+    def _search_path(name: str, source_context: object) -> str:
+        try:
+            context = (
+                json.loads(source_context) if isinstance(source_context, str) else source_context
+            )
+        except (TypeError, json.JSONDecodeError):
+            context = {}
+        if isinstance(context, dict):
+            return str(
+                context.get("path") or context.get("file_path") or context.get("filename") or name
+            )
+        return name
+
+    def _readable_graph_paths(
+        self,
+        db: sqlite3.Connection,
+        tenant_id: str,
+        root_artifact_id: str,
+        *,
+        actor: str | None,
+    ) -> dict[str, list[dict[str, str]]]:
+        """Return root-to-node paths without exposing hidden graph topology."""
+
+        self._authorize(db, tenant_id, root_artifact_id, actor, "read")
+        access_sql, access_params = self._access_clause(actor, "read")
+        root = db.execute(
+            """
+            SELECT a.id, a.name, v.source_context
+            FROM artifacts a
+            JOIN versions v
+              ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
+            WHERE a.tenant_id = ? AND a.id = ? AND """
+            + access_sql,
+            (tenant_id, root_artifact_id, *access_params),
+        ).fetchone()
+        if root is None:
+            raise FolioError("artifact not found")
+
+        def node(row: sqlite3.Row) -> dict[str, str]:
+            return {
+                "artifact_id": row["id"],
+                "name": row["name"],
+                "path": self._search_path(row["name"], row["source_context"]),
+            }
+
+        paths: dict[str, list[dict[str, str]]] = {root["id"]: [node(root)]}
+        queue = deque([root["id"]])
+        while queue and len(paths) < MAX_GRAPH_COMPONENT_NODES:
+            current = queue.popleft()
+            rows = db.execute(
+                """
+                SELECT a.id, a.name, v.source_context, e.created_at, e.id AS edge_id
+                FROM edges e
+                JOIN artifacts a
+                  ON a.tenant_id = e.tenant_id
+                 AND a.id <> ?
+                 AND (a.id = e.source_artifact_id OR a.id = e.target_artifact_id)
+                JOIN versions v
+                  ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
+                WHERE e.tenant_id = ?
+                  AND (e.source_artifact_id = ? OR e.target_artifact_id = ?)
+                  AND """
+                + access_sql
+                + " ORDER BY e.created_at, e.id",
+                (current, tenant_id, current, current, *access_params),
+            ).fetchall()
+            for row in rows:
+                artifact_id = row["id"]
+                if artifact_id in paths:
+                    continue
+                paths[artifact_id] = [*paths[current], node(row)]
+                queue.append(artifact_id)
+                if len(paths) >= MAX_GRAPH_COMPONENT_NODES:
+                    break
+        return paths
+
     def graph_component(
         self,
         tenant_id: str,
@@ -1138,17 +1261,18 @@ class FolioLattice:
 
         with self.connect() as db:
             component_ids: list[str] | None = None
+            graph_paths: dict[str, list[dict[str, str]]] = {}
             if graph_root_artifact_id is not None:
                 # Resolving the component first intentionally authorizes the root and
                 # only follows readable, same-tenant edges.  A hidden root therefore
                 # fails closed instead of silently returning a global search.
-                component_ids = self._component_ids(
+                graph_paths = self._readable_graph_paths(
                     db,
                     tenant_id,
                     graph_root_artifact_id,
-                    MAX_GRAPH_COMPONENT_NODES,
                     actor=actor,
                 )
+                component_ids = list(graph_paths)
             access_sql, access_params = self._access_clause(actor, "read")
             component_sql = ""
             component_params: tuple[str, ...] = ()
@@ -1169,6 +1293,48 @@ class FolioLattice:
                       )
                 """
                 cursor_params = (cursor_timestamp, cursor_timestamp, cursor_artifact_id)
+            body_union = """
+                ), body_matches AS (
+                    SELECT * FROM body_token_matches
+                    UNION ALL
+                    SELECT * FROM body_substring_matches
+                )
+            """
+            body_params: tuple[object, ...] = (
+                '"' + query.replace('"', '""') + '"',
+                MAX_SEARCH_CANDIDATES,
+                '"' + query.replace('"', '""') + '"',
+                MAX_SEARCH_CANDIDATES,
+            )
+            if len(query) < 3:
+                body_union = """
+                ), body_bounded_matches AS (
+                    SELECT r.*, c.id AS chunk_id, c.content,
+                           NULL AS score, NULL AS fts_snippet
+                    FROM readable r
+                    JOIN (
+                        SELECT chunk_id, tenant_id, artifact_id, version_id
+                        FROM chunk_fts
+                        WHERE tenant_id = ?
+                        ORDER BY rowid DESC
+                        LIMIT ?
+                    ) candidates
+                      ON candidates.tenant_id = r.tenant_id
+                     AND candidates.artifact_id = r.artifact_id
+                     AND candidates.version_id = r.version_id
+                    JOIN chunks c
+                      ON c.id = candidates.chunk_id
+                     AND c.tenant_id = candidates.tenant_id
+                    WHERE instr(lower(c.content), lower(?)) > 0
+                ), body_matches AS (
+                    SELECT * FROM body_token_matches
+                    UNION ALL
+                    SELECT * FROM body_substring_matches
+                    UNION ALL
+                    SELECT * FROM body_bounded_matches
+                )
+                """
+                body_params += (tenant_id, MAX_SEARCH_CANDIDATES, query)
             readable_sql = (
                 """
                 WITH visible_base AS (
@@ -1192,38 +1358,45 @@ class FolioLattice:
                 + cursor_sql
                 + """
                 ), readable AS (
-                    SELECT rb.artifact_id, rb.artifact_name, rb.media_type,
+                    SELECT rb.tenant_id, rb.artifact_id, rb.artifact_name, rb.media_type,
                            rb.created_at, rb.version_id, rb.updated_at,
-                           rb.source_context,
-                           (SELECT COUNT(*) FROM edges e
-                            JOIN visible_base other
-                              ON other.artifact_id = CASE
-                                  WHEN e.source_artifact_id = rb.artifact_id
-                                  THEN e.target_artifact_id
-                                  ELSE e.source_artifact_id
-                              END
-                            WHERE e.tenant_id = rb.tenant_id
-                              AND (e.source_artifact_id = rb.artifact_id
-                                   OR e.target_artifact_id = rb.artifact_id)) AS graph_edges
+                           rb.source_context
                     FROM readable_base rb
                 ), metadata_matches AS (
-                    SELECT r.*, NULL AS chunk_id, NULL AS content
+                    SELECT r.*, NULL AS chunk_id, NULL AS content,
+                           NULL AS score, NULL AS fts_snippet
                     FROM readable r
                     WHERE instr(lower(r.artifact_name), lower(?)) > 0
                        OR instr(lower(r.media_type), lower(?)) > 0
-                ), body_matches AS (
-                    SELECT r.*, c.id AS chunk_id, c.content
+                ), body_token_matches AS (
+                    SELECT r.*, chunk_fts.chunk_id, chunk_fts.content,
+                           bm25(chunk_fts) AS score,
+                           snippet(chunk_fts, 4, '[', ']', '…', 18) AS fts_snippet
                     FROM readable r
-                    JOIN chunks c
-                      ON c.tenant_id = ?
-                     AND c.artifact_id = r.artifact_id
-                     AND c.version_id = r.version_id
-                    WHERE instr(lower(c.content), lower(?)) > 0
-                       OR c.id IN (
-                           SELECT chunk_id FROM chunk_fts
-                           WHERE chunk_fts MATCH ? AND tenant_id = ?
-                       )
-                )
+                    JOIN chunk_fts
+                      ON chunk_fts.tenant_id = r.tenant_id
+                     AND chunk_fts.artifact_id = r.artifact_id
+                     AND chunk_fts.version_id = r.version_id
+                    WHERE chunk_fts MATCH ?
+                    ORDER BY score
+                    LIMIT ?
+                ), body_substring_matches AS (
+                    SELECT r.*, chunk_substring_fts.chunk_id,
+                           chunk_substring_fts.content,
+                           bm25(chunk_substring_fts) AS score,
+                           snippet(chunk_substring_fts, 4, '[', ']', '…', 18)
+                               AS fts_snippet
+                    FROM readable r
+                    JOIN chunk_substring_fts
+                      ON chunk_substring_fts.tenant_id = r.tenant_id
+                     AND chunk_substring_fts.artifact_id = r.artifact_id
+                     AND chunk_substring_fts.version_id = r.version_id
+                    WHERE chunk_substring_fts MATCH ?
+                    ORDER BY score
+                    LIMIT ?
+                """
+                + body_union
+                + """
                 SELECT * FROM metadata_matches
                 UNION ALL
                 SELECT * FROM body_matches
@@ -1231,7 +1404,6 @@ class FolioLattice:
                 LIMIT ?
                 """
             )
-            match_query = '"' + query.replace('"', '""') + '"'
             params = (
                 tenant_id,
                 *component_params,
@@ -1239,38 +1411,13 @@ class FolioLattice:
                 *cursor_params,
                 query,
                 query,
-                tenant_id,
-                query,
-                match_query,
-                tenant_id,
+                *body_params,
                 MAX_SEARCH_CANDIDATES,
             )
             try:
                 rows = db.execute(readable_sql, params).fetchall()
             except sqlite3.OperationalError as exc:
-                # FTS tokenization is an optimization for legacy phrase queries;
-                # arbitrary punctuation must still work as a body substring search.
-                if "fts" not in str(exc).lower() and "syntax" not in str(exc).lower():
-                    raise FolioError("invalid search query") from exc
-                fallback_sql = readable_sql.replace(
-                    "                       OR c.id IN (\n"
-                    "                           SELECT chunk_id FROM chunk_fts\n"
-                    "                           WHERE chunk_fts MATCH ? AND tenant_id = ?\n"
-                    "                       )\n",
-                    "",
-                )
-                fallback_params = (
-                    tenant_id,
-                    *component_params,
-                    *access_params,
-                    *cursor_params,
-                    query,
-                    query,
-                    tenant_id,
-                    query,
-                    MAX_SEARCH_CANDIDATES,
-                )
-                rows = db.execute(fallback_sql, fallback_params).fetchall()
+                raise FolioError("invalid search query") from exc
 
         by_artifact: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -1307,6 +1454,7 @@ class FolioLattice:
                     "artifact_id": artifact_id,
                     "version_id": row["version_id"],
                     "artifact_name": name,
+                    "name": name,
                     "media_type": media_type,
                     "match_kinds": [],
                     "match_kind": "",
@@ -1317,9 +1465,8 @@ class FolioLattice:
                     "graph_context": {
                         "root_artifact_id": graph_root_artifact_id,
                         "scoped": graph_root_artifact_id is not None,
-                        "edge_count": row["graph_edges"],
                     },
-                    "graph_edges": row["graph_edges"],
+                    "graph_path": graph_paths.get(artifact_id, []),
                     "graph_root_artifact_id": graph_root_artifact_id,
                     "updated_at": row["updated_at"] or row["created_at"],
                 }
@@ -1335,7 +1482,11 @@ class FolioLattice:
             if body_offset >= 0 and not had_body_match:
                 item["snippet"] = _search_snippet(body, query)
                 item["chunk_id"] = row["chunk_id"]
-                item["score"] = 0.0
+                item["score"] = row["score"]
+            elif body_offset >= 0 and item["score"] is None:
+                item["snippet"] = _search_snippet(body, query)
+                item["chunk_id"] = row["chunk_id"]
+                item["score"] = row["score"]
             elif not item["snippet"]:
                 item["snippet"] = _search_snippet(
                     name if "name" in match_kinds else media_type, query

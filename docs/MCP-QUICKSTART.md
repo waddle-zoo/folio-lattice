@@ -32,11 +32,15 @@ operation.
 case-insensitive substring search across the artifact filename, media type,
 and current body, then returns at most one result per stable `artifact_id`.
 Each result includes the current `version_id`, `match_kind`, `match_kinds`,
-`snippet`, `path`, `graph_context`, and `updated_at` (plus the artifact's name
+`snippet`, `path`, `graph_path`, `graph_context`, and `updated_at` (plus the artifact's name
 and media type). A `graph_root_artifact_id` restricts the same operation to
 that root's readable connected component; the root is an anchor, not a query
 term. A `cursor` continues the same query after the final result's
 `<updated_at>|<artifact_id>`.
+
+`graph_path` is empty for an unscoped library search. For a graph-scoped
+search it contains only the readable root-to-result nodes, each with a stable
+artifact ID, name, and path; no edge counts or hidden neighbors are returned.
 
 `artifact_grep` remains the literal current-body scan and has no graph-root
 parameter. `artifact_list` remains available for catalog listing and
@@ -146,6 +150,7 @@ the response rather than resolving a filename later:
     "artifact_id":"<html_artifact_id>",
     "version_id":"<html_version_id>",
     "artifact_name":"agent-graph.html",
+    "name":"agent-graph.html",
     "media_type":"text/html",
     "match_kind":"name",
     "match_kinds":["name"],
@@ -153,8 +158,8 @@ the response rather than resolving a filename later:
     "chunk_id":null,
     "score":null,
     "path":"agent-graph.html",
-    "graph_context":{"root_artifact_id":null,"scoped":false,"edge_count":1},
-    "graph_edges":1,
+    "graph_context":{"root_artifact_id":null,"scoped":false},
+    "graph_path":[],
     "graph_root_artifact_id":null,
     "updated_at":"<timestamp>"
   }
@@ -170,12 +175,14 @@ The `text/html` request returns the same fields with
     "artifact_id":"<html_artifact_id>",
     "version_id":"<html_version_id>",
     "artifact_name":"agent-graph.html",
+    "name":"agent-graph.html",
     "media_type":"text/html",
     "match_kind":"media_type",
     "match_kinds":["media_type"],
     "snippet":"[text/html]",
     "path":"agent-graph.html",
-    "graph_context":{"root_artifact_id":null,"scoped":false,"edge_count":1},
+    "graph_context":{"root_artifact_id":null,"scoped":false},
+    "graph_path":[],
     "updated_at":"<timestamp>"
   }
 ]
@@ -210,6 +217,7 @@ graph fields while setting `match_kind` to `"body"`:
     "artifact_id":"<markdown_artifact_id>",
     "version_id":"<markdown_version_id>",
     "artifact_name":"agent-graph.md",
+    "name":"agent-graph.md",
     "media_type":"text/markdown",
     "match_kind":"body",
     "match_kinds":["body"],
@@ -217,8 +225,10 @@ graph fields while setting `match_kind` to `"body"`:
     "chunk_id":"<markdown_chunk_id>",
     "score":0.0,
     "path":"agent-graph.md",
-    "graph_context":{"root_artifact_id":"<markdown_artifact_id>","scoped":true,"edge_count":4},
-    "graph_edges":4,
+    "graph_context":{"root_artifact_id":"<markdown_artifact_id>","scoped":true},
+    "graph_path":[
+      {"artifact_id":"<markdown_artifact_id>","name":"agent-graph.md","path":"agent-graph.md"}
+    ],
     "graph_root_artifact_id":"<markdown_artifact_id>",
     "updated_at":"<timestamp>"
   }

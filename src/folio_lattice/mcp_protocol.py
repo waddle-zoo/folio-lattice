@@ -163,7 +163,8 @@ def build_mcp_server(
         description=(
             "List recent artifacts available to the current actor, optionally filtered by "
             "exact filename and media type. Continue after a prior page with its final "
-            "item's '<updated_at>|<id>' cursor."
+            "item's '<updated_at>|<id>' cursor. Each item includes an ACL-safe boolean "
+            "indicating whether it has readable graph neighbors."
         )
     )
     def artifact_list(
@@ -212,7 +213,10 @@ def build_mcp_server(
         description=(
             "Discover readable artifacts with one case-insensitive substring search across "
             "artifact name, media type, and current body. Results are deduplicated by stable "
-            "artifact_id and include match_kinds, snippet, path, and graph context. "
+            "artifact_id and include stable name/version/type, match_kinds, snippet, path, "
+            "score, and readable graph path/context without topology counts. Body "
+            "discovery uses bounded FTS5/BM25 candidates, with a bounded fallback for "
+            "short punctuation-only queries. "
             "Use graph_root_artifact_id to search only its readable connected component; "
             "continue a page with the returned updated_at|artifact_id cursor."
         )
