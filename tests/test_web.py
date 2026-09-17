@@ -262,7 +262,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"<h1", page)
         self.assertIn(b"Choose a graph", page)
         self.assertIn(b"New graph or artifact", page)
-        self.assertNotIn(b"Search documents and files", page)
+        self.assertIn(b"Search documents and files", page)
         self.assertIn(b"GRAPH PICKER", page)
         for narration in (
             b"Search across the text you have indexed",
@@ -277,6 +277,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"Version 1 saved", script)
         self.assertIn(b"did not run", script)
         self.assertIn(b"artifact_name", script)
+        self.assertIn(b"dataset.artifactId", script)
         self.assertIn(b"request count", script)
 
         status, _, css = await call(self.inspection, "GET", "/ui.css")
@@ -292,6 +293,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="create"',
             b'id="create-file"',
             b"Choose a graph",
+            b'id="find"',
             b'aria-live="polite"',
         ):
             self.assertIn(marker, page)

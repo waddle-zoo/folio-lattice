@@ -860,6 +860,18 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     b"# Decision\n\n- browser target",
                     "text/markdown",
                 )
+                duplicate_one = create(
+                    control_origin,
+                    "same-name.md",
+                    b"duplicate library marker one",
+                    "text/markdown",
+                )
+                duplicate_two = create(
+                    control_origin,
+                    "same-name.md",
+                    b"duplicate library marker two",
+                    "text/markdown",
+                )
                 javascript = create(
                     control_origin,
                     "browser.js",
@@ -892,16 +904,82 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.wait("Boolean(document.querySelector('#graph-artifacts button'))")
 
+                chrome.evaluate("document.querySelector('#find').open = true")
+                chrome.evaluate("""
+window.__folioSearchCalls = [];
+const originalFetch = window.fetch;
+window.fetch = (url, options) => {
+  const payload = JSON.parse(options?.body || '{}');
+  if (payload.tool === 'artifact_search' || payload.tool === 'artifact_list') {
+    window.__folioSearchCalls.push(payload);
+  }
+  return originalFetch(url, options);
+};
+document.querySelector('#search-query').value = 'duplicate library marker';
+document.querySelector('#search').requestSubmit();
+""")
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 2"
+                )
+                self.assertEqual(
+                    chrome.evaluate("window.__folioSearchCalls[0].tool"), "artifact_search"
+                )
+                self.assertFalse(
+                    chrome.evaluate(
+                        "Object.hasOwn(window.__folioSearchCalls[0].arguments, 'graph_root_artifact_id')"
+                    )
+                )
+                chrome.evaluate("""
+window.__folioSearchCalls = [];
+document.querySelector('#search-query').value = 'same-name.md';
+document.querySelector('#search').requestSubmit();
+""")
+                chrome.wait("window.__folioSearchCalls.length === 2")
+                self.assertEqual(
+                    chrome.evaluate("window.__folioSearchCalls.map((call) => call.tool)"),
+                    ["artifact_search", "artifact_list"],
+                )
+                self.assertEqual(
+                    chrome.evaluate("window.__folioSearchCalls[1].arguments.name"),
+                    "same-name.md",
+                )
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 2"
+                )
+                duplicate_ids = chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')]"
+                    ".map((button) => button.dataset.artifactId)"
+                )
+                self.assertEqual(
+                    set(duplicate_ids),
+                    {duplicate_one["artifact"]["id"], duplicate_two["artifact"]["id"]},
+                )
+                result_text = chrome.evaluate("document.querySelector('#results').innerText")
+                self.assertTrue(all(artifact_id in result_text for artifact_id in duplicate_ids))
+                chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')]"
+                    f".find((button) => button.dataset.artifactId === {json.dumps(duplicate_two['artifact']['id'])}).click()"
+                )
+                chrome.wait(f"location.pathname === '/artifacts/{duplicate_two['artifact']['id']}'")
+                chrome.command("Page.navigate", {"url": control_origin})
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.evaluate("document.querySelector('a[href=\"/#find\"]').click()")
+                chrome.wait(
+                    "document.querySelector('#find').open && "
+                    "document.activeElement?.id === 'search-query'"
+                )
+
                 ax = chrome.command("Accessibility.getFullAXTree")["nodes"]
                 names = {node.get("name", {}).get("value") for node in ax}
                 roles = {node.get("role", {}).get("value") for node in ax}
-                for expected_role in ("banner", "main", "region"):
+                for expected_role in ("banner", "main", "region", "search"):
                     self.assertIn(expected_role, roles)
                 for expected_name in (
                     "Folio Lattice",
                     "Library",
                     "Choose a graph",
                     "New graph or artifact",
+                    "Search library",
                 ):
                     self.assertIn(expected_name, names)
                 self.assertEqual(

@@ -1814,7 +1814,9 @@ document.querySelectorAll('[role="tab"]').forEach((tab) => tab.addEventListener(
 function updatePrimaryNav() {
   if (debugMode || workspaceMode || standaloneMode) return;
   const hash = location.hash;
-  const target = hash === '#graphs' ? '/#graphs' : hash === '#shared' ? '/#shared' : '/';
+  const target = hash === '#graphs' ? '/#graphs'
+    : hash === '#find' ? '/#find'
+      : hash === '#shared' ? '/#shared' : '/';
   document.querySelectorAll('.primary-nav a').forEach((link) => {
     const active = link.getAttribute('href') === target;
     link.classList.toggle('is-active', active);
@@ -2493,11 +2495,23 @@ async function discover(tool, field, inputId) {
     status(tool === 'artifact_search' ? 'Searching indexed content…' : 'Running literal grep…');
     const args = {[field]: query, limit: 20};
     if (workspaceMode && tool === 'artifact_search') args.graph_root_artifact_id = artifactId;
-    const rawResults = await call(tool, args);
+    let rawResults = await call(tool, args);
+    if (!workspaceMode && !debugMode && tool === 'artifact_search') {
+      const exactNames = await call('artifact_list', {name: query, limit: 20});
+      rawResults = rawResults.concat(exactNames.map((artifact) => ({
+        artifact_id: artifact.id, artifact_name: artifact.name, media_type: artifact.media_type,
+      })));
+    }
     const seenArtifacts = new Set();
     const results = rawResults.filter((result) => {
       if (!result.artifact_id || seenArtifacts.has(result.artifact_id)) return false;
       seenArtifacts.add(result.artifact_id); return true;
+    });
+    const names = new Map();
+    results.forEach((result) => {
+      if (result.artifact_name) {
+        names.set(result.artifact_name, (names.get(result.artifact_name) || 0) + 1);
+      }
     });
     if (workspaceMode) {
       const panel = byId('workspace-search-results');
@@ -2510,12 +2524,18 @@ async function discover(tool, field, inputId) {
     }
     list('results', results, (result) => {
       const li = document.createElement('li'); li.className = 'result-item';
-      const excerpt = result.snippet || result.content || '';
+      const excerpt = result.snippet || result.content || result.media_type || '';
+      const duplicateName = result.artifact_name && names.get(result.artifact_name) > 1;
       const resultLabel = debugMode && result.artifact_name
         ? `${result.artifact_id} — ${result.artifact_name}`
-        : result.artifact_name || 'Open artifact';
-      const destination = workspaceMode ? workspacePath(result.artifact_id) : artifactPath(result.artifact_id);
-      li.append(button(resultLabel, () => location.assign(destination)));
+        : duplicateName
+          ? `${result.artifact_name} — ${result.artifact_id}`
+          : result.artifact_name || 'Open artifact';
+      const resultButton = button(resultLabel, () => location.assign(
+        workspaceMode ? workspacePath(result.artifact_id) : artifactPath(result.artifact_id)
+      ));
+      resultButton.dataset.artifactId = result.artifact_id;
+      li.append(resultButton);
       const span = document.createElement('span'); span.append(document.createTextNode(' — '));
       appendInlineMarkdown(span, excerpt.slice(0, 240));
       li.append(span); return li;
@@ -2535,6 +2555,13 @@ byId('new-entry')?.addEventListener('click', () => {
     setTimeout(() => panel.querySelector('input')?.focus(), 0);
   }
 });
+document.querySelectorAll('a[href="/#find"]').forEach((link) => link.addEventListener('click', () => {
+  const panel = byId('find');
+  if (panel) {
+    panel.open = true;
+    setTimeout(() => byId('search-query')?.focus(), 0);
+  }
+}));
 byId('workspace-search')?.addEventListener('submit', (event) => {
   event.preventDefault();
   discover('artifact_search', 'query', 'workspace-search-query');
@@ -2985,14 +3012,14 @@ def ui_html(
         '<label for="create-file">Upload a file<input id="create-file" type="file"></label>'
         '<label for="create-text">Or paste content<textarea id="create-text" placeholder="Start writing…"></textarea></label>'
         f'{debug_create_fields}<button type="submit">Create artifact</button></form></details>'
+        '<details id="find" class="surface create-card"><summary><span>Search library</span></summary><div class="stacked-form"><div class="search-grid">'
+        '<form id="search" class="search-form" role="search" aria-label="Search library"><label for="search-query">Search documents and files<input id="search-query" type="search" required maxlength="500" placeholder="Phrase, keyword, or exact filename"></label><button type="submit">Search</button></form>'
         + (
-            '<details id="find" class="surface create-card"><summary><span>Search library</span></summary><div class="stacked-form"><div class="search-grid">'
-            '<form id="search" class="search-form"><label for="search-query">Search documents and files<input id="search-query" required maxlength="500" placeholder="Phrase or keyword"></label><button type="submit">Search</button></form>'
             '<form id="grep" class="search-form"><label for="grep-pattern">Exact text<input id="grep-pattern" required maxlength="500" placeholder="Exact text"></label><button type="submit">Find exact text</button></form>'
-            '</div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></div></details>'
             if debug
             else ""
         )
+        + '</div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></div></details>'
     )
     avatar_parts = []
     for part in str(actor or "").split():
@@ -3008,7 +3035,7 @@ def ui_html(
             '<a href="/#new"><span class="nav-index" aria-hidden="true">04</span>New</a>'
             if debug
             else (
-                '<a href="/#shared">Shared with me</a>'
+                '<a href="/#find">Search</a><a href="/#shared">Shared with me</a>'
                 + (
                     f'<span class="avatar" aria-label="{escape(actor or "Your account", quote=True)}">{avatar_initials}</span>'
                     if auth_state == "authenticated"
