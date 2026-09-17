@@ -26,6 +26,8 @@ class FakeCredentials:
 class SeededSlackTransport:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.response_override: Any | None = None
+        self.echo_credential = False
 
     def validate_registration(self, endpoint: str) -> None:
         if endpoint != ENDPOINT:
@@ -49,6 +51,19 @@ class SeededSlackTransport:
         self.calls.append({"tool": tool_name, "arguments": dict(arguments)})
         if tool_name != "slack.search":
             raise AssertionError(f"unapproved tool reached fixture: {tool_name}")
+        if self.echo_credential:
+            return {
+                "messages": [
+                    {
+                        "id": "secret",
+                        "channel": "#deployments",
+                        "timestamp": "2026-01-01T12:00:00Z",
+                        "text": credential,
+                    }
+                ]
+            }
+        if self.response_override is not None:
+            return self.response_override
         return {
             "messages": [
                 {
@@ -166,6 +181,19 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source["channel"], "#deployments")
         self.assertEqual(source["query"], "renderer")
         self.assertEqual(source["message_ids"], ["msg-1"])
+        self.assertEqual(
+            source,
+            {
+                "interface": "approved-slack-search",
+                "provider": "slack",
+                "connection_id": connection_id,
+                "channel": "#deployments",
+                "start_time": START,
+                "end_time": END,
+                "query": "renderer",
+                "message_ids": ["msg-1"],
+            },
+        )
         self.assertEqual(saved_result["version"]["actor"], "member-a")
         self.assertNotIn(SECRET, repr(saved_result))
 
@@ -257,3 +285,94 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(invalid_channel.is_error)
         self.assertIn("channel is invalid", invalid_channel.content[0].text)
         self.assertEqual(self.transport.calls, [])
+
+    async def test_empty_results_are_a_valid_bounded_search(self) -> None:
+        connection_id = await self._register()
+        self.transport.response_override = {"messages": []}
+        searched = await self._member_call(
+            "slack_search",
+            {
+                "connection_id": connection_id,
+                "channel": "#deployments",
+                "start_time": START,
+                "end_time": END,
+                "query": "no-match",
+                "limit": 1,
+            },
+        )
+        self.assertFalse(searched.is_error, searched)
+        result = self.payload(searched)
+        self.assertEqual(result["messages"], [])
+        self.assertEqual(result["match_count"], 0)
+
+    async def test_upstream_limit_malformed_and_oversize_fail_before_save(self) -> None:
+        connection_id = await self._register()
+        arguments = {
+            "connection_id": connection_id,
+            "name": "bounded.md",
+            "channel": "#deployments",
+            "start_time": START,
+            "end_time": END,
+            "query": "renderer",
+            "limit": 1,
+        }
+        self.transport.response_override = {
+            "messages": [
+                {
+                    "id": "msg-1",
+                    "channel": "#deployments",
+                    "timestamp": "2026-01-01T12:00:00Z",
+                    "text": "first",
+                },
+                {
+                    "id": "msg-2",
+                    "channel": "#deployments",
+                    "timestamp": "2026-01-01T12:01:00Z",
+                    "text": "second",
+                },
+            ]
+        }
+        before = self.service.list_artifacts("tenant-a", actor="member-a")
+        too_many = await self._member_call("slack_save", arguments)
+        self.assertTrue(too_many.is_error)
+        self.assertIn("more messages than requested", too_many.content[0].text)
+        self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)
+
+        self.transport.response_override = {"messages": [{"id": "broken"}]}
+        malformed = await self._member_call("slack_save", arguments)
+        self.assertTrue(malformed.is_error)
+        self.assertIn("Slack message channel is invalid", malformed.content[0].text)
+        self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)
+
+        self.transport.response_override = {
+            "messages": [
+                {
+                    "id": "huge",
+                    "channel": "#deployments",
+                    "timestamp": "2026-01-01T12:00:00Z",
+                    "text": "x" * (1024 * 1024),
+                }
+            ]
+        }
+        oversized = await self._member_call("slack_save", arguments)
+        self.assertTrue(oversized.is_error)
+        self.assertIn("exceeds the allowed size", oversized.content[0].text)
+        self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)
+
+    async def test_upstream_credential_echo_is_rejected_before_save(self) -> None:
+        connection_id = await self._register()
+        self.transport.echo_credential = True
+        arguments = {
+            "connection_id": connection_id,
+            "name": "secret.md",
+            "channel": "#deployments",
+            "start_time": START,
+            "end_time": END,
+            "query": "secret",
+        }
+        before = self.service.list_artifacts("tenant-a", actor="member-a")
+        echoed = await self._member_call("slack_save", arguments)
+        self.assertTrue(echoed.is_error)
+        self.assertIn("credential material", echoed.content[0].text)
+        self.assertNotIn(SECRET, echoed.content[0].text)
+        self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)

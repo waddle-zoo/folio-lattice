@@ -96,6 +96,8 @@ class ApprovedSlackConsumer:
             messages = raw
         if not isinstance(messages, list):
             raise FolioError("Slack search returned an invalid message list")
+        if len(messages) > limit:
+            raise FolioError("Slack search returned more messages than requested")
         result: list[dict[str, str]] = []
         seen: set[str] = set()
         for item in messages:
