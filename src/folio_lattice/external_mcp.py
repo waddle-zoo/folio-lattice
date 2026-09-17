@@ -18,11 +18,35 @@ from .service import FolioError, FolioLattice
 MAX_EXTERNAL_RESULT_BYTES = 1 * 1024 * 1024
 MAX_EXTERNAL_HTTP_RESPONSE_BYTES = MAX_EXTERNAL_RESULT_BYTES
 MAX_EXTERNAL_REQUEST_BYTES = 64 * 1024
+MAX_EXTERNAL_TIMEOUT_SECONDS = 30.0
 EXTERNAL_RATE_LIMIT = 600
 EXTERNAL_RATE_WINDOW_SECONDS = 60.0
 EXTERNAL_RATE_MAX_KEYS = 4096
 EXTERNAL_CONCURRENCY_LIMIT = 32
 EXTERNAL_CONCURRENCY_PER_KEY = 4
+_SAFE_EXTERNAL_ERRORS = frozenset(
+    {
+        "credential broker unavailable",
+        "credential broker returned an invalid credential",
+        "external MCP response exceeds the allowed size",
+        "external MCP transport timed out",
+        "external MCP transport unavailable",
+        "external MCP upstream call failed",
+        "external MCP endpoint resolution timed out",
+        "external MCP endpoint is invalid",
+        "external MCP endpoint resolves to a blocked address",
+        "external MCP endpoint cannot be resolved",
+        "external MCP transport cannot validate registration",
+        "external MCP result is invalid",
+        "external MCP result contains credential material",
+        "external MCP result exceeds the allowed size",
+        "external MCP health result is invalid",
+        "external MCP tool call failed",
+        "external MCP resource read failed",
+        "external MCP health check failed",
+        "external MCP connection is revoked",
+    }
+)
 
 
 class ExternalMcpError(FolioError):
@@ -154,8 +178,12 @@ class HttpExternalMcpTransport:
         dns_resolver: Any | None = None,
         http_transport: Any | None = None,
     ) -> None:
-        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
-            raise ValueError("external MCP transport timeout must be positive")
+        if (
+            not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or timeout_seconds > MAX_EXTERNAL_TIMEOUT_SECONDS
+        ):
+            raise ValueError("external MCP transport timeout is outside the allowed bound")
         if max_response_bytes < 1:
             raise ValueError("external MCP transport response bound must be positive")
         self.timeout_seconds = timeout_seconds
@@ -193,8 +221,8 @@ class HttpExternalMcpTransport:
     def _check_request_size(value: object) -> None:
         try:
             encoded = json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
-        except (TypeError, ValueError) as exc:
-            raise ExternalMcpError("external MCP request arguments are invalid") from exc
+        except (TypeError, ValueError):
+            raise ExternalMcpError("external MCP request arguments are invalid") from None
         if len(encoded) > MAX_EXTERNAL_REQUEST_BYTES:
             raise ExternalMcpError("external MCP request arguments exceed the allowed size")
 
@@ -506,6 +534,42 @@ class ExternalMcpBroker:
     def _release(self, key: str) -> None:
         self._concurrency_limiter.release(key)
 
+    def _record_external_call(
+        self,
+        tenant_id: str,
+        connection_id: str,
+        *,
+        actor: str,
+        action: str,
+        outcome: str,
+        tool_name: str | None = None,
+        resource_uri: str | None = None,
+    ) -> bool:
+        try:
+            self.service.record_external_call(
+                tenant_id,
+                connection_id,
+                actor=actor,
+                action=action,
+                outcome=outcome,
+                tool_name=tool_name,
+                resource_uri=resource_uri,
+            )
+        except Exception:
+            return False
+        return True
+
+    def _record_external_health(
+        self, tenant_id: str, connection_id: str, *, actor: str, status: str
+    ) -> bool:
+        try:
+            self.service.record_external_health(
+                tenant_id, connection_id, actor=actor, status=status
+            )
+        except Exception:
+            return False
+        return True
+
     @staticmethod
     def _check_registration_bounds(
         *,
@@ -514,7 +578,10 @@ class ExternalMcpBroker:
         approved_tools: list[str],
         approved_resources: list[str],
         allowed_origins: list[str],
+        policy: object,
     ) -> None:
+        if not isinstance(policy, Mapping):
+            raise ExternalMcpError("external MCP registration is invalid")
         if len(name) > 255 or len(endpoint) > 4_096:
             raise ExternalMcpError("external MCP registration value is too large")
         if any(len(items) > 128 for items in (approved_tools, approved_resources, allowed_origins)):
@@ -533,12 +600,15 @@ class ExternalMcpBroker:
                     "approved_tools": approved_tools,
                     "approved_resources": approved_resources,
                     "allowed_origins": allowed_origins,
+                    "policy": policy,
                 },
                 separators=(",", ":"),
                 allow_nan=False,
             ).encode()
-        except (TypeError, ValueError) as exc:
-            raise ExternalMcpError("external MCP registration is invalid") from exc
+        except (TypeError, ValueError):
+            encoded = None
+        if encoded is None:
+            raise ExternalMcpError("external MCP registration is invalid")
         if len(encoded) > MAX_EXTERNAL_REQUEST_BYTES:
             raise ExternalMcpError("external MCP registration exceeds the allowed size")
 
@@ -552,8 +622,9 @@ class ExternalMcpBroker:
         approved_tools: list[str],
         approved_resources: list[str],
         allowed_origins: list[str],
-        credential_ref: str | None,
-        reason: str,
+        policy: Mapping[str, Any] | None = None,
+        credential_ref: str | None = None,
+        reason: str = "approved external MCP connection",
     ) -> dict[str, Any]:
         self._check_registration_bounds(
             name=name,
@@ -561,6 +632,7 @@ class ExternalMcpBroker:
             approved_tools=approved_tools,
             approved_resources=approved_resources,
             allowed_origins=allowed_origins,
+            policy={} if policy is None else policy,
         )
         key = self._admit(
             tenant_id=tenant_id, actor=actor, connection_id=name, operation="register"
@@ -574,6 +646,7 @@ class ExternalMcpBroker:
                 approved_tools=approved_tools,
                 approved_resources=approved_resources,
                 allowed_origins=allowed_origins,
+                policy=policy,
                 credential_ref=credential_ref,
                 reason=reason,
             )
@@ -590,18 +663,24 @@ class ExternalMcpBroker:
         approved_tools: list[str],
         approved_resources: list[str],
         allowed_origins: list[str],
-        credential_ref: str | None,
-        reason: str,
+        policy: Mapping[str, Any] | None = None,
+        credential_ref: str | None = None,
+        reason: str = "approved external MCP connection",
     ) -> dict[str, Any]:
         validator = getattr(self.transport, "validate_registration", None)
         if not callable(validator):
             raise ExternalMcpError("external MCP transport cannot validate registration")
+        validation_error: ExternalMcpError | None = None
         try:
             validator(endpoint)
-        except ExternalMcpError:
-            raise
+        except ExternalMcpError as exc:
+            validation_error = self._sanitize_external_error(
+                exc, "external MCP endpoint validation failed"
+            )
         except Exception:
-            raise ExternalMcpError("external MCP endpoint validation failed") from None
+            validation_error = ExternalMcpError("external MCP endpoint validation failed")
+        if validation_error is not None:
+            raise validation_error from None
         return self.service.register_external_connection(
             tenant_id=tenant_id,
             actor=actor,
@@ -610,6 +689,7 @@ class ExternalMcpBroker:
             approved_tools=approved_tools,
             approved_resources=approved_resources,
             allowed_origins=allowed_origins,
+            policy=policy,
             credential_ref=credential_ref,
             reason=reason,
         )
@@ -649,26 +729,44 @@ class ExternalMcpBroker:
             if connection["status"] != "active":
                 raise ExternalMcpError("external MCP connection is revoked")
             credential: str | None = None
+            health_status: str = ""
+            failure: ExternalMcpError | None = None
             try:
                 credential = self._credential(connection)
-                health_status = self.transport.health(connection["endpoint"], credential=credential)
+                with self.service.external_call_fence(
+                    tenant_id, connection_id, actor=actor
+                ) as fenced:
+                    health_status = self.transport.health(fenced["endpoint"], credential=credential)
                 if health_status not in {"healthy", "unhealthy"}:
                     raise ExternalMcpError("external MCP health result is invalid")
-            except ExternalMcpError:
-                self.service.record_external_health(
+            except ExternalMcpError as exc:
+                if not self._record_external_health(
+                    tenant_id, connection_id, actor=actor, status="unhealthy"
+                ):
+                    failure = ExternalMcpError("external MCP health check failed")
+                else:
+                    failure = self._sanitize_external_error(exc, "external MCP health check failed")
+            except FolioError as exc:
+                self._record_external_health(
                     tenant_id, connection_id, actor=actor, status="unhealthy"
                 )
-                raise
-            except Exception as exc:
-                self.service.record_external_health(
+                if str(exc) == "external MCP connection is revoked":
+                    failure = ExternalMcpError(str(exc))
+                else:
+                    failure = ExternalMcpError("external MCP health check failed")
+            except Exception:
+                self._record_external_health(
                     tenant_id, connection_id, actor=actor, status="unhealthy"
                 )
-                raise ExternalMcpError("external MCP health check failed") from exc
+                failure = ExternalMcpError("external MCP health check failed")
             finally:
                 credential = None
-            self.service.record_external_health(
+            if failure is not None:
+                raise failure from None
+            if not self._record_external_health(
                 tenant_id, connection_id, actor=actor, status=health_status
-            )
+            ):
+                raise ExternalMcpError("external MCP health check failed") from None
             return self.service.external_connection_status(tenant_id, connection_id, actor=actor)
         finally:
             self._release(key)
@@ -729,6 +827,26 @@ class ExternalMcpBroker:
         finally:
             self._release(key)
 
+    def authorize_tool(
+        self,
+        *,
+        tenant_id: str,
+        actor: str,
+        connection_id: str,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Authorize an exact tool without contacting its upstream."""
+
+        HttpExternalMcpTransport._check_request_size(arguments)
+        return self.service.authorize_external_tool(
+            tenant_id,
+            connection_id,
+            tool_name,
+            actor=actor,
+            arguments=arguments,
+        )
+
     def _call_tool_admitted(
         self,
         *,
@@ -746,26 +864,31 @@ class ExternalMcpBroker:
             arguments=arguments,
         )
         credential: str | None = None
+        result: Any = None
+        failure: ExternalMcpError | None = None
         try:
             credential = self._credential(connection)
-            result = self.transport.call_tool(
-                connection["endpoint"],
-                tool_name,
-                arguments,
-                credential=credential,
-            )
-            self._bounded_result(result, credential)
-            self.service.record_external_call(
+            with self.service.external_call_fence(tenant_id, connection_id, actor=actor) as fenced:
+                result = self.transport.call_tool(
+                    fenced["endpoint"],
+                    tool_name,
+                    arguments,
+                    credential=credential,
+                )
+                self._bounded_result(result, credential)
+            if not self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
                 action="tool_call",
                 outcome="allowed",
                 tool_name=tool_name,
-            )
-            return result
-        except ExternalMcpError:
-            self.service.record_external_call(
+            ):
+                failure = ExternalMcpError("external MCP tool call failed")
+            else:
+                return result
+        except ExternalMcpError as exc:
+            self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
@@ -773,9 +896,9 @@ class ExternalMcpBroker:
                 outcome="failed",
                 tool_name=tool_name,
             )
-            raise
-        except Exception as exc:
-            self.service.record_external_call(
+            failure = self._sanitize_external_error(exc, "external MCP tool call failed")
+        except FolioError as exc:
+            self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
@@ -783,9 +906,25 @@ class ExternalMcpBroker:
                 outcome="failed",
                 tool_name=tool_name,
             )
-            raise ExternalMcpError("external MCP tool call failed") from exc
+            if str(exc) == "external MCP connection is revoked":
+                failure = ExternalMcpError(str(exc))
+            else:
+                failure = ExternalMcpError("external MCP tool call failed")
+        except Exception:
+            self._record_external_call(
+                tenant_id,
+                connection_id,
+                actor=actor,
+                action="tool_call",
+                outcome="failed",
+                tool_name=tool_name,
+            )
+            failure = ExternalMcpError("external MCP tool call failed")
         finally:
             credential = None
+        if failure is not None:
+            raise failure from None
+        return result
 
     def read_resource(
         self,
@@ -825,23 +964,28 @@ class ExternalMcpBroker:
             tenant_id, connection_id, resource_uri, actor=actor
         )
         credential: str | None = None
+        result: Any = None
+        failure: ExternalMcpError | None = None
         try:
             credential = self._credential(connection)
-            result = self.transport.read_resource(
-                connection["endpoint"], resource_uri, credential=credential
-            )
-            self._bounded_result(result, credential)
-            self.service.record_external_call(
+            with self.service.external_call_fence(tenant_id, connection_id, actor=actor) as fenced:
+                result = self.transport.read_resource(
+                    fenced["endpoint"], resource_uri, credential=credential
+                )
+                self._bounded_result(result, credential)
+            if not self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
                 action="resource_read",
                 outcome="allowed",
                 resource_uri=resource_uri,
-            )
-            return result
-        except ExternalMcpError:
-            self.service.record_external_call(
+            ):
+                failure = ExternalMcpError("external MCP resource read failed")
+            else:
+                return result
+        except ExternalMcpError as exc:
+            self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
@@ -849,9 +993,9 @@ class ExternalMcpBroker:
                 outcome="failed",
                 resource_uri=resource_uri,
             )
-            raise
-        except Exception as exc:
-            self.service.record_external_call(
+            failure = self._sanitize_external_error(exc, "external MCP resource read failed")
+        except FolioError as exc:
+            self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
@@ -859,9 +1003,32 @@ class ExternalMcpBroker:
                 outcome="failed",
                 resource_uri=resource_uri,
             )
-            raise ExternalMcpError("external MCP resource read failed") from exc
+            if str(exc) == "external MCP connection is revoked":
+                failure = ExternalMcpError(str(exc))
+            else:
+                failure = ExternalMcpError("external MCP resource read failed")
+        except Exception:
+            self._record_external_call(
+                tenant_id,
+                connection_id,
+                actor=actor,
+                action="resource_read",
+                outcome="failed",
+                resource_uri=resource_uri,
+            )
+            failure = ExternalMcpError("external MCP resource read failed")
         finally:
             credential = None
+        if failure is not None:
+            raise failure from None
+        return result
+
+    @staticmethod
+    def _sanitize_external_error(error: ExternalMcpError, fallback: str) -> ExternalMcpError:
+        message = str(error)
+        if message in _SAFE_EXTERNAL_ERRORS:
+            return ExternalMcpError(message)
+        return ExternalMcpError(fallback)
 
     def _credential(self, connection: Mapping[str, Any]) -> str | None:
         credential_ref = connection.get("credential_ref")
@@ -884,9 +1051,31 @@ class ExternalMcpBroker:
     def _bounded_result(result: Any, credential: str | None) -> None:
         try:
             encoded = json.dumps(result, separators=(",", ":"), allow_nan=False).encode()
-        except (TypeError, ValueError) as exc:
-            raise ExternalMcpError("external MCP result is invalid") from exc
-        if credential is not None and credential.encode() in encoded:
-            raise ExternalMcpError("external MCP result contains credential material")
+        except (TypeError, ValueError):
+            raise ExternalMcpError("external MCP result is invalid") from None
+        if credential is not None and ExternalMcpBroker._contains_credential(result, credential):
+            raise ExternalMcpError("external MCP result contains credential material") from None
         if len(encoded) > MAX_EXTERNAL_RESULT_BYTES:
-            raise ExternalMcpError("external MCP result exceeds the allowed size")
+            raise ExternalMcpError("external MCP result exceeds the allowed size") from None
+
+    @staticmethod
+    def _contains_credential(value: Any, credential: str) -> bool:
+        if isinstance(value, str):
+            if credential in value:
+                return True
+            try:
+                decoded = json.loads(value)
+            except (TypeError, ValueError):
+                return False
+            return decoded != value and ExternalMcpBroker._contains_credential(decoded, credential)
+        if isinstance(value, bytes):
+            return credential.encode() in value
+        if isinstance(value, Mapping):
+            return any(
+                ExternalMcpBroker._contains_credential(item, credential)
+                for pair in value.items()
+                for item in pair
+            )
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return any(ExternalMcpBroker._contains_credential(item, credential) for item in value)
+        return False
