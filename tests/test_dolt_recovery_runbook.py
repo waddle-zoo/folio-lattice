@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,9 +23,15 @@ class DoltRecoveryRunbookTests(unittest.TestCase):
             "SHOW DATABASES",
             "temporary data-dir",
             "fixture\ndatabases",
-            "must not point at `~/gt/.dolt-data`",
+            "GT_DOLT_DATA=",
+            "SIGQUIT",
+            "may terminate the Dolt",
+            'dolt --data-dir="$GT_DOLT_DATA" sql -q',
+            "do not send a second stop",
         ):
             self.assertIn(required, text)
+        self.assertNotIn("~/gt/.dolt-data", text)
+        self.assertNotIn("without killing it", text)
         self.assertNotIn("rm -rf", text)
         self.assertNotIn("noms/LOCK", text.replace("never remove `noms/LOCK`", ""))
 
@@ -47,6 +55,20 @@ class DoltRecoveryRunbookTests(unittest.TestCase):
             self.assertEqual([process["pid"] for process in candidates], [202])
             self.assertNotEqual(candidates[0]["pid"], 101)
             self.assertFalse((impostor / ".dolt" / "noms" / "LOCK").exists())
+
+    def test_dolt_global_data_dir_order_is_supported(self) -> None:
+        dolt = shutil.which("dolt")
+        if dolt is None:
+            self.skipTest("dolt CLI is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [dolt, f"--data-dir={directory}", "sql", "--help"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("dolt sql", result.stdout)
 
 
 if __name__ == "__main__":

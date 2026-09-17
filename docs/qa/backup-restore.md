@@ -1,0 +1,64 @@
+# Backup, migration, and restore rehearsal
+
+This repository now has a bounded local recovery unit for the SQLite metadata
+database and its content-addressed blobs. It is intentionally explicit about
+what it does not provide: `manifest.json` is checksum-verified but not signed
+or encrypted. Hosted operations must place the unit in an encrypted,
+immutable, access-controlled store with keys separated from the application
+runtime.
+
+## Commands
+
+Run these from the exact image/source revision. The database and blob paths
+default to `FOLIO_DB_PATH` and `FOLIO_BLOB_ROOT`:
+
+```text
+python -m folio_lattice.ops migrate check
+python -m folio_lattice.ops backup create --output /evidence/backup
+python -m folio_lattice.ops backup verify --input /evidence/backup
+python -m folio_lattice.ops dr restore \
+  --input /evidence/backup \
+  --db /evidence/recovered/folio.db \
+  --blobs /evidence/recovered/blobs
+```
+
+The restore command refuses existing database or blob targets. Restore into a
+new isolated location, keep the recovered service private, and run the
+negative tenant/ACL matrix before serving traffic.
+
+## Consistency and failure behavior
+
+The backup manifest records `folio-backup-v1`, a schema signature, SQLite
+quick/foreign-key checks, row counts, SHA-256 for the metadata database and
+each referenced blob, and the restore order. Metadata preserves versions and
+parents, provenance, graph edges, ACL/grant history, external-connection
+policy and audit records. FTS/index definitions and their rebuild inputs are
+part of the metadata database. Secret values are not copied; connector
+credential fields remain references only.
+
+`backup verify` fails closed on a missing or unexpected top-level file,
+checksum/size mismatch, SQLite corruption, foreign-key failure, schema/count
+mismatch, missing referenced blob, symlink, duplicate path, or out-of-bound
+blob count/bytes. A changed manifest can only be detected by an external
+signature or immutable-store policy; the local format does not pretend that a
+checksum alone is an authenticity proof.
+
+`migrate check` invokes the existing forward-compatible initializer twice and
+checks readiness after each run. It performs no down-migration or destructive
+rewrite. A migration that needs a destructive change remains blocked until a
+verified backup and restore point exist.
+
+## Evidence record
+
+The focused rehearsal is `tests/test_backup_restore.py`. It creates two
+artifacts, a graph edge, two immutable versions, an ACL share, and an audit
+event; verifies the consistency set; restores into absent targets; checks
+content, history, graph, audit, and readiness; and records backup/restore
+timings against the 15-minute/60-minute rehearsal budgets. A second test
+corrupts a copied blob and confirms verification, then restore into a
+non-empty target, is refused.
+
+The local test is not hosted durability evidence. `.23` stays open until
+encrypted immutable storage, separated recovery credentials, a scheduled
+backup age/RPO target, and an independent recovery witness are attached to the
+release ledger.
