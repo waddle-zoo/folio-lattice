@@ -276,6 +276,7 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         assert updated["artifact_id"] == root_id
         assert updated["parent_version_id"] == root_version_id
         updated_version_id = updated["id"]
+        version_ids.add(updated_version_id)
         assert updated_version_id != root_version_id
         version_ids.add(updated_version_id)
 
