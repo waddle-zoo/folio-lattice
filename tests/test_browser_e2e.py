@@ -1159,7 +1159,10 @@ addEventListener('message', (event) => {
 parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-lattice',tool:'artifact_search',arguments:{query:'browsermarker'}}, '*');
 </script></body>"""
                 typed_html = create(
-                    control_origin, "searchable.html", b"<h1>typed media</h1>", "text/html"
+                    control_origin,
+                    "searchable.html",
+                    f"<h1>typed media</h1><p>{body_marker}</p>".encode(),
+                    "text/html",
                 )
                 upload = root / "browser-note.html"
                 upload.write_bytes(source)
@@ -1198,7 +1201,7 @@ document.querySelector('#search-query').value = {json.dumps(body_marker)};
 document.querySelector('#search').requestSubmit();
 """)
                 chrome.wait(
-                    "document.querySelectorAll('#results button[data-artifact-id]').length === 5"
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 6"
                 )
                 marker_result_ids = chrome.evaluate(
                     "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.artifactId)"
@@ -1211,6 +1214,7 @@ document.querySelector('#search').requestSubmit();
                         duplicate_two["artifact"]["id"],
                         javascript["artifact"]["id"],
                         stylesheet["artifact"]["id"],
+                        typed_html["artifact"]["id"],
                     },
                 )
                 self.assertEqual(
@@ -1219,7 +1223,7 @@ document.querySelector('#search').requestSubmit();
                             "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.mediaType)"
                         )
                     ),
-                    {"text/markdown", "application/javascript", "text/css"},
+                    {"text/markdown", "text/html", "application/javascript", "text/css"},
                 )
                 self.assertEqual(
                     set(
@@ -1227,11 +1231,11 @@ document.querySelector('#search').requestSubmit();
                             "[...document.querySelectorAll('#results .result-group-heading h3')].map((heading) => heading.textContent)"
                         )
                     ),
-                    {"Markdown", "JavaScript", "CSS"},
+                    {"Markdown", "HTML", "JavaScript", "CSS"},
                 )
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#search-result-summary').textContent"),
-                    "5 results across 3 file types.",
+                    "6 results across 4 file types.",
                 )
                 self.assertNotIn(
                     "art_",
@@ -1264,6 +1268,38 @@ document.querySelector('#search').requestSubmit();
                     "document.querySelector('#search-type-filter').value = 'all'; "
                     "document.querySelector('#search-type-filter').dispatchEvent(new Event('change', {bubbles:true}))"
                 )
+                chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')]"
+                    f".find((button) => button.dataset.artifactId === {json.dumps(target['artifact']['id'])}).click()"
+                )
+                chrome.wait(f"location.pathname === '/workspace/{target['artifact']['id']}'")
+                chrome.wait("document.querySelector('#title')?.textContent === 'decision.md'")
+                self.assertFalse(chrome.evaluate("document.querySelector('#reader').hidden"))
+                self.assertIn(
+                    "Decision",
+                    chrome.evaluate("document.querySelector('#readable-content').textContent"),
+                )
+                chrome.command("Page.navigate", {"url": control_origin})
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.evaluate("document.querySelector('#find').open = true")
+                chrome.evaluate(f"""
+document.querySelector('#search-query').value = {json.dumps(body_marker)};
+document.querySelector('#search').requestSubmit();
+""")
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 6"
+                )
+                chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')]"
+                    f".find((button) => button.dataset.artifactId === {json.dumps(typed_html['artifact']['id'])}).click()"
+                )
+                chrome.wait(f"location.pathname === '/workspace/{typed_html['artifact']['id']}'")
+                chrome.wait("document.querySelector('#title')?.textContent === 'searchable.html'")
+                self.assertFalse(chrome.evaluate("document.querySelector('#preview-card').hidden"))
+                self.assertTrue(chrome.evaluate("document.querySelector('#reader').hidden"))
+                chrome.command("Page.navigate", {"url": control_origin})
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.evaluate("document.querySelector('#find').open = true")
                 chrome.evaluate("""
 window.__folioSearchCalls = [];
 const originalFetch = window.fetch;
