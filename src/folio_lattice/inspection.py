@@ -2456,12 +2456,12 @@ async function loadLibrary() {
       }
       const meta = document.createElement('div'); meta.className = 'graph-meta';
       const count = document.createElement('span'); count.className = 'status-dot';
-      const linkedItems = artifact.component_size ? Math.max(0, artifact.component_size - 1) : (artifact.graph_edges || 0);
+      const linkedItems = Math.max(0, (artifact.component_size || 1) - 1);
       count.textContent = `${linkedItems} linked item${linkedItems === 1 ? '' : 's'}`;
       const updated = document.createElement('span'); updated.textContent = `Updated ${formatDate(artifact.updated_at)}`;
       meta.append(count, updated); li.append(meta); return li;
     };
-    const graphCandidates = artifacts.filter((artifact) => artifact.graph_edges > 0);
+    const graphCandidates = artifacts.filter((artifact) => artifact.has_readable_neighbors);
     const graphGroups = await Promise.all(graphCandidates.map(async (artifact) => {
       try {
         const component = await call('graph_component', {start_artifact_id: artifact.id, limit: 100});
@@ -2471,17 +2471,22 @@ async function loadLibrary() {
         return {
           ...artifact,
           ...graphRoot,
-          graph_edges: artifact.graph_edges,
           component_size: component.length,
           component_items: component.map((item) => ({id: item.id, name: item.name})).filter((item) => item.id && item.name),
           graph_key: ids.join('\u0000') || artifact.id,
         };
       } catch (_error) {
-        return {...artifact, graph_key: artifact.id};
+        return {...artifact, component_size: 1, component_items: [], graph_key: artifact.id};
       }
     }));
+    const componentSizeByArtifact = new Map();
+    graphGroups.forEach((group) => {
+      (group.component_items || []).forEach((item) => {
+        if (item.id) componentSizeByArtifact.set(item.id, group.component_size || 1);
+      });
+    });
     const seenGraphs = new Set();
-    const graphs = graphGroups.filter((artifact) => {
+    const graphs = graphGroups.filter((artifact) => artifact.component_size > 1).filter((artifact) => {
       if (seenGraphs.has(artifact.graph_key)) return false;
       seenGraphs.add(artifact.graph_key); return true;
     });
@@ -2506,7 +2511,7 @@ async function loadLibrary() {
         ? `${graphs.length} graph${graphs.length === 1 ? '' : 's'}`
         : 'No graphs yet';
     }
-    list('artifact-library', artifacts.filter((artifact) => artifact.graph_edges === 0), renderArtifact,
+    list('artifact-library', artifacts.filter((artifact) => (componentSizeByArtifact.get(artifact.id) || 1) <= 1), renderArtifact,
       'No standalone artifacts. Create one to keep a file outside a graph.');
     if (byId('library-count')) byId('library-count').textContent = `${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'}`;
     status('Library ready.');
@@ -2560,7 +2565,7 @@ function metadataMatch(artifact, matchKind) {
     snippet: matchKind === 'name'
       ? `Filename match: ${artifact.name}`
       : `Media type match: ${artifact.media_type}`,
-    graph_path: workspaceMode ? `In this graph / ${artifact.name}` : artifact.name,
+    graph_path: workspaceMode ? `In this graph / ${artifact.name}` : '',
   };
 }
 async function exactMetadataResults(query) {
@@ -2587,10 +2592,7 @@ function searchResultShape(result) {
   const graph = result.graph_context || result.graph || result.graph_root || '';
   const graphPath = graphPathLabel(result.graph_path);
   const graphName = typeof graph === 'string' ? graph
-    : graph?.name || graph?.artifact_name || graph?.id
-      || (graph?.root_artifact_id
-        ? `Graph ${graph.root_artifact_id}`
-        : '');
+    : graph?.name || graph?.artifact_name || graph?.path || '';
   const path = result.path || result.artifact_path || (typeof graph === 'object' ? graph.path || '' : '');
   const kinds = Array.isArray(result.match_kinds)
     ? result.match_kinds
@@ -2605,7 +2607,7 @@ function searchResultShape(result) {
     snippet: result.snippet || result.content || '',
     path: String(path || result.artifact_name || result.name || ''),
     graph_path: graphPath,
-    graph_context: String(graphPath ? `Graph path: ${graphPath}` : (graphName || (workspaceMode ? 'In this graph' : ''))),
+    graph_context: String(graphPath || graphName || (workspaceMode ? 'In this graph' : '')),
   };
 }
 function mergeSearchResults(results) {
@@ -2618,6 +2620,10 @@ function mergeSearchResults(results) {
     if (!existing.version_id && result.version_id) existing.version_id = result.version_id;
     if (!existing.media_type && result.media_type) existing.media_type = result.media_type;
     if (!existing.path && result.path) existing.path = result.path;
+    if (result.graph_path && existing.graph_path === `In this graph / ${existing.artifact_name}`) {
+      existing.graph_path = result.graph_path;
+      existing.graph_context = result.graph_context;
+    }
     if (!existing.graph_context && result.graph_context) existing.graph_context = result.graph_context;
     if (!existing.snippet && result.snippet) existing.snippet = result.snippet;
   });

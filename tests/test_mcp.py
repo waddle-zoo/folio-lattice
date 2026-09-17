@@ -64,6 +64,8 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(created["version"]["actor"], "hyperset")
             library = await self.call(client, "artifact_list", {})
             self.assertEqual([item["name"] for item in library], ["note.md"])
+            self.assertIs(library[0]["has_readable_neighbors"], False)
+            self.assertNotIn("graph_edges", library[0])
             read = await self.call(
                 client, "artifact_read", {"artifact_id": created["artifact"]["id"]}
             )

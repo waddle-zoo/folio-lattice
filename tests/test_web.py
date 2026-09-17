@@ -368,10 +368,11 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"did not run", script)
         self.assertIn(b"artifact_name", script)
         self.assertIn(b"graphPathLabel", script)
-        self.assertIn(b"Graph path:", script)
         self.assertIn(b"dataset.graphPath", script)
+        self.assertIn(b"has_readable_neighbors", script)
         self.assertNotIn(b"edge_count", script)
         self.assertNotIn(b"graph_edges", script)
+        self.assertNotIn(b"Graph: Graph path:", script)
         self.assertIn(b"dataset.artifactId", script)
         self.assertIn(b"request count", script)
 

@@ -386,13 +386,14 @@ class ServiceTests(unittest.TestCase):
         self.service.create_artifact(
             tenant_id="other", name="foreign.md", data=b"foreign", actor="reader"
         )
-        self.service.share_artifact(
+        shared_grant = self.service.share_artifact(
             "acme",
             shared["artifact"]["id"],
             actor="owner",
             subject_actor_id="reader",
         )
         self.service.link("acme", owned["artifact"]["id"], shared["artifact"]["id"], "references")
+        self.service.link("acme", owned["artifact"]["id"], private["artifact"]["id"], "references")
         with self.service.connect() as db:
             for created, updated_at in (
                 (owned, "2026-01-01T00:00:00+00:00"),
@@ -411,12 +412,23 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertIn("updated_at", listed[0])
         self.assertEqual(
-            next(item["graph_edges"] for item in listed if item["name"] == "owned.md"), 1
+            next(item["has_readable_neighbors"] for item in listed if item["name"] == "owned.md"),
+            True,
         )
         self.assertEqual(
-            next(item["graph_edges"] for item in listed if item["name"] == "shared.md"), 1
+            next(item["has_readable_neighbors"] for item in listed if item["name"] == "shared.md"),
+            True,
         )
+        self.assertTrue(all(isinstance(item["has_readable_neighbors"], bool) for item in listed))
+        self.assertNotIn("graph_edges", listed[0])
         self.assertNotIn("tenant_id", listed[0])
+
+        self.service.revoke_share(
+            "acme", shared["artifact"]["id"], actor="owner", grant_id=shared_grant["id"]
+        )
+        revoked = self.service.list_artifacts("acme", actor="reader")
+        self.assertEqual([item["name"] for item in revoked], ["owned.md"])
+        self.assertFalse(revoked[0]["has_readable_neighbors"])
 
         asset = self.service.create_artifact(
             tenant_id="acme",

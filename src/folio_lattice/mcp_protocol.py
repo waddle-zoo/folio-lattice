@@ -163,7 +163,8 @@ def build_mcp_server(
         description=(
             "List recent artifacts available to the current actor, optionally filtered by "
             "exact filename and media type. Continue after a prior page with its final "
-            "item's '<updated_at>|<id>' cursor."
+            "item's '<updated_at>|<id>' cursor. Each item includes an ACL-safe boolean "
+            "indicating whether it has readable graph neighbors."
         )
     )
     def artifact_list(

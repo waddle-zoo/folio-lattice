@@ -665,13 +665,28 @@ class FolioLattice:
             cursor_params = (cursor_timestamp, cursor_timestamp, cursor_artifact_id)
         with self.connect() as db:
             access_sql, access_params = self._access_clause(actor, "read")
+            neighbor_access_sql, neighbor_access_params = self._access_clause(
+                actor, "read", artifact_alias="neighbor"
+            )
             rows = db.execute(
                 """
                 SELECT a.id, a.name, a.media_type, a.created_at,
                        a.current_version_id, v.created_at AS updated_at,
-                       (SELECT COUNT(*) FROM edges e
-                        WHERE e.tenant_id = a.tenant_id
-                          AND (e.source_artifact_id = a.id OR e.target_artifact_id = a.id)) AS graph_edges
+                       CASE WHEN EXISTS (
+                           SELECT 1 FROM edges e
+                           JOIN artifacts neighbor
+                             ON neighbor.tenant_id = e.tenant_id
+                            AND neighbor.id = CASE
+                                WHEN e.source_artifact_id = a.id
+                                THEN e.target_artifact_id
+                                ELSE e.source_artifact_id
+                            END
+                           WHERE e.tenant_id = a.tenant_id
+                             AND (e.source_artifact_id = a.id OR e.target_artifact_id = a.id)
+                             AND """
+                + neighbor_access_sql
+                + """
+                       ) THEN 1 ELSE 0 END AS has_readable_neighbors
                 FROM artifacts a
                 LEFT JOIN versions v
                   ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
@@ -685,6 +700,7 @@ class FolioLattice:
                 LIMIT ?
                 """,
                 (
+                    *neighbor_access_params,
                     tenant_id,
                     *access_params,
                     *cursor_params,
@@ -695,7 +711,12 @@ class FolioLattice:
                     max(1, min(limit, 100)),
                 ),
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["has_readable_neighbors"] = bool(item["has_readable_neighbors"])
+            result.append(item)
+        return result
 
     def write_version(
         self,
