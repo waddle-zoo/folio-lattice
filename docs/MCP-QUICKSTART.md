@@ -66,24 +66,80 @@ stable artifact and version IDs; filenames are labels, not identity. Do not
 send `tenant_id` or `actor` in these requests: both come from authenticated
 server context and are returned or applied by the server.
 
-### 1. Create each body separately
+For a disposable demo or regression, run this flow against fresh isolated
+server state and include a UUID in each marker/name. Never inspect private
+storage to discover IDs or infer tenant boundaries; retain only the IDs and
+versions returned by the public contract.
+
+### 1. Create five bodies and capture IDs
 
 `content_base64` is the standard base64 encoding of the complete body bytes.
 These are separate `artifact_create` calls, not one multi-file request. Create
-the Markdown and binary nodes directly, then create CSS/JavaScript followed by
-HTML using the render-safe linked recipe below so the HTML can retain the
-exact asset URLs.
+CSS and JavaScript before HTML so the HTML body can retain exact immutable
+asset URLs. Capture both IDs immediately after every response:
 
-```json
-{"name":"agent-graph.md","media_type":"text/markdown","content_base64":"IyBBZ2VudCBncmFwaApxdWlja3N0YXJ0IGJvZHkgbWFya2VyCg==","reason":"agent quickstart"}
+```python
+import base64
+
+def b64(body):
+    return base64.b64encode(body).decode()
+
+root = await call("artifact_create", {
+    "name": "agent-graph.md",
+    "media_type": "text/markdown",
+    "content_base64": b64(b"# Agent graph\nquickstart body marker\n"),
+    "reason": "agent quickstart",
+})
+markdown_artifact_id = root["artifact"]["id"]
+markdown_version_id = root["version"]["id"]
+
+css = await call("artifact_create", {
+    "name": "agent-graph.css",
+    "media_type": "text/css",
+    "content_base64": b64(b"body { color: navy; }\n"),
+    "reason": "agent quickstart",
+})
+css_artifact_id = css["artifact"]["id"]
+css_version_id = css["version"]["id"]
+
+javascript = await call("artifact_create", {
+    "name": "agent-graph.js",
+    "media_type": "application/javascript",
+    "content_base64": b64(
+        b"document.body.dataset.marker = 'agent-quickstart-fixture';\n"
+    ),
+    "reason": "agent quickstart",
+})
+js_artifact_id = javascript["artifact"]["id"]
+js_version_id = javascript["version"]["id"]
+
+html_body = f"""<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><title>Agent graph</title>
+<link rel="stylesheet" href="/content/{css_artifact_id}/{css_version_id}">
+</head><body><main><h1>Agent graph</h1></main>
+<script src="/content/{js_artifact_id}/{js_version_id}"></script>
+</body></html>""".encode()
+html = await call("artifact_create", {
+    "name": "agent-graph.html",
+    "media_type": "text/html",
+    "content_base64": b64(html_body),
+    "reason": "agent quickstart",
+})
+html_artifact_id = html["artifact"]["id"]
+html_version_id = html["version"]["id"]
+
+binary = await call("artifact_create", {
+    "name": "agent-graph.bin",
+    "media_type": "application/octet-stream",
+    "content_base64": b64(b"\x00\x01\x02\xff"),
+    "reason": "agent quickstart",
+})
+binary_artifact_id = binary["artifact"]["id"]
+binary_version_id = binary["version"]["id"]
 ```
 
-```json
-{"name":"agent-graph.bin","media_type":"application/octet-stream","content_base64":"AAEC/w==","reason":"agent quickstart"}
-```
-
-Each call returns the same shape. Capture the IDs; never reconstruct them from
-the name:
+Each call returns the same shape. The server generates stable IDs; capture
+them and never reconstruct identity from a filename:
 
 ```json
 {
@@ -101,56 +157,16 @@ the name:
 }
 ```
 
-Store the corresponding values from the other four responses as
-`html_artifact_id`/`html_version_id`, `css_artifact_id`/`css_version_id`,
-`js_artifact_id`/`js_version_id`, and `binary_artifact_id`/`binary_version_id`.
-
-### Render-safe links for HTML, CSS, and JavaScript
+The `document.body.dataset.marker` assignment above is intentional fixture
+plumbing for the executable regression, not product semantics. If a fixture
+also checks visible status text, label that assertion as fixture-only.
 
 An HTML artifact does not resolve `href="agent-graph.css"` or
 `src="agent-graph.js"` by filename. Names are labels and may be duplicated.
-Create the CSS and JavaScript artifacts first, retain both IDs from each
-response, and build the HTML body with immutable, first-party `/content`
-URLs:
 
-```python
-import base64
-
-css = await call("artifact_create", {
-    "name": "agent-graph.css",
-    "media_type": "text/css",
-    "content_base64": base64.b64encode(
-        b":root { color-scheme: light; } body { color: #17324d; font: 16px system-ui; }"
-    ).decode(),
-    "reason": "agent quickstart",
-})
-javascript = await call("artifact_create", {
-    "name": "agent-graph.js",
-    "media_type": "application/javascript",
-    "content_base64": base64.b64encode(
-        b"document.querySelector('[data-agent-status]').textContent = 'Ready';"
-    ).decode(),
-    "reason": "agent quickstart",
-})
-css_url = f"/content/{css['artifact']['id']}/{css['version']['id']}"
-javascript_url = f"/content/{javascript['artifact']['id']}/{javascript['version']['id']}"
-html_body = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Agent graph</title>
-<link rel="stylesheet" href="{css_url}"></head>
-<body><main><h1>Agent graph</h1><p data-agent-status>Loading</p></main>
-<script src="{javascript_url}"></script></body></html>"""
-html = await call("artifact_create", {
-    "name": "agent-graph.html",
-    "media_type": "text/html",
-    "content_base64": base64.b64encode(html_body.encode()).decode(),
-    "reason": "agent quickstart",
-})
-```
-
-The returned `html.artifact.id` and `html.version.id` are the values used for
-the HTML node below. The two URLs are intentionally version-pinned: a later
-write creates a new version and never changes what an older HTML version
-loads. The renderer serves these URLs only after the authenticated MCP
+The two URLs are intentionally version-pinned: a later write creates a new
+version and never changes what an older HTML version loads. The renderer serves
+these URLs only after the authenticated MCP
 `artifact_read` applies the verified renderer capability plus tenant and ACL
 checks; missing artifacts, mismatched artifact/version pairs, cross-tenant
 IDs, and denied artifacts fail closed.

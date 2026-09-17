@@ -172,6 +172,39 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         )
         html_render_version = html_version_2["id"]
 
+        filename_search = await call(
+            client, "artifact_search", {"query": html["artifact"]["name"], "limit": 20}
+        )
+        filename_result = next(
+            item for item in filename_search if item["artifact_id"] == html["artifact"]["id"]
+        )
+        assert filename_result["version_id"] == html_render_version
+        assert filename_result["match_kind"] == "name"
+        assert filename_result["match_kinds"] == ["name"]
+        assert filename_result["path"] == html["artifact"]["name"]
+        assert filename_result["graph_context"] == {"root_artifact_id": None, "scoped": False}
+        assert filename_result["graph_path"] == []
+
+        type_first_page = await call(client, "artifact_search", {"query": "TEXT/HTML", "limit": 1})
+        type_second_page = await call(
+            client,
+            "artifact_search",
+            {
+                "query": "TEXT/HTML",
+                "limit": 1,
+                "cursor": f"{type_first_page[-1]['updated_at']}|{type_first_page[-1]['artifact_id']}",
+            },
+        )
+        type_results = [*type_first_page, *type_second_page]
+        assert len(type_results) == 2
+        assert {item["artifact_id"] for item in type_results} == {
+            html["artifact"]["id"],
+            wrong_type["artifact"]["id"],
+        }
+        assert all(item["match_kind"] == "media_type" for item in type_results)
+        assert all(item["match_kinds"] == ["media_type"] for item in type_results)
+        assert all(item["media_type"] == "text/html" for item in type_results)
+
         first_page = await call(
             client,
             "artifact_list",
@@ -287,8 +320,33 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         assert scoped_ids <= component_ids
         assert outside_id not in scoped_ids
         assert duplicate_ids.isdisjoint(scoped_ids)
-        global_search = await call(client, "artifact_search", {"query": body_marker, "limit": 100})
-        assert outside_id in {item["artifact_id"] for item in global_search}
+        body_first_page = await call(client, "artifact_search", {"query": body_marker, "limit": 2})
+        body_second_page = await call(
+            client,
+            "artifact_search",
+            {
+                "query": body_marker,
+                "limit": 2,
+                "cursor": f"{body_first_page[-1]['updated_at']}|{body_first_page[-1]['artifact_id']}",
+            },
+        )
+        body_third_page = await call(
+            client,
+            "artifact_search",
+            {
+                "query": body_marker,
+                "limit": 2,
+                "cursor": f"{body_second_page[-1]['updated_at']}|{body_second_page[-1]['artifact_id']}",
+            },
+        )
+        global_search = [*body_first_page, *body_second_page, *body_third_page]
+        assert len(body_first_page) == 2
+        assert len(body_second_page) == 2
+        assert len(body_third_page) == 1
+        global_ids = {item["artifact_id"] for item in global_search}
+        assert global_ids == {root_id, outside_id, *child_ids}
+        assert all("body" in item["match_kinds"] for item in global_search)
+        assert all(item["version_id"] in version_ids for item in global_search)
 
         grep = await call(client, "artifact_grep", {"pattern": literal, "limit": 10})
         assert any(item["artifact_id"] == root_id and item["match"] == literal for item in grep)
