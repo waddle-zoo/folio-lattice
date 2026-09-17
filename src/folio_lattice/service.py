@@ -2522,8 +2522,24 @@ class FolioLattice:
         if not ids or len(ids) > AUDIT_MAX_EVENTS_PER_EXPORT:
             raise FolioError("audit legal hold event list is out of bounds")
         placeholders = ",".join("?" for _ in ids)
+        hold_event = self._build_audit_event(
+            tenant_id=tenant_id,
+            actor_id=actor,
+            action="audit_legal_hold",
+            outcome="allowed",
+            request_id=None,
+            correlation_id=None,
+            resource_type="audit_event",
+            resource_id=None,
+            reason=reason,
+            policy_version=AUDIT_SCHEMA_VERSION,
+            source="audit",
+            details={"status_code": 200},
+            retention_class="security",
+        )
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self._ensure_tenant(db, tenant_id)
             rows = db.execute(
                 "SELECT id, occurred_at, tenant_id, actor_id, actor_type, request_id, "
                 "correlation_id, action, resource_type, resource_id, outcome, reason, "
@@ -2544,16 +2560,7 @@ class FolioLattice:
                     (event["integrity_hash"], tenant_id, event["id"]),
                 )
             count = len(rows)
-        self.record_audit_event(
-            tenant_id=tenant_id,
-            actor_id=actor,
-            action="audit_legal_hold",
-            outcome="allowed",
-            resource_type="audit_event",
-            reason=reason,
-            source="audit",
-            details={"status_code": 200},
-        )
+            self._insert_audit_event(db, hold_event)
         return count
 
     def purge_audit_events(self, *, now: str | None = None) -> dict[str, int]:
@@ -2570,18 +2577,24 @@ class FolioLattice:
             db.execute(
                 "DELETE FROM audit_events WHERE expires_at <= ? AND legal_hold = 0", (cutoff,)
             )
+            for tenant_id, count in rows:
+                purge_event = self._build_audit_event(
+                    tenant_id=tenant_id,
+                    actor_id="system",
+                    action="audit_retention_purge",
+                    outcome="allowed",
+                    request_id=None,
+                    correlation_id=None,
+                    resource_type="audit_event",
+                    resource_id=None,
+                    reason="retention_expired",
+                    policy_version=AUDIT_SCHEMA_VERSION,
+                    source="retention",
+                    details={"status_code": 200, "limit_name": str(count)},
+                    retention_class="security",
+                )
+                self._insert_audit_event(db, purge_event)
         purged = {row["tenant_id"]: row["count"] for row in rows}
-        for tenant_id, count in purged.items():
-            self.record_audit_event(
-                tenant_id=tenant_id,
-                actor_id="system",
-                action="audit_retention_purge",
-                outcome="allowed",
-                resource_type="audit_event",
-                reason="retention_expired",
-                source="retention",
-                details={"status_code": 200, "limit_name": str(count)},
-            )
         return purged
 
     def audit_metrics(self) -> dict[str, int]:
