@@ -492,6 +492,45 @@ class ExternalMcpServiceTests(unittest.TestCase):
         self.assertIsNone(raised.exception.__cause__)
         self.assertIsNone(raised.exception.__context__)
 
+    def test_registration_audit_failure_is_sanitized_and_rolls_back(self) -> None:
+        transport = FakeTransport()
+        broker = ExternalMcpBroker(self.service, credentials=FakeCredentials(), transport=transport)
+
+        def fail_audit(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("registration audit secret")
+
+        self.service._write_external_audit = fail_audit  # type: ignore[method-assign]
+        with self.assertRaisesRegex(FolioError, "registration failed") as raised:
+            broker.register(
+                tenant_id="acme",
+                actor="admin",
+                name="registration-audit-failure",
+                endpoint=ENDPOINT,
+                approved_tools=[TOOL],
+                approved_resources=[],
+                allowed_origins=[ORIGIN],
+            )
+        self.assertNotIn("registration audit secret", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertEqual(self.service.list_external_connections("acme", actor="admin"), [])
+
+    def test_generic_policy_requires_mapping_provider_payloads(self) -> None:
+        with self.assertRaisesRegex(FolioError, "policy is invalid") as raised:
+            self.service.register_external_connection(
+                tenant_id="acme",
+                actor="admin",
+                name="non-mapping-policy",
+                endpoint=ENDPOINT,
+                approved_tools=[TOOL],
+                approved_resources=[],
+                allowed_origins=[ORIGIN],
+                policy={"slack": "policy-secret"},  # type: ignore[dict-item]
+            )
+        self.assertNotIn("policy-secret", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
     def test_revoke_wins_after_authorization_before_transport_start(self) -> None:
         started = threading.Event()
         release = threading.Event()

@@ -1748,6 +1748,8 @@ class FolioLattice:
             policy = dict(value)
         if any(not isinstance(key, str) for key in policy) or set(policy) - _EXTERNAL_POLICY_KEYS:
             raise FolioError("external MCP policy is invalid")
+        if any(not isinstance(value, Mapping) for value in policy.values()):
+            raise FolioError("external MCP policy is invalid")
         try:
             encoded = json.dumps(policy, sort_keys=True, separators=(",", ":"), allow_nan=False)
         except (TypeError, ValueError):
@@ -1904,14 +1906,20 @@ class FolioLattice:
                         EXTERNAL_MCP_POLICY_VERSION,
                     ),
                 )
-                self._write_external_audit(
-                    db,
-                    tenant_id=tenant_id,
-                    connection_id=connection_id,
-                    actor=actor,
-                    action="register",
-                    outcome="allowed",
-                )
+                audit_failed = False
+                try:
+                    self._write_external_audit(
+                        db,
+                        tenant_id=tenant_id,
+                        connection_id=connection_id,
+                        actor=actor,
+                        action="register",
+                        outcome="allowed",
+                    )
+                except Exception:
+                    audit_failed = True
+                if audit_failed:
+                    raise FolioError("external MCP registration failed") from None
         except sqlite3.IntegrityError:
             raise FolioError("external MCP connection name already exists") from None
         return self.external_connection_status(tenant_id, connection_id, actor=actor)
