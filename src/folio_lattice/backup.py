@@ -229,10 +229,15 @@ def _load_manifest(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise BackupError("backup manifest is invalid") from exc
-    if not isinstance(manifest, dict) or manifest.get("backup_schema_version") != BACKUP_SCHEMA_VERSION:
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("backup_schema_version") != BACKUP_SCHEMA_VERSION
+    ):
         raise BackupError("unsigned or legacy backup manifests are rejected")
     _, encoded = _unsigned_manifest(manifest)
-    expected = hmac.new(_key(key_provider, "manifest_auth_key"), encoded, hashlib.sha256).hexdigest()
+    expected = hmac.new(
+        _key(key_provider, "manifest_auth_key"), encoded, hashlib.sha256
+    ).hexdigest()
     actual = manifest["authentication"]["tag"]
     if not hmac.compare_digest(expected, actual):
         raise BackupError("manifest authentication failed")
@@ -424,7 +429,9 @@ def _validate_blob_entries(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
         blob_hash = _validate_blob_hash(parts[-1] if parts else None)
         if relative != f"{BLOBS_DIR_NAME}/{blob_hash[:2]}/{blob_hash}" or blob_hash in listed:
             raise BackupError("backup blob path is invalid or duplicated")
-        if not isinstance(entry["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]):
+        if not isinstance(entry["sha256"], str) or not re.fullmatch(
+            r"[0-9a-f]{64}", entry["sha256"]
+        ):
             raise BackupError("backup blob checksum is invalid")
         if not isinstance(entry["size"], int) or entry["size"] < 0:
             raise BackupError("backup blob size is invalid")
@@ -637,7 +644,10 @@ def create_backup(
                 "backup_key_ref": backup_key_ref,
                 "recovery_key_ref": recovery_key_ref,
                 "wrapped_data_key": {
-                    "backup": {"nonce": _b64(backup_wrap_nonce), "ciphertext": _b64(wrapped_backup)},
+                    "backup": {
+                        "nonce": _b64(backup_wrap_nonce),
+                        "ciphertext": _b64(wrapped_backup),
+                    },
                     "recovery": {
                         "nonce": _b64(recovery_wrap_nonce),
                         "ciphertext": _b64(wrapped_recovery),
@@ -667,7 +677,12 @@ def create_backup(
         os.replace(temporary_manifest, output_path / MANIFEST_NAME)
         return manifest
     except (BackupError, OSError, sqlite3.Error, tarfile.TarError) as exc:
-        for partial in (temporary_payload, temporary_manifest, payload_path, output_path / MANIFEST_NAME):
+        for partial in (
+            temporary_payload,
+            temporary_manifest,
+            payload_path,
+            output_path / MANIFEST_NAME,
+        ):
             partial.unlink(missing_ok=True)
         if isinstance(exc, BackupError):
             raise

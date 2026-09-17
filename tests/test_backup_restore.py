@@ -107,7 +107,9 @@ class BackupRestoreTests(unittest.TestCase):
             self.assertEqual(manifest["backup_schema_version"], "folio-backup-v2")
             self.assertEqual(manifest["blobs"]["count"], 3)
             verified = verify_backup(
-                backup_path, key_provider=self.key_provider(), expected_tenant_scope={"tenant-a", "tenant-b"}
+                backup_path,
+                key_provider=self.key_provider(),
+                expected_tenant_scope={"tenant-a", "tenant-b"},
             )
             self.assertTrue(verified["verified"])
             self.assertIn("audit_events", verified["database"]["table_counts"])
@@ -161,7 +163,9 @@ class BackupRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             service = FolioLattice(root / "folio.db", root / "blobs")
-            service.create_artifact(tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a")
+            service.create_artifact(
+                tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a"
+            )
             backup_path = root / "backup"
             self.create_fixture_backup(root / "folio.db", root / "blobs", backup_path)
             target_db = root / "restored.db"
@@ -184,7 +188,9 @@ class BackupRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             service = FolioLattice(root / "folio.db", root / "blobs")
-            service.create_artifact(tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a")
+            service.create_artifact(
+                tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a"
+            )
             backup_path = root / "backup"
             self.create_fixture_backup(root / "folio.db", root / "blobs", backup_path)
             target_db = root / "recovered" / "folio.db"
@@ -204,7 +210,9 @@ class BackupRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             service = FolioLattice(root / "folio.db", root / "blobs")
-            service.create_artifact(tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a")
+            service.create_artifact(
+                tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a"
+            )
             backup_path = root / "backup"
             self.create_fixture_backup(root / "folio.db", root / "blobs", backup_path)
             target_db = root / "recovered" / "folio.db"
@@ -212,7 +220,9 @@ class BackupRestoreTests(unittest.TestCase):
             original_replace = os.replace
             calls = 0
 
-            def fail_blob_placement(source: str | bytes | os.PathLike[str], destination: str | bytes | os.PathLike[str]) -> None:
+            def fail_blob_placement(
+                source: str | bytes | os.PathLike[str], destination: str | bytes | os.PathLike[str]
+            ) -> None:
                 nonlocal calls
                 calls += 1
                 if calls == 2:
@@ -239,7 +249,10 @@ class BackupRestoreTests(unittest.TestCase):
                 tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a"
             )
             source_blob = (
-                root / "blobs" / created["version"]["blob_hash"][:2] / created["version"]["blob_hash"]
+                root
+                / "blobs"
+                / created["version"]["blob_hash"][:2]
+                / created["version"]["blob_hash"]
             )
             source_blob.unlink()
             backup_path = root / "backup"
@@ -253,7 +266,9 @@ class BackupRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             service = FolioLattice(root / "folio.db", root / "blobs")
-            service.create_artifact(tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a")
+            service.create_artifact(
+                tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a"
+            )
             backup_path = root / "backup"
             self.create_fixture_backup(root / "folio.db", root / "blobs", backup_path)
             manifest_text = (backup_path / "manifest.json").read_text(encoding="utf-8")

@@ -327,7 +327,9 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
                 )
         with self.service.connect() as db:
             self.assertEqual(
-                db.execute("SELECT legal_hold FROM audit_events WHERE id = ?", (held["id"],)).fetchone()[0],
+                db.execute(
+                    "SELECT legal_hold FROM audit_events WHERE id = ?", (held["id"],)
+                ).fetchone()[0],
                 0,
             )
 
