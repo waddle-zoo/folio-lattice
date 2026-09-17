@@ -37,7 +37,7 @@ class SupplyChainPolicyTests(unittest.TestCase):
             self._run_git(fixture_root, "add", ".")
             self._run_git(fixture_root, "commit", "-qm", "fixture")
             source_sha = self._run_git(fixture_root, "rev-parse", "HEAD")
-            environment = {**os.environ, "SOURCE_SHA": source_sha}
+            environment = {**os.environ, "SOURCE_SHA": source_sha, "PATH": "/usr/bin:/bin"}
 
             passed = subprocess.run(
                 ["bash", str(verifier)],
@@ -119,6 +119,20 @@ class SupplyChainPolicyTests(unittest.TestCase):
         self.assertIn("VCS_REF: ${VCS_REF:?", compose)
         makefile = (ROOT / "Makefile").read_text()
         self.assertIn("build --build-arg VCS_REF", makefile)
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        docker_job = ci.split("\n  docker:", 1)[1]
+        secret_match = re.search(r"FOLIO_RENDERER_CAPABILITY_SECRET:\s*([^\s]+)", docker_job)
+        self.assertIsNotNone(secret_match)
+        assert secret_match is not None
+        self.assertGreaterEqual(len(secret_match.group(1)), 32)
+        for command in (
+            "docker compose config --quiet",
+            "docker compose build",
+            "docker compose up -d --wait",
+            "uv run python tests/test_docker_e2e.py",
+            "docker compose down -v",
+        ):
+            self.assertIn(command, docker_job)
 
     def test_supply_chain_verifier_rejects_tampered_provenance(self) -> None:
         verifier_source = ROOT / "scripts/verify-supply-chain.sh"

@@ -19,8 +19,14 @@ while IFS= read -r action_ref; do
   [[ "$action_ref" =~ @[0-9a-f]{40}$ ]] || fail "workflow action is not pinned: $action_ref"
   action_count=$((action_count + 1))
 done < <(
-  rg -o 'uses:[[:space:]]*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9._-]+' .github/workflows \
-    | sed -E 's/.*uses:[[:space:]]*//'
+  find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -exec \
+    awk '
+      /^[[:space:]-]*uses:[[:space:]]*[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[A-Za-z0-9._-]+([[:space:]]|$)/ {
+        sub(/^[[:space:]-]*uses:[[:space:]]*/, "")
+        sub(/[[:space:]].*$/, "")
+        print
+      }
+    ' {} +
 )
 (( action_count > 0 )) || fail "no workflow actions found"
 

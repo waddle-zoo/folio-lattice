@@ -373,7 +373,9 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
                     "document.querySelector('#create').requestSubmit()"
                 )
                 chrome.wait(
-                    "location.pathname === '/sign-in' && location.search === '?return_to=%2F'"
+                    "location.pathname === '/sign-in' && location.search === '?return_to=%2F' && "
+                    "document.querySelector('#auth-status')?.textContent === "
+                    "'Your session expired. Sign in again.'"
                 )
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#auth-status').textContent"),
