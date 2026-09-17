@@ -3457,7 +3457,7 @@ class InspectionApp:
                     "request_id": request_id,
                 },
                 status_code=413,
-                headers=CONTROL_HEADERS,
+                headers={**CONTROL_HEADERS, "Retry-After": "0"},
             )(scope, receive, send)
         except _ArgumentLimitExceeded:
             await self._api_error(

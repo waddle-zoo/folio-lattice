@@ -162,6 +162,26 @@ class HumanGatewayResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app._concurrency_limiter._total, 0)
         self.assertEqual(len(app._concurrency_limiter._active), 0)
 
+    async def test_oversized_human_body_is_retryable_with_zero_delay(self) -> None:
+        caller = CountingCaller({"ok": True})
+        app = InspectionApp(
+            caller,
+            control_origin=CONTROL_ORIGIN,
+            render_origin=RENDER_ORIGIN,
+            max_request_bytes=100,
+            rate_limits={"tenant": 100, "actor": 100, "ip": 100},
+        )
+        status, headers, response = await invoke(
+            app,
+            "/api/mcp",
+            body=b"x" * 101,
+        )
+        self.assertEqual(status, 413)
+        self.assertEqual(headers["retry-after"], "0")
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertTrue(json.loads(response)["request_id"])
+        self.assertEqual(caller.calls, 0)
+
     async def test_rate_is_tenant_isolated_and_retryable(self) -> None:
         caller_a = CountingCaller({"ok": "a"})
         app_a = self.make_app(
