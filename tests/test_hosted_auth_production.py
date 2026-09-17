@@ -202,16 +202,26 @@ class HostedAuthProductionTests(unittest.TestCase):
                             break
                         try:
                             status, health = _request_json(f"{base_url}/readyz")
-                            if status == 200 and isinstance(health, dict) and health.get("ready"):
+                            if (
+                                status in {200, 503}
+                                and isinstance(health, dict)
+                                and "ready" in health
+                            ):
                                 break
                         except OSError:
                             pass
                         time.sleep(0.05)
                     else:
                         health = None
-                    if not isinstance(health, dict) or not health.get("ready"):
+                    if not isinstance(health, dict):
                         logs = _stop(process)
-                        raise AssertionError(f"hosted product did not become ready: {logs}")
+                        raise AssertionError(f"hosted product did not report readiness: {logs}")
+                    self.assertEqual(status, 503)
+                    self.assertFalse(health["ready"])
+                    self.assertFalse(health["dependencies"]["backup_operations"]["ready"])
+                    metrics_status, metrics = _request_json(f"{base_url}/metrics")
+                    self.assertEqual(metrics_status, 200)
+                    self.assertEqual(metrics["backup_ready"], 0)
 
                     now = int(time.time())
                     token = jwt.encode(
@@ -247,6 +257,9 @@ class HostedAuthProductionTests(unittest.TestCase):
                         "status": "passed",
                         "product_process": True,
                         "hosted_startup": health["authentication"] == "oidc-bearer",
+                        "hosted_backup_fail_closed": (
+                            not health["ready"] and metrics["backup_ready"] == 0
+                        ),
                         "membership_actor_binding": me["actor_id"] == "membership-actor",
                         "v1_me_status": status,
                         "v1_me_tenant_id": me["tenant_id"],

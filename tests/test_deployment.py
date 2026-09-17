@@ -205,6 +205,7 @@ class DeploymentTests(unittest.TestCase):
                 "identity",
             ):
                 self.assertTrue(readiness["dependencies"][dependency]["ready"])
+            self.assertNotIn("backup_operations", readiness["dependencies"])
             self.assertEqual(headers["strict-transport-security"], "max-age=123; includeSubDomains")
 
             renderer = RendererApp(

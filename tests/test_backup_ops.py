@@ -226,6 +226,33 @@ class BackupOperationsTests(unittest.TestCase):
         self.assertEqual(status["metrics"]["backup_key_custody_ready"], 0)
         self.assertFalse(status["dependencies"]["key_custody"]["ready"])
 
+    def test_unrequired_hosted_posture_accepts_explicit_local_adapters(self) -> None:
+        key = ExternalKeyCustody(
+            KeyCustodyStatus(
+                provider="external-kms",
+                ready=True,
+                hosted=False,
+                active_versions={"backup": "v2", "recovery": "v2"},
+                accepted_versions={"backup": ("v2",), "recovery": ("v2",)},
+            )
+        )
+        store = ExternalWormStore(self.record())
+        store.status = BackupStoreStatus(
+            provider="external-worm",
+            ready=True,
+            hosted=False,
+            immutable=True,
+            overwrite_protected=True,
+            delete_protected=True,
+        )
+        config = BackupOperationsConfig(
+            **{**self.config().__dict__, "require_hosted": False},
+        )
+        status = BackupOperationsMonitor(config, key, store).status(self.checked_at)
+        self.assertTrue(status["ready"])
+        self.assertEqual(status["metrics"]["backup_store_ready"], 1)
+        self.assertEqual(status["metrics"]["backup_key_custody_ready"], 1)
+
     def test_config_requires_external_adapters_and_explicit_schedule(self) -> None:
         values = {
             "FOLIO_BACKUP_INTERVAL_SECONDS": "900",
