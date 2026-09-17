@@ -143,3 +143,22 @@ The capability/ACL/expiry/replay and URL-log assertions are covered by the
 full `tests/test_e2e.py`, `tests/test_web.py`, and repository run above. The
 renderer has no database/blob mount or corresponding private-storage
 environment, while the folio service retains only its `/data` volume.
+
+## Published-ref QA status
+
+A fresh detached QA worktree was created from the published evidence object
+`81cecfc1ed06d17051a9ba2cfe77e8f29e8634d8` (tree
+`f5e78c4e25f01a29ab578781ec645d04812270c6`) at
+`/tmp/folio-g4-qa-review.IJRztc`. It was clean before testing. The exact
+command was:
+
+```text
+PATH=/Users/brandonsovran/.local/bin:$PATH FOLIO_BROWSER='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' make check
+```
+
+Result: Ruff, format, and mypy passed; `233 passed, 8 skipped in 89.60s`;
+coverage `80.61%`; process status `0`.
+
+This is a fresh published-object verification, not mayor/QA acceptance.
+Independent QA review and promotion decision remain requested; G4 stays
+blocked until that review is acknowledged.
