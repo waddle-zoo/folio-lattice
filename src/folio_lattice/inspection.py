@@ -283,6 +283,7 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .reader-card .state-pill { background: var(--blue-soft); color: var(--blue); }
 .reader-card pre { min-height: 10rem; max-height: 34rem; margin-top: 0; background: #fbfcfe; font: .9rem/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .document-content { min-height: 10rem; color: var(--ink); font-size: 1rem; line-height: 1.75; }
+#readable-content { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .document-content h1, .document-content h2, .document-content h3 { margin: 1.25rem 0 .45rem; }
 .document-content h1:first-child, .document-content h2:first-child, .document-content h3:first-child { margin-top: 0; }
 .document-content p { margin: 0 0 .9rem; white-space: pre-wrap; }
