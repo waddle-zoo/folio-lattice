@@ -102,7 +102,7 @@ def main() -> None:
     persisted = asyncio.run(read_artifact(base_url, created["artifact_id"]))
     assert persisted["version"]["id"] == created["version_id"]
     assert persisted["version"]["blob_hash"] == created["blob_hash"]
-    assert persisted["text"] == "Hyperset revised evidence source graph"
+    assert persisted["text"] == f"Hyperset revised evidence source graph {created['marker']}"
     inspected = post_json(
         f"{base_url}/api/mcp",
         {"tool": "artifact_read", "arguments": {"artifact_id": created["artifact_id"]}},
@@ -126,7 +126,7 @@ def main() -> None:
             "artifact_id": created["artifact_id"],
             "attachment": "folio-lattice",
             "tool": "artifact_search",
-            "arguments": {"query": "Hyperset"},
+            "arguments": {"query": created["marker"]},
         },
         base_url,
     )

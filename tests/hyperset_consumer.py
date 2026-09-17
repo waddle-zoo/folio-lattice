@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import os
+import uuid
 from typing import Any
 
 from mcp import Client
@@ -22,14 +23,17 @@ async def _tool(client: Client, name: str, arguments: dict[str, Any]) -> Any:
 
 
 async def exercise(base_url: str) -> dict[str, Any]:
+    marker = f"hypersetmarker{uuid.uuid4().hex}"
+    source_text = f"Hyperset evidence source graph {marker}"
+    updated_text = f"Hyperset revised evidence source graph {marker}"
     async with Client(f"{base_url.rstrip('/')}/mcp", raise_exceptions=True) as client:
         source = await _tool(
             client,
             "artifact_create",
             {
-                "name": "hyperset-evidence.md",
+                "name": f"hyperset-evidence-{marker}.md",
                 "media_type": "text/markdown",
-                "content_base64": base64.b64encode(b"Hyperset evidence source graph").decode(),
+                "content_base64": base64.b64encode(source_text.encode()).decode(),
                 "reason": "capture evaluation evidence",
                 "source_context": {"system": "hyperset", "evaluation": "fixture-v0"},
             },
@@ -38,9 +42,11 @@ async def exercise(base_url: str) -> dict[str, Any]:
             client,
             "artifact_create",
             {
-                "name": "hyperset-report.md",
+                "name": f"hyperset-report-{marker}.md",
                 "media_type": "text/markdown",
-                "content_base64": base64.b64encode(b"Hyperset report target").decode(),
+                "content_base64": base64.b64encode(
+                    f"Hyperset report target {marker}".encode()
+                ).decode(),
                 "reason": "capture evaluation report",
                 "source_context": {"system": "hyperset", "evaluation": "fixture-v0"},
             },
@@ -53,9 +59,7 @@ async def exercise(base_url: str) -> dict[str, Any]:
             {
                 "artifact_id": source_id,
                 "parent_version_id": first_version_id,
-                "content_base64": base64.b64encode(
-                    b"Hyperset revised evidence source graph"
-                ).decode(),
+                "content_base64": base64.b64encode(updated_text.encode()).decode(),
                 "reason": "evaluation evidence revised",
                 "source_context": {"system": "hyperset", "run_id": "fixture-run"},
             },
@@ -70,19 +74,19 @@ async def exercise(base_url: str) -> dict[str, Any]:
                 "metadata": {"claim": "fixture-claim"},
             },
         )
-        search = await _tool(client, "artifact_search", {"query": "revised"})
+        search = await _tool(client, "artifact_search", {"query": marker})
         traversal = await _tool(client, "graph_traverse", {"start_artifact_id": source_id})
         versions = await _tool(client, "artifact_versions", {"artifact_id": source_id})
         read = await _tool(client, "artifact_read", {"artifact_id": source_id})
         chunk = await _tool(client, "artifact_read_chunk", {"chunk_id": search[0]["chunk_id"]})
-        grep = await _tool(client, "artifact_grep", {"pattern": "source graph"})
+        grep = await _tool(client, "artifact_grep", {"pattern": marker})
 
         assert updated["parent_version_id"] == first_version_id
         assert updated["actor"] == "hyperset"
         assert edge["target_artifact_id"] == target["artifact"]["id"]
         assert traversal[0]["target_artifact_id"] == target["artifact"]["id"]
         assert len(versions) == 2
-        assert read["text"] == "Hyperset revised evidence source graph"
+        assert read["text"] == updated_text
         assert chunk["offset_unit"] == "unicode_code_points"
         assert grep[0]["offset_unit"] == "unicode_code_points"
         return {
@@ -90,6 +94,7 @@ async def exercise(base_url: str) -> dict[str, Any]:
             "version_id": updated["id"],
             "blob_hash": updated["blob_hash"],
             "tenant_id": source["artifact"]["tenant_id"],
+            "marker": marker,
         }
 
 
