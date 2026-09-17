@@ -200,6 +200,10 @@ class HttpE2ETests(unittest.TestCase):
             }
             control = start_server(environment, "http", control_port)
             renderer: subprocess.Popen[bytes] | None = None
+            renderer_logs = ""
+            control_logs = ""
+            replay_token: str | None = None
+            expired_token: str | None = None
             try:
                 wait_ready(control_origin, control)
                 owner = create(control_origin, "owner.css", b"OWNER_MARKER", "text/css")
@@ -376,8 +380,12 @@ class HttpE2ETests(unittest.TestCase):
                         asyncio.run(expired_reader.call("artifact_read", expiry_arguments))
             finally:
                 if renderer is not None:
-                    stop_server(renderer)
-                stop_server(control)
+                    renderer_logs = stop_server(renderer)
+                control_logs = stop_server(control)
+            for token in (replay_token, expired_token):
+                if token is not None:
+                    self.assertNotIn(token, renderer_logs)
+                    self.assertNotIn(token, control_logs)
 
     def test_http_and_black_box_hyperset_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
