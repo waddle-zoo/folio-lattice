@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
@@ -14,6 +16,7 @@ from folio_lattice.backup_ops import (
     StoredBackup,
     UnavailableBackupStore,
     UnavailableKeyCustody,
+    build_backup_operations,
 )
 
 
@@ -30,6 +33,22 @@ class ExternalKeyCustody:
 
     def readiness(self) -> KeyCustodyStatus:
         return self.status
+
+    def manifest_auth_key(self) -> bytes:
+        return b"manifest-key"
+
+    def backup_key(self, key_ref: str) -> bytes:
+        return key_ref.encode()
+
+    def recovery_key(self, key_ref: str) -> bytes:
+        return key_ref.encode()
+
+    def key_version(self, purpose: str, key_ref: str) -> str:
+        del purpose, key_ref
+        return "v2"
+
+    def manifest_key_version(self) -> str:
+        return "v2"
 
 
 class ExternalWormStore:
@@ -270,6 +289,49 @@ class BackupOperationsTests(unittest.TestCase):
         with patch.dict(os.environ, values, clear=True):
             with self.assertRaisesRegex(BackupOperationsError, "RPO"):
                 BackupOperationsConfig.from_env()
+
+    def test_runtime_factory_requires_durable_provider_pair(self) -> None:
+        values = {
+            "FOLIO_BACKUP_INTERVAL_SECONDS": "900",
+            "FOLIO_BACKUP_RPO_SECONDS": "3600",
+            "FOLIO_BACKUP_MAX_AGE_SECONDS": "1800",
+            "FOLIO_BACKUP_KEY_ADAPTER": "external-kms",
+            "FOLIO_BACKUP_STORE_ADAPTER": "external-worm",
+        }
+        self.assertIsNone(build_backup_operations(values))
+
+        module = types.ModuleType("test_backup_adapter_factory")
+
+        def factory(config: BackupOperationsConfig):
+            self.assertEqual(config.key_adapter_id, "external-kms")
+            return ExternalKeyCustody(), ExternalWormStore(self.record())
+
+        module.factory = factory  # type: ignore[attr-defined]
+        old_module = sys.modules.get(module.__name__)
+        sys.modules[module.__name__] = module
+        try:
+            monitor = build_backup_operations(
+                {**values, "FOLIO_BACKUP_ADAPTER_FACTORY": f"{module.__name__}:factory"}
+            )
+            self.assertIsNotNone(monitor)
+            assert monitor is not None
+            self.assertTrue(monitor.status(self.checked_at)["ready"])
+        finally:
+            if old_module is None:
+                sys.modules.pop(module.__name__, None)
+            else:
+                sys.modules[module.__name__] = old_module
+
+    def test_runtime_factory_rejects_incomplete_or_invalid_adapter(self) -> None:
+        values = {
+            "FOLIO_BACKUP_INTERVAL_SECONDS": "900",
+            "FOLIO_BACKUP_RPO_SECONDS": "3600",
+            "FOLIO_BACKUP_MAX_AGE_SECONDS": "1800",
+            "FOLIO_BACKUP_KEY_ADAPTER": "external-kms",
+            "FOLIO_BACKUP_STORE_ADAPTER": "external-worm",
+            "FOLIO_BACKUP_ADAPTER_FACTORY": "os:system",
+        }
+        self.assertIsNone(build_backup_operations(values))
 
 
 if __name__ == "__main__":

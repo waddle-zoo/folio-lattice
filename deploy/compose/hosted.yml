@@ -1,0 +1,98 @@
+services:
+  folio:
+    build:
+      context: ../..
+      args:
+        VCS_REF: ${VCS_REF:?VCS_REF is required for an immutable image revision}
+    user: "10001:10001"
+    ports:
+      - "${FOLIO_HOST_PORT:?FOLIO_HOST_PORT is required}:8000"
+    environment:
+      FOLIO_DB_PATH: /data/folio.db
+      FOLIO_BLOB_ROOT: /data/blobs
+      FOLIO_DEPLOYMENT_MODE: hosted
+      FOLIO_MCP_URL: http://folio:8000/mcp
+      FOLIO_CONTROL_ORIGIN: ${FOLIO_CONTROL_ORIGIN:?set the hosted control origin}
+      FOLIO_RENDER_ORIGIN: ${FOLIO_RENDER_ORIGIN:?set the hosted renderer origin}
+      FOLIO_OIDC_ISSUER: ${FOLIO_OIDC_ISSUER:?set the hosted OIDC issuer}
+      FOLIO_OIDC_AUDIENCE: ${FOLIO_OIDC_AUDIENCE:?set the hosted OIDC audience}
+      FOLIO_OIDC_JWKS_URL: ${FOLIO_OIDC_JWKS_URL:?set the hosted OIDC JWKS URL}
+      FOLIO_OIDC_MEMBERSHIPS_FILE: /run/secrets/oidc_memberships
+      FOLIO_BACKUP_INTERVAL_SECONDS: ${FOLIO_BACKUP_INTERVAL_SECONDS:?set backup interval}
+      FOLIO_BACKUP_RPO_SECONDS: ${FOLIO_BACKUP_RPO_SECONDS:?set backup RPO}
+      FOLIO_BACKUP_MAX_AGE_SECONDS: ${FOLIO_BACKUP_MAX_AGE_SECONDS:?set backup max age}
+      FOLIO_BACKUP_KEY_ADAPTER: ${FOLIO_BACKUP_KEY_ADAPTER:?set external key adapter}
+      FOLIO_BACKUP_STORE_ADAPTER: ${FOLIO_BACKUP_STORE_ADAPTER:?set external backup store}
+      FOLIO_BACKUP_KEY_VERSION: ${FOLIO_BACKUP_KEY_VERSION:?set active backup key version}
+      FOLIO_RECOVERY_KEY_VERSION: ${FOLIO_RECOVERY_KEY_VERSION:?set active recovery key version}
+      FOLIO_BACKUP_ADAPTER_FACTORY: ${FOLIO_BACKUP_ADAPTER_FACTORY:?set adapter factory module:function}
+      FOLIO_RENDERER_CAPABILITY_SECRET: ${FOLIO_RENDERER_CAPABILITY_SECRET:?set renderer capability secret}
+      FOLIO_SESSION_COOKIE_SECURE: "true"
+    volumes:
+      - folio_hosted_data:/data
+    secrets:
+      - oidc_memberships
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - control
+      - renderer
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  renderer:
+    build:
+      context: ../..
+      args:
+        VCS_REF: ${VCS_REF:?VCS_REF is required for an immutable image revision}
+    user: "10001:10001"
+    command: ["python", "-m", "folio_lattice.server", "--transport", "renderer", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      FOLIO_DEPLOYMENT_MODE: local
+      FOLIO_MCP_URL: http://folio:8000/mcp
+      FOLIO_TENANT_ID: ${FOLIO_RENDERER_TENANT_ID:?set renderer service tenant}
+      FOLIO_ACTOR: ${FOLIO_RENDERER_ACTOR:?set renderer service actor}
+      FOLIO_CONTROL_ORIGIN: ${FOLIO_CONTROL_ORIGIN:?set the hosted control origin}
+      FOLIO_RENDERER_CAPABILITY_SECRET: ${FOLIO_RENDERER_CAPABILITY_SECRET:?set renderer capability secret}
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - renderer
+    depends_on:
+      folio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/readyz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+networks:
+  control:
+    internal: true
+  renderer:
+    internal: true
+
+volumes:
+  folio_hosted_data:
+
+secrets:
+  oidc_memberships:
+    file: ${FOLIO_OIDC_MEMBERSHIPS_FILE:?set memberships file}

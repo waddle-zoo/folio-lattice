@@ -9,6 +9,7 @@ adapters that can prove their external posture; otherwise readiness is false.
 
 from __future__ import annotations
 
+import importlib
 import os
 import re
 from collections.abc import Mapping
@@ -214,6 +215,58 @@ class BackupOperationsConfig:
         )
         result.validate()
         return result
+
+
+_FACTORY_REFERENCE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_]*)*$"
+)
+
+
+def build_backup_operations(
+    environ: Mapping[str, str] | None = None,
+) -> BackupOperationsMonitor | None:
+    """Load explicitly injected hosted adapters, or return blocked state.
+
+    The application image owns no vendor SDK or durable-provider credentials.
+    A deployment supplies a ``module:factory`` reference whose result is the
+    ``(key_custody, immutable_store)`` pair. Missing or malformed wiring stays
+    fail-closed so liveness can remain observable while readiness remains 503.
+    """
+
+    env = os.environ if environ is None else environ
+    try:
+        config = BackupOperationsConfig.from_env(env)
+    except BackupOperationsError:
+        return None
+    reference = env.get("FOLIO_BACKUP_ADAPTER_FACTORY")
+    if reference is None or _FACTORY_REFERENCE.fullmatch(reference.strip()) is None:
+        return None
+    module_name, attribute_name = reference.strip().split(":", 1)
+    try:
+        factory = getattr(importlib.import_module(module_name), attribute_name)
+        if not callable(factory):
+            return None
+        adapters = factory(config)
+        if not isinstance(adapters, tuple) or len(adapters) != 2:
+            return None
+        key_custody, store = adapters
+        required_key_methods = (
+            "manifest_auth_key",
+            "backup_key",
+            "recovery_key",
+            "key_version",
+            "manifest_key_version",
+            "readiness",
+        )
+        required_store_methods = ("readiness", "latest", "inspect")
+        if not all(callable(getattr(key_custody, name, None)) for name in required_key_methods):
+            return None
+        if not all(callable(getattr(store, name, None)) for name in required_store_methods):
+            return None
+        return BackupOperationsMonitor(config, key_custody, store)
+    except Exception:
+        return None
 
 
 class UnavailableKeyCustody:

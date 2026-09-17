@@ -41,7 +41,7 @@ from .auth import (
     set_request_capability,
     set_request_principal,
 )
-from .backup_ops import BackupOperationsMonitor
+from .backup_ops import BackupOperationsMonitor, build_backup_operations
 from .bridge import AttachedMcpBridge
 from .identity import (
     DEFAULT_IDENTITY_MAX_RESPONSE_BYTES,
@@ -1771,6 +1771,7 @@ def build_runtime(settings: Settings) -> tuple[FolioLattice, Any, OidcAuthentica
 def run_http(host: str, port: int) -> None:
     settings = Settings.from_env()
     service, mcp, authenticator = build_runtime(settings)
+    backup_operations = build_backup_operations() if settings.deployment_mode == "hosted" else None
     session_store = None
     identity_adapter = None
     auth_redirect_uri = None
@@ -1864,6 +1865,7 @@ def run_http(host: str, port: int) -> None:
             config_ready=True,
             local_tenant_id=settings.tenant_id if settings.deployment_mode == "local" else None,
             local_actor_id=settings.actor if settings.deployment_mode == "local" else None,
+            backup_operations=backup_operations,
             principal_relay=principal_relay,
         ),
         host=host,

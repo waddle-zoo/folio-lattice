@@ -24,6 +24,13 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from starlette.responses import JSONResponse
 
+from folio_lattice.backup_ops import (
+    BackupOperationsConfig,
+    BackupOperationsMonitor,
+    BackupStoreStatus,
+    KeyCustodyStatus,
+    StoredBackup,
+)
 from folio_lattice.renderer import RendererApp
 from folio_lattice.server import FolioHttpApp, Settings
 from folio_lattice.service import FolioLattice
@@ -44,6 +51,65 @@ class ReadyCaller:
 class ReadyAuthenticator:
     def ready(self) -> bool:
         return True
+
+
+class ReadyBackupKeyCustody:
+    def readiness(self) -> KeyCustodyStatus:
+        return KeyCustodyStatus(
+            provider="external-kms",
+            ready=True,
+            hosted=True,
+            active_versions={"backup": "v1", "recovery": "v1"},
+            accepted_versions={"backup": ("v1",), "recovery": ("v1",)},
+        )
+
+    def manifest_auth_key(self) -> bytes:
+        return b"manifest-key"
+
+    def backup_key(self, key_ref: str) -> bytes:
+        return key_ref.encode()
+
+    def recovery_key(self, key_ref: str) -> bytes:
+        return key_ref.encode()
+
+    def key_version(self, purpose: str, key_ref: str) -> str:
+        del purpose, key_ref
+        return "v1"
+
+    def manifest_key_version(self) -> str:
+        return "v1"
+
+
+class ReadyBackupStore:
+    def __init__(self) -> None:
+        self.status = BackupStoreStatus(
+            provider="external-worm",
+            ready=True,
+            hosted=True,
+            immutable=True,
+            overwrite_protected=True,
+            delete_protected=True,
+        )
+
+    def readiness(self) -> BackupStoreStatus:
+        return self.status
+
+    def latest(self) -> StoredBackup:
+        return StoredBackup(
+            backup_id="backup_0123456789abcdef0123456789abcdef",
+            created_at=datetime.now(UTC) - timedelta(seconds=1),
+            size_bytes=1,
+            sha256="a" * 64,
+            backup_key_version="v1",
+            recovery_key_version="v1",
+            retention_until=datetime.now(UTC) + timedelta(days=1),
+        )
+
+    def inspect(self, backup_id: str) -> StoredBackup:
+        record = self.latest()
+        if record.backup_id != backup_id:
+            raise RuntimeError("unexpected backup")
+        return record
 
 
 async def call(app, path: str, *, scheme: str = "http") -> tuple[int, dict[str, str], bytes]:
@@ -112,6 +178,16 @@ def write_certificate(root: Path) -> tuple[Path, Path]:
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_hosted_compose_isolated_renderer_has_no_storage_volume(self) -> None:
+        compose = (Path(__file__).parents[1] / "deploy/compose/hosted.yml").read_text()
+        renderer = compose.split("  renderer:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+        folio = compose.split("  folio:\n", 1)[1].split("\n  renderer:\n", 1)[0]
+        self.assertNotIn("\n    volumes:", renderer)
+        self.assertIn("\n      - renderer\n", renderer)
+        self.assertNotIn("\n    ports:", renderer)
+        self.assertIn("\n      - control\n      - renderer\n", folio)
+        self.assertIn("  renderer:\n    internal: true", compose)
+
     def test_hostile_configuration_fails_closed(self) -> None:
         cases = (
             {"FOLIO_DB_PATH": ""},
@@ -259,6 +335,48 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(metrics["backup_age_seconds"], -1)
             self.assertEqual(metrics["backup_store_ready"], 0)
             self.assertEqual(metrics["backup_key_custody_ready"], 0)
+
+    def test_hosted_backup_monitor_can_make_readiness_ready_only_with_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = FolioLattice(root / "folio.db", root / "blobs")
+            config = BackupOperationsConfig(
+                schedule_interval_seconds=900,
+                rpo_seconds=3600,
+                max_backup_age_seconds=1800,
+                key_adapter_id="external-kms",
+                store_adapter_id="external-worm",
+            )
+            monitor = BackupOperationsMonitor(config, ReadyBackupKeyCustody(), ReadyBackupStore())
+            app = FolioHttpApp(
+                unused_app,
+                service,
+                unused_app,
+                deployment_mode="hosted",
+                authenticator=ReadyAuthenticator(),
+                backup_operations=monitor,
+            )
+            status, _, body = asyncio.run(call(app, "/readyz"))
+            self.assertEqual(status, 200)
+            readiness = json.loads(body)
+            self.assertTrue(readiness["ready"])
+            self.assertTrue(readiness["dependencies"]["backup_operations"]["ready"])
+
+            unavailable = BackupOperationsMonitor(
+                config, ReadyBackupKeyCustody(), ReadyBackupStore()
+            )
+            unavailable.store.status = BackupStoreStatus(
+                provider="external-worm",
+                ready=False,
+                hosted=True,
+                immutable=True,
+                overwrite_protected=True,
+                delete_protected=True,
+            )
+            app.backup_operations = unavailable
+            status, _, body = asyncio.run(call(app, "/readyz"))
+            self.assertEqual(status, 503)
+            self.assertFalse(json.loads(body)["ready"])
 
     def test_upgrade_is_repeatable_and_rollback_copy_preserves_blob(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
