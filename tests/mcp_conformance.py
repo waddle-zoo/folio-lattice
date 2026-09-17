@@ -568,6 +568,7 @@ async def _flow(
     searched = await call("artifact_search", {"query": "conformance source"})
     grepped = await call("artifact_grep", {"pattern": "conformance source"})
     filename_search = await call("artifact_search", {"query": "agent-launch-board.html"})
+    media_type_search = await call("artifact_search", {"query": "text/html"})
     filename_grep = await call("artifact_grep", {"pattern": "agent-launch-board.html"})
     named_assets = await call("artifact_list", {"name": "agent-launch-board.html", "limit": 1})
     typed_assets = await call("artifact_list", {"media_type": "text/html", "limit": 1})
@@ -577,6 +578,21 @@ async def _flow(
             "source_artifact_id": source_id,
             "target_artifact_id": target_id,
             "edge_type": "references",
+        },
+    )
+    await call(
+        "graph_link",
+        {
+            "source_artifact_id": source_id,
+            "target_artifact_id": web_asset["artifact"]["id"],
+            "edge_type": "publishes",
+        },
+    )
+    scoped_filename_search = await call(
+        "artifact_search",
+        {
+            "query": "agent-launch-board.html",
+            "graph_root_artifact_id": source_id,
         },
     )
     traversed = await call("graph_traverse", {"start_artifact_id": source_id})
@@ -768,15 +784,44 @@ async def _flow(
         or len({item["id"] for item in first_page + second_page}) != 3
     ):
         raise ConformanceError("artifact list continuation mismatch")
-    if filename_search or filename_grep:
-        raise ConformanceError("body search unexpectedly indexed artifact metadata")
+    if filename_grep:
+        raise ConformanceError("literal body grep unexpectedly indexed artifact metadata")
+    if [item["artifact_id"] for item in filename_search] != [web_asset["artifact"]["id"]]:
+        raise ConformanceError("unified filename search mismatch")
+    filename_result = filename_search[0]
+    if (
+        filename_result["version_id"] != web_asset["version"]["id"]
+        or filename_result["media_type"] != "text/html"
+        or "name" not in filename_result["match_kinds"]
+        or filename_result["path"] != "agent-launch-board.html"
+        or filename_result["graph_context"]["scoped"]
+    ):
+        raise ConformanceError("unified filename result context mismatch")
+    if [item["artifact_id"] for item in media_type_search] != [
+        web_asset["artifact"]["id"]
+    ] or "media_type" not in media_type_search[0]["match_kinds"]:
+        raise ConformanceError("unified media-type search mismatch")
+    if [item["artifact_id"] for item in scoped_filename_search] != [web_asset["artifact"]["id"]]:
+        raise ConformanceError("graph-scoped filename search mismatch")
+    if (
+        scoped_filename_search[0]["graph_context"]["root_artifact_id"] != source_id
+        or not scoped_filename_search[0]["graph_context"]["scoped"]
+    ):
+        raise ConformanceError("graph-scoped filename context mismatch")
     if [item["id"] for item in named_assets] != [web_asset["artifact"]["id"]] or [
         item["id"] for item in typed_assets
     ] != [web_asset["artifact"]["id"]]:
         raise ConformanceError("artifact filename/media-type discovery mismatch")
     if not searched or not grepped or edge["target_artifact_id"] != target_id:
         raise ConformanceError("search/grep/link mismatch")
-    if not traversed or {item["id"] for item in component} != {source_id, target_id}:
+    if {item["target_artifact_id"] for item in traversed} != {
+        target_id,
+        web_asset["artifact"]["id"],
+    } or {item["id"] for item in component} != {
+        source_id,
+        target_id,
+        web_asset["artifact"]["id"],
+    }:
         raise ConformanceError("graph traversal/component mismatch")
     if written["parent_version_id"] != version_id or len(versions) != 2:
         raise ConformanceError("write/version mismatch")
@@ -829,6 +874,7 @@ async def _flow(
         "grep_count": len(grepped),
         "filename_discovery": True,
         "media_type_discovery": True,
+        "graph_scoped_filename_discovery": True,
         "traverse_count": len(traversed),
         "component_count": len(component),
         "version_count": len(versions),
