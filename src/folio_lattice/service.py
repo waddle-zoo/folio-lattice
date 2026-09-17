@@ -35,6 +35,8 @@ MAX_MEDIA_TYPE_LENGTH = 255
 MAX_REASON_LENGTH = 2_000
 MAX_CONTEXT_BYTES = 32 * 1024
 MAX_QUERY_LENGTH = 500
+ARTIFACT_LIST_CURSOR_SEPARATOR = "|"
+MAX_ARTIFACT_LIST_CURSOR_LENGTH = 512
 MAX_EDGE_TYPE_LENGTH = 100
 MAX_GRAPH_COMPONENT_NODES = 500
 MAX_EXTERNAL_ENDPOINT_LENGTH = 4_096
@@ -61,6 +63,28 @@ def utc_now() -> str:
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _parse_artifact_list_cursor(cursor: object) -> tuple[str, str]:
+    if not isinstance(cursor, str) or len(cursor) > MAX_ARTIFACT_LIST_CURSOR_LENGTH:
+        raise FolioError("invalid artifact_list cursor")
+    timestamp, separator, artifact_id = cursor.partition(ARTIFACT_LIST_CURSOR_SEPARATOR)
+    if (
+        not separator
+        or not timestamp
+        or not artifact_id
+        or ARTIFACT_LIST_CURSOR_SEPARATOR in artifact_id
+    ):
+        raise FolioError("invalid artifact_list cursor")
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError as exc:
+        raise FolioError("invalid artifact_list cursor") from exc
+    if parsed.tzinfo is None:
+        raise FolioError("invalid artifact_list cursor")
+    if not artifact_id.strip() or len(artifact_id) > MAX_NAME_LENGTH:
+        raise FolioError("invalid artifact_list cursor")
+    return timestamp, artifact_id
 
 
 class FolioError(Exception):
@@ -508,11 +532,26 @@ class FolioLattice:
         actor: str | None = None,
         name: str | None = None,
         media_type: str | None = None,
+        cursor: str | None = None,
     ) -> list[dict[str, Any]]:
         if name is not None:
             self._validate_text("name", name, MAX_NAME_LENGTH)
         if media_type is not None:
             self._validate_text("media_type", media_type, MAX_MEDIA_TYPE_LENGTH)
+        cursor_params: tuple[str, ...] = ()
+        cursor_sql = ""
+        if cursor is not None:
+            cursor_timestamp, cursor_artifact_id = _parse_artifact_list_cursor(cursor)
+            cursor_sql = """
+                      AND (
+                          COALESCE(v.created_at, a.created_at) < ?
+                          OR (
+                              COALESCE(v.created_at, a.created_at) = ?
+                              AND a.id < ?
+                          )
+                      )
+            """
+            cursor_params = (cursor_timestamp, cursor_timestamp, cursor_artifact_id)
         with self.connect() as db:
             access_sql, access_params = self._access_clause(actor, "read")
             rows = db.execute(
@@ -527,6 +566,7 @@ class FolioLattice:
                   ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
                 WHERE a.tenant_id = ? AND """
                 + access_sql
+                + cursor_sql
                 + """
                   AND (? IS NULL OR a.name = ?)
                   AND (? IS NULL OR a.media_type = ?)
@@ -536,6 +576,7 @@ class FolioLattice:
                 (
                     tenant_id,
                     *access_params,
+                    *cursor_params,
                     name,
                     name,
                     media_type,

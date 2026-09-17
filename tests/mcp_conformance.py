@@ -557,6 +557,9 @@ async def _flow(
     read = await call("artifact_read", {"artifact_id": source_id})
     chunk = await call("artifact_read_chunk", {"chunk_id": read["chunks"][0]["id"]})
     listed = await call("artifact_list", {})
+    first_page = await call("artifact_list", {"limit": 2})
+    page_cursor = f"{first_page[-1]['updated_at']}|{first_page[-1]['id']}"
+    second_page = await call("artifact_list", {"limit": 2, "cursor": page_cursor})
     searched = await call("artifact_search", {"query": "conformance source"})
     grepped = await call("artifact_grep", {"pattern": "conformance source"})
     filename_search = await call("artifact_search", {"query": "agent-launch-board.html"})
@@ -741,6 +744,11 @@ async def _flow(
             raise ConformanceError("approved upstream transcript leaked secret material")
     if len(listed) != 3 or chunk["content"] != "conformance source marker":
         raise ConformanceError("artifact create/read/chunk/list mismatch")
+    if (
+        len(first_page + second_page) != 3
+        or len({item["id"] for item in first_page + second_page}) != 3
+    ):
+        raise ConformanceError("artifact list continuation mismatch")
     if filename_search or filename_grep:
         raise ConformanceError("body search unexpectedly indexed artifact metadata")
     if [item["id"] for item in named_assets] != [web_asset["artifact"]["id"]] or [
@@ -776,6 +784,7 @@ async def _flow(
         raise ConformanceError("external MCP registry/revoke/audit mismatch")
     return {
         "artifact_count": len(listed),
+        "artifact_list_continuation": True,
         "search_count": len(searched),
         "grep_count": len(grepped),
         "filename_discovery": True,

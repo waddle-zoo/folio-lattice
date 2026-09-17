@@ -30,7 +30,9 @@ operation.
 Metadata is separate from body search. `artifact_list` accepts optional exact
 `name` and `media_type` filters, applied before its 1–100 result bound.
 `artifact_search` and `artifact_grep` intentionally do not index filenames or
-media types.
+media types. To continue a full page, pass the final item's
+`<updated_at>|<id>` as `cursor` while retaining the same filters. The response
+remains a list; an empty or short page ends enumeration.
 
 ## Canonical create → link → discover → search → read → render flow
 

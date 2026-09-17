@@ -147,13 +147,15 @@ def build_mcp_server(
     @server.tool(
         description=(
             "List recent artifacts available to the current actor, optionally filtered by "
-            "exact filename and media type."
+            "exact filename and media type. Continue after a prior page with its final "
+            "item's '<updated_at>|<id>' cursor."
         )
     )
     def artifact_list(
         limit: Annotated[int, Field(ge=1, le=100)] = 20,
         name: Annotated[str | None, Field(min_length=1, max_length=255)] = None,
         media_type: Annotated[str | None, Field(min_length=1, max_length=255)] = None,
+        cursor: Annotated[str | None, Field(max_length=512)] = None,
     ) -> list[dict[str, Any]]:
         request_tenant, request_actor = identity(TOOL_SCOPES["artifact_list"])
         return _tool_errors(
@@ -163,6 +165,7 @@ def build_mcp_server(
                 actor=policy_actor(request_actor),
                 name=name,
                 media_type=media_type,
+                cursor=cursor,
             )
         )
 

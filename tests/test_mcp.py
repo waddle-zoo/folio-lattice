@@ -38,7 +38,7 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             list_tool = next(tool for tool in listed.tools if tool.name == "artifact_list")
             self.assertEqual(
                 set(list_tool.input_schema.get("properties", {})),
-                {"limit", "name", "media_type"},
+                {"limit", "name", "media_type", "cursor"},
             )
             for tool in listed.tools:
                 properties = tool.input_schema.get("properties", {})
@@ -85,6 +85,13 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             by_type = await self.call(client, "artifact_list", {"media_type": "text/html"})
             self.assertEqual([item["id"] for item in by_name], [asset["artifact"]["id"]])
             self.assertEqual([item["id"] for item in by_type], [asset["artifact"]["id"]])
+            first_page = await self.call(client, "artifact_list", {"limit": 1})
+            cursor = f"{first_page[-1]['updated_at']}|{first_page[-1]['id']}"
+            second_page = await self.call(client, "artifact_list", {"limit": 1, "cursor": cursor})
+            self.assertEqual(
+                {item["id"] for item in first_page + second_page},
+                {created["artifact"]["id"], asset["artifact"]["id"]},
+            )
 
     async def test_write_search_graph_versions_and_fail_closed_tenant(self) -> None:
         async with Client(self.server, raise_exceptions=True) as client:
