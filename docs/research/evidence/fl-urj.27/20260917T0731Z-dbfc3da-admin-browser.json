@@ -1,0 +1,78 @@
+{
+  "schema": "fl-urj.27-g7",
+  "recorded_at": "2026-09-17T07:31:36Z",
+  "base_commit": "dbfc3da535861f7e297337a331e6cfde13f1daa0",
+  "tested_commit": "c161d65b1ed218f5fd43e21cff74c5375fb8b29e",
+  "result": "blocked",
+  "environment": {
+    "os": "macOS Darwin 24.6.0 arm64",
+    "python": "3.12.10",
+    "browser": "Google Chrome 153.0.8010.47",
+    "assistive_technology": "none; manual screen-reader run not performed",
+    "docker": "20.10.17",
+    "host": "local macOS host"
+  },
+  "commands": [
+    {
+      "command": "FOLIO_BROWSER='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' PYTHONPATH=src /Users/brandonsovran/Documents/Codex/2026-09-05/can-we-create-a-new-repo/gastown/folio_lattice/mayor/rig/.venv/bin/python -m pytest -q tests/test_browser_e2e.py",
+      "exit_code": 0,
+      "summary": "6 passed in 41.24s; 0 failed; 0 skipped; wall 41.87s"
+    },
+    {
+      "command": "FOLIO_BROWSER='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' PYTHONPATH=src /Users/brandonsovran/Documents/Codex/2026-09-05/can-we-create-a-new-repo/gastown/folio_lattice/mayor/rig/.venv/bin/python -m pytest -q tests/test_browser_e2e.py",
+      "exit_code": 0,
+      "summary": "6 passed in 40.24s; 0 failed; 0 skipped; wall 40.86s"
+    },
+    {
+      "command": "PYTHONPATH=src /Users/brandonsovran/Documents/Codex/2026-09-05/can-we-create-a-new-repo/gastown/folio_lattice/mayor/rig/.venv/bin/python -m pytest -q tests/test_browser_e2e.py -k connections_admin_settings_supports_pointer_keyboard_and_recovery",
+      "exit_code": 0,
+      "summary": "1 passed, 5 deselected; 0 failed; 0 skipped; 2.67s"
+    },
+    {
+      "command": "PYTHONPATH=src /Users/brandonsovran/Documents/Codex/2026-09-05/can-we-create-a-new-repo/gastown/folio_lattice/mayor/rig/.venv/bin/python -m pytest -q tests/test_web.py",
+      "exit_code": 0,
+      "summary": "16 passed; 9 subtests passed; 0 failed; 0 skipped; wall 2.41s"
+    },
+    {
+      "command": "PYTHONPATH=src /Users/brandonsovran/Documents/Codex/2026-09-05/can-we-create-a-new-repo/gastown/folio_lattice/mayor/rig/.venv/bin/python -m pytest -q tests/test_web.py -k 'static_ui_is_bounded_accessible_and_strictly_sandboxed or connections_admin_uses_real_tools_and_keeps_states_secret_free or connections_admin_denies_authenticated_non_admin or ui_contract_has_nontechnical_orientation_and_safe_status_copy or ui_contract_covers_core_loop_and_omits_debug_output or ui_renders_auth_context_without_local_warning_in_hosted_state'",
+      "exit_code": 0,
+      "summary": "6 passed; 10 deselected; 0 failed; 0 skipped; wall 1.75s"
+    },
+    {
+      "command": "ruff check src/folio_lattice/connections.py tests/test_browser_e2e.py && ruff format --check src/folio_lattice/connections.py tests/test_browser_e2e.py && python -m compileall -q src/folio_lattice/connections.py tests/test_browser_e2e.py && git diff --check",
+      "exit_code": 0,
+      "summary": "All static, format, compile, and diff checks passed."
+    }
+  ],
+  "admin_browser_flow": {
+    "public_ui_route": "/settings/connections",
+    "public_contract": "/api/admin/mcp",
+    "registration": "pass; real HTTPS example.com endpoint validated and registered",
+    "status_and_busy_recovery": "pass; status role, pending state, aria-busy, and submit restoration",
+    "keyboard_revoke_dialog": "pass; Enter opens dialog, cancel receives focus, cancel restores trigger focus",
+    "pointer_revoke": "pass; confirm updates active state to revoked",
+    "error_recovery": "pass; real loopback endpoint rejection shows bounded error and re-enables form",
+    "secret_disclosure": "pass; no credential_ref or bearer value rendered"
+  },
+  "defects": [
+    {
+      "id": "UX-ADMIN-ASYNC-RESET-01",
+      "severity": "P1",
+      "status": "fixed",
+      "repro": "Real browser registration through /settings/connections succeeded at /api/admin/mcp, then the async handler called event.currentTarget.reset() after await and raised because currentTarget was null.",
+      "fix": "c161d65 replaces the async event currentTarget access with byId('connection-register').reset()."
+    },
+    {
+      "id": "G7-MANUAL-AT-01",
+      "severity": "P1",
+      "status": "open",
+      "repro": "Run independent hosted browser/OS/assistive-technology review, including screen-reader task completion and nontechnical comprehension.",
+      "evidence": "No manual assistive-technology transcript, reviewer matrix, or independent sign-off is attached."
+    }
+  ],
+  "review": {
+    "ux_reviewer": "automated exact-head browser/static rerun only; not independent manual AT review",
+    "qa_reviewer": "pending",
+    "mayor_decision": "Automated G7 admin coverage is green after the small fix. Keep fl-urj.27 and G7 open for independent manual screen-reader/AT review; do not claim enterprise readiness."
+  }
+}

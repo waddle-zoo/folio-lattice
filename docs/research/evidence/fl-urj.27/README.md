@@ -1,44 +1,59 @@
 # fl-urj.27 / G7 exact-head UX evidence
 
-Status: automated browser and static UX checks pass; G7 remains blocked.
+Status: automated browser and static UX checks pass; G7 remains blocked on
+independent manual assistive-technology and nontechnical review.
 
-Tested source is exact canonical `176a2cebd2573287203f5931d4aad9d792be7905`.
-The retained run record is [`20260917T0716Z-176a2ce-browser.json`](20260917T0716Z-176a2ce-browser.json).
+The retained run records are:
 
-## Exact-head reruns
+- [`20260917T0716Z-176a2ce-browser.json`](20260917T0716Z-176a2ce-browser.json),
+  the initial exact-head library, graph, rendering, sharing, bridge, keyboard,
+  focus, status, error, and responsive-layout evidence.
+- [`20260917T0731Z-dbfc3da-admin-browser.json`](20260917T0731Z-dbfc3da-admin-browser.json),
+  the approved-connection admin browser evidence and async form-reset fix.
 
-- `tests/test_browser_e2e.py`: **5 passed, 0 failed, 0 skipped** in 39.09s
-  (39.55s wall).
-- Fresh repeat of the same command: **5 passed, 0 failed, 0 skipped** in
-  37.31s (37.77s wall).
-- `tests/test_web.py`: **16 passed, 9 subtests passed, 0 failed, 0 skipped**.
-- Focused static UX/admin subset: **6 passed, 10 deselected, 0 failed, 0
-  skipped**.
+## Automated exact-head evidence
 
-The browser suite covers auth recovery, library/graph/filesystem navigation,
-Markdown and HTML/CSS/JS rendering, search/grep/chunk/version flows,
-share/revoke and ACL denial, bridge allow/deny, security disclosures,
-keyboard/pointer activation, focus and busy/error status behavior, and the
-320px responsive overflow check. The static suite covers labeled controls,
-landmarks, status/alert roles, nontechnical copy, sandbox hooks, and the
-approved-connection admin contract/API states.
+The initial `176a2ce` browser suite passed twice: **5 passed, 0 failed, 0
+skipped** in 39.09s and 37.31s. `tests/test_web.py` passed **16 tests + 9
+subtests**; the focused static UX/admin subset passed **6 tests** with 10
+deselected.
 
-## Open G7 blockers
+On canonical base `dbfc3da`, implementation commit `c161d65` added a real
+browser scenario for `/settings/connections` and `/api/admin/mcp`. The full
+browser suite then passed twice: **6 passed, 0 failed, 0 skipped** in 41.24s
+and 40.24s. The focused scenario passed **1 test** with 5 deselected; the web
+and static suites remained green. Ruff, formatting, Python compilation, and
+`git diff --check` passed.
 
-This is automated evidence, not an independent accessibility review. No
-screen-reader or other assistive-technology run was performed, no independent
-reviewer matrix/sign-off is attached, and the browser suite does not exercise
-approved-connection settings/admin states with keyboard and pointer. Those
-items remain open in `fl-urj.27`; the evidence is intentionally marked
-`result: blocked` in the JSON record.
+The admin scenario covers pointer registration, live status and busy-state
+restoration, keyboard Enter activation of the revoke dialog, cancel-focus
+restoration, pointer confirmation/revocation, bounded loopback rejection,
+form recovery, accessible names, and absence of `credential_ref` or bearer
+values in rendered UI.
+
+## Fix found by the real browser
+
+Registration exposed a genuine async UI defect: after awaiting the public
+admin request, `event.currentTarget` was null, so the form reset raised and
+the connection list never refreshed. `c161d65` resets the stable
+`#connection-register` element directly. The focused scenario failed before
+the fix and passes after it.
+
+## Open G7 blocker
+
+These packages are automated evidence, not an independent accessibility
+review. No manual screen-reader/assistive-technology run, reviewer matrix, or
+nontechnical participant review is attached. Both structured records are
+therefore marked `result: blocked`; keep `fl-urj.27` and G7 open and make no
+enterprise-readiness claim.
 
 ## What remains for fl-urj.28
 
 The repeated fresh-state release package still needs a frozen source/image/
 configuration manifest and two independently retained runs for every required
 package, including backup/restore/migration/DR, hosted auth/tenant, approved
-connections, TLS/readiness/rollback, audit/observability, and the final
-browser/accessibility package. Each run needs exact commands, redacted output,
+connections, TLS/readiness/rollback, audit/observability, and final manual
+browser/accessibility review. Each run needs exact commands, redacted output,
 structured result, hash, reviewer, and timestamps; skips, failures, and the
-manual-AT blocker must remain visible. `fl-urj.28` stays open until the pair
-has no unreviewed blockers.
+manual-AT blocker must remain visible.
+
