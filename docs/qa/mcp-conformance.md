@@ -10,11 +10,13 @@ then runs the same artifact and graph flow through:
 
 Both clients run over stdio and Streamable HTTP. The flow exercises every
 current tool: artifact create, list, read, chunk, search, grep, write,
-versions, share, revoke, ACL, graph link, traverse, component, and approved
-external MCP connection register/list/status/audit/revoke. External tool and
-resource calls are exercised through exact-allowlist fail-closed cases; a
-successful real-upstream call remains part of the separate approved-connection
-integration gate. It also
+versions, share, revoke, ACL, graph link, traverse, component, and external MCP
+blocked-destination registration, empty-registry, audit, and denial cases.
+Each generic row asserts the blocked-address rejection, verifies that the
+registry stays empty, and exercises fail-closed unregistered-connection calls
+without contacting an upstream. Successful registry calls and exact-allowlist
+tool and resource checks remain part of the separate hosted approved-upstream
+fixture gate. It also
 checks malformed arguments, oversized fields, unknown tools, and an
 inaccessible artifact. A separate public hosted-auth fixture checks missing
 bearer access returns `401` for both clients.

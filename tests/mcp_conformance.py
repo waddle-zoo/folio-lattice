@@ -55,6 +55,8 @@ EXPECTED_TOOLS = (
     "external_mcp_resource_read",
 )
 SOURCE_ROOT = Path(os.environ.get("FOLIO_SOURCE_ROOT", Path(__file__).resolve().parents[1]))
+CONFORMANCE_BLOCKED_ENDPOINT = "https://127.0.0.1/mcp"
+CONFORMANCE_BLOCKED_ORIGIN = "https://127.0.0.1"
 
 
 class ConformanceError(Exception):
@@ -145,6 +147,9 @@ def _unwrap(value: Any) -> Any:
 def _error_text(value: Any) -> str:
     value = _json(value)
     if isinstance(value, Mapping):
+        result = value.get("result")
+        if isinstance(result, Mapping) and result.get("isError"):
+            return _error_text(result)
         if isinstance(value.get("error"), Mapping):
             error = value["error"]
             return str(error.get("message") or error.get("code") or "JSON-RPC error")
@@ -604,29 +609,41 @@ async def _flow(
     approved_tools = ["calendar.events.list"]
     if approved_upstream:
         approved_tools.extend(["calendar.events.slow", "calendar.events.oversize"])
-    connection = await call(
-        "external_mcp_connection_register",
-        {
-            "name": "conformance-calendar",
-            "endpoint": "https://approved-upstream.test/mcp"
-            if approved_upstream
-            else "https://calendar.example/mcp",
-            "approved_tools": approved_tools,
-            "approved_resources": ["calendar://events/today"],
-            "allowed_origins": [
-                "https://approved-upstream.test"
-                if approved_upstream
-                else "https://calendar.example"
-            ],
-            **({"credential_ref": "secret://conformance/upstream"} if approved_upstream else {}),
-            "reason": "conformance registry flow",
-        },
-    )
-    connection_id = connection["id"]
-    connections = await call("external_mcp_connection_list", {})
-    connection_status = await call(
-        "external_mcp_connection_status", {"connection_id": connection_id}
-    )
+    external_registration_rejected = None
+    if approved_upstream:
+        connection = await call(
+            "external_mcp_connection_register",
+            {
+                "name": "conformance-calendar",
+                "endpoint": "https://approved-upstream.test/mcp",
+                "approved_tools": approved_tools,
+                "approved_resources": ["calendar://events/today"],
+                "allowed_origins": ["https://approved-upstream.test"],
+                "credential_ref": "secret://conformance/upstream",
+                "reason": "conformance registry flow",
+            },
+        )
+        connection_id = connection["id"]
+        connections = await call("external_mcp_connection_list", {})
+        connection_status = await call(
+            "external_mcp_connection_status", {"connection_id": connection_id}
+        )
+    else:
+        connection_id = "conformance-blocked-registration"
+        external_registration_rejected = await call(
+            "external_mcp_connection_register",
+            {
+                "name": "conformance-blocked-calendar",
+                "endpoint": CONFORMANCE_BLOCKED_ENDPOINT,
+                "approved_tools": approved_tools,
+                "approved_resources": ["calendar://events/today"],
+                "allowed_origins": [CONFORMANCE_BLOCKED_ORIGIN],
+                "reason": "conformance blocked-destination rejection",
+            },
+            expect_error=True,
+        )
+        connections = await call("external_mcp_connection_list", {})
+        connection_status = None
     external_tool_allowed = None
     external_resource_allowed = None
     external_timeout = None
@@ -695,6 +712,7 @@ async def _flow(
     connection_revoked = await call(
         "external_mcp_connection_revoke",
         {"connection_id": connection_id, "reason": "conformance revoke"},
+        expect_error=not approved_upstream,
     )
     external_post_revoke = None
     if approved_upstream:
@@ -720,6 +738,7 @@ async def _flow(
         oversized,
         unknown,
         unauthorized,
+        *(item for item in (external_registration_rejected, connection_revoked) if item),
         external_tool_denied,
         external_resource_denied,
         *(item for item in (external_timeout, external_oversized, external_post_revoke) if item),
@@ -767,21 +786,42 @@ async def _flow(
         item["id"] == grant["id"] and item["status"] == "active" for item in acl_after
     ):
         raise ConformanceError("revoke/ACL mismatch")
-    if (
-        len(connections) != 1
-        or connection_status["id"] != connection_id
-        or connection_status["credential_configured"] != approved_upstream
-        or connection_revoked["status"] != "revoked"
+    if approved_upstream:
+        if (
+            len(connections) != 1
+            or connection_status["id"] != connection_id
+            or not connection_status["credential_configured"]
+            or connection_revoked["status"] != "revoked"
+            or not any(item["outcome"] == "denied" for item in external_audit)
+            or not any(item["outcome"] == "allowed" for item in external_audit)
+            or external_post_revoke is None
+        ):
+            raise ConformanceError("external MCP registry/revoke/audit mismatch")
+    elif (
+        connections
+        or external_registration_rejected is None
         or not any(item["outcome"] == "denied" for item in external_audit)
-        or (
-            approved_upstream
-            and (
-                not any(item["outcome"] == "allowed" for item in external_audit)
-                or external_post_revoke is None
-            )
-        )
+        or connection_revoked is None
     ):
-        raise ConformanceError("external MCP registry/revoke/audit mismatch")
+        raise ConformanceError("external MCP blocked-registration mismatch")
+    if (
+        not approved_upstream
+        and "blocked address" not in _error_text(external_registration_rejected).lower()
+    ):
+        raise ConformanceError("external MCP blocked-registration reason mismatch")
+    external_negative_cases = (
+        [
+            "external_tool_not_approved",
+            "external_resource_not_approved",
+        ]
+        if approved_upstream
+        else [
+            "external_blocked_registration",
+            "external_unregistered_tool",
+            "external_unregistered_resource",
+            "external_unregistered_revoke",
+        ]
+    )
     return {
         "artifact_count": len(listed),
         "artifact_list_continuation": True,
@@ -794,7 +834,13 @@ async def _flow(
         "version_count": len(versions),
         "grant_status": grant["status"],
         "revoke_status": revoked["status"],
-        "external_connection_status": connection_revoked["status"],
+        "external_registration_status": "approved" if approved_upstream else "rejected",
+        "external_registration_reason": (
+            "approved_upstream" if approved_upstream else "blocked_destination"
+        ),
+        "external_connection_status": (
+            connection_revoked["status"] if approved_upstream else "not_registered"
+        ),
         "approved_upstream": approved_upstream,
         "approved_upstream_tool": external_tool_allowed is not None,
         "approved_upstream_resource": external_resource_allowed is not None,
@@ -806,8 +852,7 @@ async def _flow(
             "oversized",
             "unknown",
             "unauthorized",
-            "external_tool_not_approved",
-            "external_resource_not_approved",
+            *external_negative_cases,
         ],
     }
 
@@ -1046,7 +1091,9 @@ def run(evidence_path: Path) -> int:
         for item in passing
     }
     comparable = [value for value in snapshots.values() if value is not None]
-    schemas_match = bool(comparable) and all(value == comparable[0] for value in comparable[1:])
+    schemas_match = len(comparable) == len(runs) == 4 and all(
+        value == comparable[0] for value in comparable[1:]
+    )
     document = {
         "schema": SCHEMA_VERSION,
         "source_sha": _source_sha(),

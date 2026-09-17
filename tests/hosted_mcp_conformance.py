@@ -316,7 +316,9 @@ def run(evidence_path: Path) -> int:
         for item in passing
     }
     comparable = [value for value in snapshots.values() if value is not None]
-    schemas_match = bool(comparable) and all(value == comparable[0] for value in comparable[1:])
+    schemas_match = len(comparable) == len(runs) == 4 and all(
+        value == comparable[0] for value in comparable[1:]
+    )
     document = {
         "schema": SCHEMA_VERSION,
         "gate": GATE_ID,
