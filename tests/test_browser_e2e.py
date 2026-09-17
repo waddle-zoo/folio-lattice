@@ -156,6 +156,7 @@ class DevTools:
                 "--headless=new",
                 "--no-sandbox",
                 "--disable-gpu",
+                "--disable-dev-shm-usage",
                 "--disable-background-networking",
                 "--no-first-run",
                 f"--user-data-dir={profile}",
@@ -259,7 +260,11 @@ class DevTools:
             self.socket.close()
         if self.process.poll() is None:
             self.process.terminate()
-        stdout, stderr = self.process.communicate(timeout=5)
+        try:
+            stdout, stderr = self.process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            stdout, stderr = self.process.communicate(timeout=5)
         return (stdout + stderr).decode(errors="replace")
 
 
