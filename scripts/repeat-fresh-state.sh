@@ -51,7 +51,7 @@ overall_status=pass
 for run in $(seq 1 "$runs"); do
   root="$(mktemp -d "${fresh_prefix}XXXXXX")"
   roots+=("$root")
-  compose_project="folio-fresh-${candidate_sha:0:12}-${run}-$(basename "$root" | tr -cd 'a-zA-Z0-9' | tail -c 9)"
+  compose_project="folio-fresh-${candidate_sha:0:12}-${run}-$(basename "$root" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | tail -c 9)"
   run_evidence="${evidence%.json}.run-${run}"
   mkdir -p "$run_evidence"
 
