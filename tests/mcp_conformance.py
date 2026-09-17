@@ -58,6 +58,9 @@ EXPECTED_TOOLS = (
 SOURCE_ROOT = Path(os.environ.get("FOLIO_SOURCE_ROOT", Path(__file__).resolve().parents[1]))
 CONFORMANCE_BLOCKED_ENDPOINT = "https://127.0.0.1/mcp"
 CONFORMANCE_BLOCKED_ORIGIN = "https://127.0.0.1"
+HTTP_READY_TIMEOUT_SECONDS = 10.0
+HTTP_READY_POLL_INTERVAL_SECONDS = 0.05
+PROCESS_STDERR_DIGEST_BYTES = 4096
 
 
 class ConformanceError(Exception):
@@ -332,8 +335,9 @@ class RawStdioClient:
                 raise BoundaryBlocked("stdio response timed out")
             line = self.process.stdout.readline()
             if not line:
-                detail = self.process.stderr.read().decode(errors="replace")
-                raise BoundaryBlocked(f"stdio closed before response: {detail[-500:]}")
+                raise BoundaryBlocked(
+                    f"stdio closed before response ({_process_stderr_summary(self.process)})"
+                )
             try:
                 response = json.loads(line)
             except json.JSONDecodeError as exc:
@@ -942,6 +946,43 @@ def _free_port() -> int:
         raise BoundaryBlocked(f"loopback unavailable: {exc}") from exc
 
 
+def _process_stderr_summary(process: subprocess.Popen[bytes]) -> str:
+    """Return bounded process diagnostics without copying stderr into evidence."""
+    if process.stderr is None:
+        return "stderr=unavailable"
+    try:
+        ready, _, _ = select.select([process.stderr], [], [], 0)
+        stderr = os.read(process.stderr.fileno(), PROCESS_STDERR_DIGEST_BYTES) if ready else b""
+    except (AttributeError, OSError, ValueError):
+        return f"exit_code={process.returncode}; stderr=unavailable"
+    return (
+        f"exit_code={process.returncode}; stderr_bytes={len(stderr)}; "
+        f"stderr_sha256={_sha256(stderr)}"
+    )
+
+
+def _wait_for_http_readiness(
+    process: subprocess.Popen[bytes],
+    readiness_url: str,
+    *,
+    timeout_seconds: float = HTTP_READY_TIMEOUT_SECONDS,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return False
+        remaining = deadline - time.monotonic()
+        try:
+            with urlopen(readiness_url, timeout=min(0.2, max(0.01, remaining))) as response:
+                payload = json.loads(response.read())
+                if isinstance(payload, Mapping) and payload.get("ready") is True:
+                    return True
+        except (OSError, URLError, json.JSONDecodeError, ValueError):
+            pass
+        time.sleep(min(HTTP_READY_POLL_INTERVAL_SECONDS, max(0, remaining)))
+    return False
+
+
 def _start_http(root: Path) -> tuple[subprocess.Popen[bytes], str]:
     port = _free_port()
     endpoint = f"http://127.0.0.1:{port}/mcp"
@@ -962,19 +1003,13 @@ def _start_http(root: Path) -> tuple[subprocess.Popen[bytes], str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        try:
-            with urlopen(f"http://127.0.0.1:{port}/health", timeout=0.2) as response:
-                if json.loads(response.read()).get("ready"):
-                    return process, endpoint
-        except (OSError, URLError, json.JSONDecodeError):
-            if process.poll() is not None:
-                break
-            time.sleep(0.05)
-    stderr = process.stderr.read().decode(errors="replace") if process.stderr else ""
+    if _wait_for_http_readiness(process, f"http://127.0.0.1:{port}/readyz"):
+        return process, endpoint
     _stop(process)
-    raise BoundaryBlocked(f"HTTP server did not become ready: {stderr[-500:]}")
+    raise BoundaryBlocked(
+        "HTTP server did not become ready at /readyz within "
+        f"{HTTP_READY_TIMEOUT_SECONDS:g}s ({_process_stderr_summary(process)})"
+    )
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
