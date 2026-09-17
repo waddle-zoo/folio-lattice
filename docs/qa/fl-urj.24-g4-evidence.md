@@ -14,16 +14,20 @@ enterprise-readiness or promote the milestone.
 | canonical base tree | `939dd9acbd71190b7f081994024a4dcbffded7fd` |
 | prior G4 commit | `b80c934ecdcc05f9bcc1cd1231fa1d7b7300ca32` |
 | prior G4 tree | `cb69b12d90c74ad533e2f6a5eb859237f291b1af` |
-| reviewed fix commit | `845019fe01a57f191b402936e98968d3cf94f4d3` |
-| reviewed fix tree before this evidence file | `c5299f181c85532c2df14784066ab234f87c8014` |
+| source fix commit | `845019fe01a57f191b402936e98968d3cf94f4d3` |
+| source fix tree | `c5299f181c85532c2df14784066ab234f87c8014` |
+| final candidate commit | `367cb28bed22de83088fc647bd5602a9bef37eb0` |
+| final candidate tree | `3461fc6da6f566978efa91d4a9242197293cb973` |
+| candidate branch | `codex/fl-urj.24-g4-candidate` |
 | review worktree | `/tmp/folio-g4-final-review.7LIqeK` |
 
-The reviewed fix is `test(renderer): use CDP hostile matrix`. It changes only
-the asynchronous browser harness: a real Chrome DevTools session waits for the
+The source fix is `test(renderer): use CDP hostile matrix`. It changes only the
+asynchronous browser harness: a real Chrome DevTools session waits for the
 fixture result, and download probing uses a new target so it cannot replace the
-artifact frame being tested.
+artifact frame being tested. The final candidate `367cb28` adds only this
+evidence document and its SHA-256 manifest on top of that source fix.
 
-SHA-256 hashes at the reviewed fix tree:
+SHA-256 hashes at the final candidate tree (unchanged from the source fix):
 
 ```text
 e9d4b050f37f42c9b49b8e8bdfa021e659183f4ff92c8f2da10ee2f9abaec6f4  src/folio_lattice/sandbox.py
@@ -48,7 +52,7 @@ Independent clean-worktree command:
 ```text
 FOLIO_BROWSER='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' PYTHONPATH=src pytest -q -s tests/test_browser_e2e.py
 ......                                                                   [100%]
-6 passed in 24.85s
+6 passed in 30.59s
 ```
 
 The hostile fixture's real-browser result was successful for every expected
