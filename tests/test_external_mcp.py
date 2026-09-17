@@ -19,6 +19,7 @@ except ImportError:
 
 from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
 from folio_lattice.external_mcp import (
+    MAX_CREDENTIAL_DECODE_PASSES,
     CredentialResolver,
     ExternalMcpBroker,
     ExternalMcpError,
@@ -878,6 +879,20 @@ class ExternalMcpServiceTests(unittest.TestCase):
                 self.assertNotIn(secret, str(raised.exception))
                 self.assertIsNone(raised.exception.__cause__)
                 self.assertIsNone(raised.exception.__context__)
+
+    def test_credential_scan_is_bounded_and_fails_closed_after_decode_budget(self) -> None:
+        secret = "bounded-secret/credential"
+        encoded = secret
+        for decode_pass in range(MAX_CREDENTIAL_DECODE_PASSES + 2):
+            with self.subTest(decode_pass=decode_pass):
+                self.assertTrue(ExternalMcpBroker._contains_credential(encoded, secret))
+            encoded = quote(encoded, safe="")
+
+        benign = quote(quote("ordinary encoded content", safe=""), safe="")
+        self.assertFalse(ExternalMcpBroker._contains_credential(benign, secret))
+
+        exhausted_benign = quote(benign, safe="")
+        self.assertTrue(ExternalMcpBroker._contains_credential(exhausted_benign, secret))
 
     def test_broker_sanitizes_transport_error_message_and_cause(self) -> None:
         for operation in ("tool", "resource", "health"):

@@ -1182,12 +1182,17 @@ class ExternalMcpBroker:
                 except UnicodeError:
                     return True
                 candidate = current
-                for _ in range(MAX_CREDENTIAL_DECODE_PASSES + 1):
+                for decode_pass in range(MAX_CREDENTIAL_DECODE_PASSES + 1):
                     if credential in candidate:
                         return True
                     decoded = unquote(candidate)
                     if decoded == candidate:
                         break
+                    if decode_pass == MAX_CREDENTIAL_DECODE_PASSES:
+                        # Do not continue decoding past the bounded scan budget:
+                        # an encoded credential may still be hidden at a deeper
+                        # level, so reject the result conservatively.
+                        return True
                     candidate = decoded
                 try:
                     decoded_json = json.loads(current)

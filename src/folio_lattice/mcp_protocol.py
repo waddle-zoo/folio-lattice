@@ -44,11 +44,162 @@ TOOL_SCOPES = {
 }
 
 
+_SAFE_FOLIO_ERRORS = frozenset(
+    {
+        "authentication required",
+        "operation not permitted",
+        "invalid artifact_list cursor",
+        "artifact not found",
+        "version not found",
+        "version blob missing",
+        "chunk not found",
+        "invalid artifact_search cursor",
+        "invalid search query",
+        "self-links are not allowed",
+        "edge already exists with different immutable metadata",
+        "max_depth must be between 0 and 10",
+        "share reason is reserved",
+        "share action is invalid",
+        "share target is not an active tenant member",
+        "grant not found",
+        "artifact owner grant cannot be revoked",
+        "external MCP origin is invalid",
+        "external MCP endpoint host is not public",
+        "external MCP endpoint validation failed",
+        "external MCP connection not found",
+        "external MCP connection needs an explicit tool or resource allowlist",
+        "external MCP endpoint origin must be explicitly allowed",
+        "external MCP registration is invalid",
+        "external MCP registration value is too large",
+        "external MCP registration list is too large",
+        "external MCP registration item is too large",
+        "external MCP registration exceeds the allowed size",
+        "external MCP registration failed",
+        "external MCP connection name already exists",
+        "external MCP connection is revoked",
+        "external MCP health status is invalid",
+        "external MCP tool is not approved",
+        "external MCP tool arguments are invalid",
+        "external MCP tool arguments exceed the allowed size",
+        "external MCP resource is not approved",
+        "approved_resources must contain safe resource URIs",
+        "credential_ref must be an opaque secret:// reference",
+        "external MCP policy is invalid",
+        "external MCP policy exceeds the allowed size",
+        "external MCP rate limited",
+        "external MCP concurrency limit exceeded",
+        "external MCP audit failed",
+        "external MCP audit export failed",
+        "audit integrity verification failed",
+        "audit time window is invalid",
+        "audit time window is inverted",
+        "audit legal hold event list is out of bounds",
+        "audit export exceeds the allowed size",
+        "invalid audit cursor",
+        "credential broker unavailable",
+        "credential broker returned an invalid credential",
+        "external MCP response exceeds the allowed size",
+        "external MCP transport timed out",
+        "external MCP transport unavailable",
+        "external MCP upstream call failed",
+        "external MCP endpoint resolution timed out",
+        "external MCP endpoint is invalid",
+        "external MCP endpoint resolves to a blocked address",
+        "external MCP endpoint cannot be resolved",
+        "external MCP transport cannot validate registration",
+        "external MCP result is invalid",
+        "external MCP result contains credential material",
+        "external MCP result exceeds the allowed size",
+        "external MCP adapter validation failed",
+        "external MCP result failed adapter validation",
+        "external MCP health result is invalid",
+        "external MCP tool call failed",
+        "external MCP resource read failed",
+        "external MCP health check failed",
+        "external MCP resource URI exceeds the allowed size",
+        "external MCP request arguments are invalid",
+        "external MCP request arguments exceed the allowed size",
+    }
+)
+
+
+def _safe_folio_error_message(error: FolioError) -> str:
+    """Keep the generic MCP boundary from echoing internal FolioError text."""
+
+    message = str(error)
+    if message in _SAFE_FOLIO_ERRORS:
+        return message
+    if message.startswith("parent version mismatch; expected "):
+        expected = message.removeprefix("parent version mismatch; expected ")
+        if (
+            expected
+            and len(expected) <= MAX_ID_LENGTH
+            and all(
+                character.isascii() and (character.isalnum() or character in "_.-")
+                for character in expected
+            )
+        ):
+            return message
+        return "parent version mismatch"
+    if message.startswith("external MCP rate limited; retry after ") and message.endswith(
+        " seconds"
+    ):
+        retry_after = message[len("external MCP rate limited; retry after ") : -len(" seconds")]
+        if retry_after.isdigit():
+            return message
+    for prefix, suffix in (
+        ("query exceeds ", " characters"),
+        ("pattern exceeds ", " characters"),
+        ("artifact exceeds ", " bytes"),
+    ):
+        if message.startswith(prefix) and message.endswith(suffix):
+            bound = message[len(prefix) : -len(suffix)]
+            if bound.isdigit():
+                return message
+    for field in {
+        "actor",
+        "connection_id",
+        "edge_type",
+        "grant_id",
+        "media_type",
+        "name",
+        "reason",
+        "source_context",
+        "subject_actor_id",
+        "tenant_id",
+    }:
+        if message in {
+            f"{field} must not be empty",
+            f"{field} must be JSON serializable",
+        }:
+            return message
+        prefix = f"{field} exceeds "
+        if message.startswith(prefix) and message.endswith(" characters"):
+            bound = message[len(prefix) : -len(" characters")]
+            if bound.isdigit():
+                return message
+        if message.startswith(prefix) and message.endswith(" bytes"):
+            bound = message[len(prefix) : -len(" bytes")]
+            if bound.isdigit():
+                return message
+    for field in {"approved_tools", "approved_resources", "allowed_origins"}:
+        if message in {
+            f"{field} must be a list of exact strings",
+            f"{field} has too many entries",
+            f"{field} must contain exact, non-wildcard strings",
+            f"{field} must not contain duplicates",
+        }:
+            return message
+    return "MCP tool failed safely"
+
+
 def _tool_errors[T](operation: Callable[[], T]) -> T:
     try:
         return operation()
-    except (binascii.Error, ValueError, FolioError, ToolError) as exc:
+    except (binascii.Error, ValueError, ToolError) as exc:
         message = str(exc)
+    except FolioError as exc:
+        message = _safe_folio_error_message(exc)
     except Exception:
         message = "MCP tool failed safely"
     raise ToolError(message) from None

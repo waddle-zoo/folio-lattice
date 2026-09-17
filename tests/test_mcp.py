@@ -9,7 +9,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
 from folio_lattice.mcp_protocol import _tool_errors, build_mcp_server
-from folio_lattice.service import FolioLattice
+from folio_lattice.service import FolioError, FolioLattice
 
 
 class McpTests(unittest.IsolatedAsyncioTestCase):
@@ -235,6 +235,29 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             _tool_errors(explode)
         self.assertEqual(str(raised.exception), "MCP tool failed safely")
         self.assertNotIn(secret, str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
+    def test_internal_folio_failure_is_static_and_chainless(self) -> None:
+        secret = "db secret=internal-mcp-secret"
+
+        def explode() -> None:
+            raise FolioError(secret)
+
+        with self.assertRaises(ToolError) as raised:
+            _tool_errors(explode)
+        self.assertEqual(str(raised.exception), "MCP tool failed safely")
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
+    def test_public_folio_validation_contract_is_preserved(self) -> None:
+        def missing() -> None:
+            raise FolioError("artifact not found")
+
+        with self.assertRaises(ToolError) as raised:
+            _tool_errors(missing)
+        self.assertEqual(str(raised.exception), "artifact not found")
         self.assertIsNone(raised.exception.__cause__)
         self.assertIsNone(raised.exception.__context__)
 
