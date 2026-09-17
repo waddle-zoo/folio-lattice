@@ -82,6 +82,40 @@ class FreshStateIsolationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("non-release", result.stderr)
 
+    def test_duplicate_ports_are_rejected_even_in_non_release_mode(self) -> None:
+        root = Path(__file__).parents[1]
+        candidate = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        script = root / "scripts" / "repeat-fresh-state.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            blockers = temp / "blockers.json"
+            blockers.write_text('[{"status":"closed"}]', encoding="utf-8")
+            evidence = temp / "evidence.json"
+            environment = {
+                **os.environ,
+                "FOLIO_RELEASE_CANDIDATE_SHA": candidate,
+                "FOLIO_FRESH_STATE_BLOCKERS_PATH": str(blockers),
+                "FOLIO_FRESH_STATE_EVIDENCE": str(evidence),
+                "FOLIO_FRESH_STATE_RUNS": "2",
+                "FOLIO_FRESH_STATE_MODE": "non-release",
+                "FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS": "true",
+                "FOLIO_FRESH_STATE_PORT_BASE": "19000",
+                "FOLIO_HOST_PORT": "19022",
+                "FOLIO_RENDER_HOST_PORT": "19023",
+            }
+            result = subprocess.run(
+                [str(script), "--", "true"],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("duplicate fresh-state port", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

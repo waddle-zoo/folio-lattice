@@ -84,6 +84,7 @@ cleanup() {
 trap cleanup EXIT
 
 run_results=()
+assigned_ports=()
 overall_status=pass
 for run in $(seq 1 "$runs"); do
   root="$(mktemp -d "${fresh_prefix}XXXXXX")"
@@ -105,6 +106,19 @@ for run in $(seq 1 "$runs"); do
   [[ "$control_port" != 8000 && "$renderer_port" != 8001 ]] \
     || [[ "$allow_shared_defaults" == true && "$mode" == non-release ]] \
     || fail "refusing default ports; use explicit non-release mode only for non-release data"
+  [[ "$control_port" =~ ^[1-9][0-9]*$ && "$renderer_port" =~ ^[1-9][0-9]*$ ]] \
+    || fail "fresh-state ports must be positive integers"
+  (( control_port <= 65535 && renderer_port <= 65535 )) \
+    || fail "fresh-state port exceeds 65535"
+  for assigned_port in "$control_port" "$renderer_port"; do
+    if [[ "${#assigned_ports[@]}" -gt 0 ]]; then
+      for previous_port in "${assigned_ports[@]}"; do
+        [[ "$assigned_port" != "$previous_port" ]] \
+          || fail "duplicate fresh-state port $assigned_port; choose a unique port base"
+      done
+    fi
+    assigned_ports+=("$assigned_port")
+  done
   port_is_free "$control_port" \
     || fail "control port $control_port is not free; choose a unique FOLIO_FRESH_STATE_PORT_BASE"
   port_is_free "$renderer_port" \
