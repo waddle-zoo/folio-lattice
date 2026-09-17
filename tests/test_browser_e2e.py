@@ -127,6 +127,8 @@ def create(base_url: str, name: str, source: bytes, media_type: str) -> dict[str
 
 
 def dump_dom(browser: str, url: str, profile: Path) -> str:
+    downloads = profile / "downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
     process = subprocess.Popen(
         [
             browser,
@@ -136,6 +138,7 @@ def dump_dom(browser: str, url: str, profile: Path) -> str:
             "--disable-background-networking",
             "--no-first-run",
             f"--user-data-dir={profile}",
+            f"--download.default_directory={downloads}",
             "--virtual-time-budget=5000",
             "--dump-dom",
             url,
@@ -758,7 +761,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     chrome.close()
                 stop_server(control)
 
-    def test_scripts_render_but_network_storage_and_host_escape_fail(self) -> None:
+    def test_scripts_render_but_hostile_browser_matrix_fails_closed(self) -> None:
         browser = browser_path()
         if browser is None:
             self.skipTest("set FOLIO_BROWSER to Chrome or Chromium for browser sandbox evidence")
@@ -853,17 +856,43 @@ parent.postMessage({{type: 'folio-linked-assets', value: linked ? 'linked-assets
                     {
                         "script_ran": True,
                         "host_dom_blocked": True,
+                        "host_cookie_blocked": True,
                         "storage_blocked": True,
                         "cookie_blocked": True,
                         "popup_blocked": True,
+                        "download_blocked": True,
+                        "form_blocked": True,
+                        "frame_blocked": True,
+                        "worker_blocked": True,
                         "fetch_blocked": True,
                         "same_origin_fetch_blocked": True,
                         "xhr_blocked": True,
                         "websocket_blocked": True,
+                        "event_source_blocked": True,
+                        "beacon_blocked": True,
+                        "image_blocked": True,
+                        "top_navigation_blocked": True,
                         "top_navigation_script_continued": True,
                     },
                 )
+                self.assertGreaterEqual(result["csp_violation_count"], 5)
+                self.assertTrue(
+                    {
+                        "connect-src",
+                        "frame-src",
+                        "worker-src",
+                        "form-action",
+                    }.issubset(set(result["csp_directives"]))
+                )
                 self.assertEqual(handler.leaks, [])
+                self.assertEqual(
+                    [
+                        path
+                        for profile in root.glob("chrome-hostile-*/downloads")
+                        for path in profile.iterdir()
+                    ],
+                    [],
+                )
                 denied_request = urllib.request.Request(
                     hostile_url, headers={"Sec-Fetch-Dest": "document"}
                 )
@@ -2097,18 +2126,30 @@ document.querySelector('#search').requestSubmit();
     ) -> str:
         return f"""<!doctype html><body><script>
 (async () => {{
-  const result = {{script_ran: true}};
+  const result = {{script_ran: true, csp_directives: []}};
+  addEventListener('securitypolicyviolation', (event) => result.csp_directives.push(event.effectiveDirective || event.violatedDirective));
   try {{ parent.document.body; result.host_dom_blocked = false; }} catch {{ result.host_dom_blocked = true; }}
-  try {{ localStorage.setItem('secret', 'x'); result.storage_blocked = false; }} catch {{ result.storage_blocked = true; }}
+  try {{ parent.document.cookie; result.host_cookie_blocked = false; }} catch {{ result.host_cookie_blocked = true; }}
+  try {{ localStorage.setItem('secret', 'x'); sessionStorage.setItem('secret', 'x'); indexedDB.open('secret'); result.storage_blocked = false; }} catch {{ result.storage_blocked = true; }}
   try {{ document.cookie = 'secret=x'; result.cookie_blocked = !document.cookie.includes('secret=x'); }} catch {{ result.cookie_blocked = true; }}
-  try {{ const popup = open('about:blank'); result.popup_blocked = popup === null; popup?.close(); }} catch {{ result.popup_blocked = true; }}
+  try {{ const popup = open('{harness_origin}/popup', '_blank'); result.popup_blocked = popup === null; popup?.close(); }} catch {{ result.popup_blocked = true; }}
+  try {{ const download = document.createElement('a'); download.href = '{harness_origin}/download'; download.download = 'escaped.txt'; document.body.append(download); download.click(); result.download_blocked = true; }} catch {{ result.download_blocked = true; }}
+  try {{ const form = document.createElement('form'); form.action = '{harness_origin}/form'; form.method = 'POST'; document.body.append(form); form.submit(); result.form_blocked = true; }} catch {{ result.form_blocked = true; }}
+  result.frame_blocked = await new Promise((resolve) => {{ try {{ const frame = document.createElement('iframe'); frame.src = '{harness_origin}/frame'; frame.onload = () => resolve(false); frame.onerror = () => resolve(true); document.body.append(frame); setTimeout(() => resolve(true), 350); }} catch {{ resolve(true); }} }});
+  result.worker_blocked = await new Promise((resolve) => {{ try {{ const worker = new Worker('{harness_origin}/worker.js'); worker.onmessage = () => resolve(false); worker.onerror = () => resolve(true); setTimeout(() => {{ worker.terminate(); resolve(true); }}, 350); }} catch {{ resolve(true); }} }});
   try {{ await fetch('{harness_origin}/leak'); result.fetch_blocked = false; }} catch {{ result.fetch_blocked = true; }}
   try {{ await fetch('{render_origin}/content/{js_id}/{js_version}'); result.same_origin_fetch_blocked = false; }} catch {{ result.same_origin_fetch_blocked = true; }}
   result.xhr_blocked = await new Promise((resolve) => {{ try {{ const xhr = new XMLHttpRequest(); xhr.onload = () => resolve(false); xhr.onerror = () => resolve(true); xhr.open('GET', '{harness_origin}/leak'); xhr.send(); setTimeout(() => resolve(xhr.readyState !== 4), 300); }} catch {{ resolve(true); }} }});
   result.websocket_blocked = await new Promise((resolve) => {{ try {{ const socket = new WebSocket('ws://127.0.0.1:{harness_origin.rsplit(":", 1)[1]}/leak'); socket.onopen = () => resolve(false); socket.onerror = () => resolve(true); setTimeout(() => resolve(socket.readyState !== WebSocket.OPEN), 300); }} catch {{ resolve(true); }} }});
-  try {{ const form = document.createElement('form'); form.action = '{harness_origin}/leak'; form.method = 'POST'; document.body.append(form); form.submit(); }} catch {{}}
+  result.event_source_blocked = await new Promise((resolve) => {{ try {{ const source = new EventSource('{harness_origin}/eventsource'); source.onopen = () => resolve(false); source.onerror = () => {{ source.close(); resolve(true); }}; setTimeout(() => {{ source.close(); resolve(true); }}, 350); }} catch {{ resolve(true); }} }});
+  try {{ result.beacon_blocked = !navigator.sendBeacon('{harness_origin}/leak', 'secret'); }} catch {{ result.beacon_blocked = true; }}
+  result.image_blocked = await new Promise((resolve) => {{ try {{ const image = new Image(); image.onload = () => resolve(false); image.onerror = () => resolve(true); image.src = '{harness_origin}/image'; setTimeout(() => resolve(true), 350); }} catch {{ resolve(true); }} }});
   try {{ top.location = '{harness_origin}/escaped'; }} catch {{}}
   result.top_navigation_script_continued = true;
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  result.top_navigation_blocked = true;
+  result.csp_directives = [...new Set(result.csp_directives)].sort();
+  result.csp_violation_count = result.csp_directives.length;
   parent.postMessage({{type: 'folio-sandbox-result', result}}, '*');
 }})();
 </script></body>"""
@@ -2141,27 +2182,39 @@ addEventListener('message', (event) => {{
             leaks: list[str] = []
 
             def do_GET(self) -> None:
-                if self.path == "/harness":
+                path = self.path.split("?", 1)[0]
+                if path == "/harness":
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html")
+                    self.send_header("Set-Cookie", "host_secret=host-value; Path=/")
                     self.send_header("Content-Length", str(len(page)))
                     self.end_headers()
                     self.wfile.write(page)
                     return
-                if self.path == "/embedded" and embedded_page is not None:
+                if path == "/embedded" and embedded_page is not None:
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html")
                     self.send_header("Content-Length", str(len(embedded_page)))
                     self.end_headers()
                     self.wfile.write(embedded_page)
                     return
-                if self.path in {"/leak", "/escaped"}:
+                if path in {
+                    "/download",
+                    "/escaped",
+                    "/eventsource",
+                    "/frame",
+                    "/image",
+                    "/leak",
+                    "/popup",
+                    "/worker.js",
+                }:
                     self.leaks.append(self.path)
                 self.send_response(404)
                 self.end_headers()
 
             def do_POST(self) -> None:
-                self.leaks.append(self.path)
+                if self.path.split("?", 1)[0] == "/form":
+                    self.leaks.append(self.path)
                 self.send_response(204)
                 self.end_headers()
 
