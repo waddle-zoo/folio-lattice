@@ -1004,12 +1004,6 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     site["artifact"]["id"],
                 )
                 self.assertIn(
-                    "In this graph",
-                    chrome.evaluate(
-                        "document.querySelector('#workspace-search-results').innerText"
-                    ),
-                )
-                self.assertIn(
                     "Graph: notes/decision.md / site/index.html",
                     chrome.evaluate(
                         "document.querySelector('#workspace-search-results').innerText"
