@@ -703,6 +703,15 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     "document.querySelector('#connections-list .connection-actions .button-danger').click()"
                 )
                 chrome.wait("document.querySelector('#revoke-access').open === true")
+                # A native close event from the canceled keyboard path may be
+                # delivered after this reopen. It must not clear the new target.
+                chrome.evaluate(
+                    "document.querySelector('#revoke-access').dispatchEvent(new Event('close'))"
+                )
+                self.assertTrue(chrome.evaluate("document.querySelector('#revoke-access').open"))
+                self.assertFalse(
+                    chrome.evaluate("document.querySelector('#revoke-confirm').disabled")
+                )
                 chrome.evaluate("document.querySelector('#revoke-confirm').click()")
                 chrome.wait(
                     "document.querySelector('#connections-status').textContent.includes('is revoked')"

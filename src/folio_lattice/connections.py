@@ -92,7 +92,7 @@ async function checkStatus(id, button) { const item = records.get(id); if (!item
 function restoreFocus() { const trigger = revokeTrigger; revokeTrigger = null; if (trigger && document.contains(trigger)) trigger.focus(); }
 function closeRevoke() { const dialog = byId('revoke-access'); if (dialog.open) dialog.close(); else { dialog.removeAttribute('open'); pendingRevoke = null; restoreFocus(); } }
 function openRevoke(item, trigger) { pendingRevoke = item; revokeTrigger = trigger; byId('revoke-name').textContent = item.name; const dialog = byId('revoke-access'); if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', ''); setTimeout(() => byId('revoke-cancel').focus(), 0); }
-byId('revoke-access').addEventListener('close', () => { pendingRevoke = null; restoreFocus(); });
+byId('revoke-access').addEventListener('close', () => { const dialog = byId('revoke-access'); if (dialog.open) return; pendingRevoke = null; restoreFocus(); });
 byId('revoke-access').addEventListener('cancel', (event) => { event.preventDefault(); closeRevoke(); });
 document.addEventListener('keydown', (event) => { const dialog = byId('revoke-access'); if (event.key === 'Escape' && dialog.hasAttribute('open') && !dialog.open) { event.preventDefault(); closeRevoke(); } });
 byId('revoke-cancel').addEventListener('click', closeRevoke);
