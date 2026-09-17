@@ -10,6 +10,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .backup import BackupError, create_backup, migration_check, restore_backup, verify_backup
+from .backup_ops import (
+    BackupOperationsConfig,
+    BackupOperationsMonitor,
+    UnavailableBackupStore,
+    UnavailableKeyCustody,
+)
 from .service import FolioLattice, utc_now
 
 
@@ -39,6 +45,10 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--input", required=True)
     verify.add_argument("--key-id")
     verify.add_argument("--tenant-id", action="append", dest="tenant_ids")
+    backup_subcommands.add_parser(
+        "status",
+        help="report hosted backup readiness (adapters must be injected by deployment)",
+    )
 
     restore = commands.add_parser("dr")
     restore_subcommands = restore.add_subparsers(dest="dr_command", required=True)
@@ -80,6 +90,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 expected_key_id=args.key_id,
                 expected_tenant_scope=set(args.tenant_ids) if args.tenant_ids is not None else None,
             )
+        elif args.command == "backup" and args.backup_command == "status":
+            config = BackupOperationsConfig.from_env()
+            result = BackupOperationsMonitor(
+                config,
+                UnavailableKeyCustody(),
+                UnavailableBackupStore(),
+            ).status()
         elif args.command == "dr" and args.dr_command == "restore":
             result = restore_backup(
                 args.input,

@@ -62,6 +62,19 @@ class BackupKeyProvider(Protocol):
     def recovery_key(self, key_ref: str) -> bytes: ...
 
 
+class VersionedBackupKeyProvider(BackupKeyProvider, Protocol):
+    """Key provider seam for deployments with externally managed key versions.
+
+    Implementations must keep the key bytes in the external custody system. The
+    version is metadata used to bind a backup to the exact key material that
+    wrapped it; it is never a substitute for custody or key retrieval.
+    """
+
+    def key_version(self, purpose: str, key_ref: str) -> str: ...
+
+    def manifest_key_version(self) -> str: ...
+
+
 class InMemoryBackupKeyProvider:
     """Small test/local adapter; production callers should use a secret manager."""
 
@@ -84,6 +97,23 @@ class InMemoryBackupKeyProvider:
 
     def recovery_key(self, key_ref: str) -> bytes:
         return self._recovery_keys[key_ref]
+
+    def key_version(self, purpose: str, key_ref: str) -> str:
+        """Return the version encoded in a test key reference.
+
+        This intentionally remains a local/test adapter. Hosted readiness does
+        not treat this implementation as durable external custody.
+        """
+
+        if purpose not in {"backup", "recovery"} or ":" not in key_ref:
+            raise KeyError(key_ref)
+        version = key_ref.rsplit(":", 1)[1]
+        if not version:
+            raise KeyError(key_ref)
+        return version
+
+    def manifest_key_version(self) -> str:
+        return "local-test-v1"
 
 
 def _sha256(path: Path) -> str:
@@ -184,6 +214,36 @@ def _key(provider: BackupKeyProvider | None, method: str, *args: str) -> bytes:
     return value
 
 
+def _key_version(provider: BackupKeyProvider | None, purpose: str, key_ref: str) -> str:
+    if provider is None:
+        raise BackupError("versioned encrypted backup key provider is required")
+    method = getattr(provider, "key_version", None)
+    if not callable(method):
+        raise BackupError("encrypted backup key provider has no version contract")
+    try:
+        value = method(purpose, key_ref)
+    except Exception:
+        raise BackupError(f"{purpose} key version is unavailable") from None
+    if not isinstance(value, str) or not _KEY_REF.fullmatch(value):
+        raise BackupError(f"{purpose} key version is invalid")
+    return value
+
+
+def _manifest_key_version(provider: BackupKeyProvider | None) -> str:
+    if provider is None:
+        raise BackupError("versioned encrypted backup key provider is required")
+    method = getattr(provider, "manifest_key_version", None)
+    if not callable(method):
+        raise BackupError("encrypted backup key provider has no manifest version contract")
+    try:
+        value = method()
+    except Exception:
+        raise BackupError("manifest key version is unavailable") from None
+    if not isinstance(value, str) or not _KEY_REF.fullmatch(value):
+        raise BackupError("manifest key version is invalid")
+    return value
+
+
 def _b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
 
@@ -241,6 +301,11 @@ def _load_manifest(
     actual = manifest["authentication"]["tag"]
     if not hmac.compare_digest(expected, actual):
         raise BackupError("manifest authentication failed")
+    keys = manifest.get("keys")
+    if not isinstance(keys, dict) or not isinstance(keys.get("manifest_key_version"), str):
+        raise BackupError("manifest key version is missing")
+    if keys["manifest_key_version"] != _manifest_key_version(key_provider):
+        raise BackupError("manifest key version mismatch")
     return manifest, encoded
 
 
@@ -289,9 +354,27 @@ def _unwrap_data_key(
     keys = manifest.get("keys")
     if not isinstance(keys, dict):
         raise BackupError("backup key references are missing")
-    if set(keys) != {"backup_key_ref", "recovery_key_ref", "wrapped_data_key"}:
+    if set(keys) != {
+        "manifest_key_version",
+        "backup_key_ref",
+        "backup_key_version",
+        "recovery_key_ref",
+        "recovery_key_version",
+        "wrapped_data_key",
+    }:
         raise BackupError("backup key references are invalid")
+    backup_ref = _key_ref(keys.get("backup_key_ref"), "backup key reference")
     recovery_ref = _key_ref(keys.get("recovery_key_ref"), "recovery key reference")
+    backup_version = keys.get("backup_key_version")
+    recovery_version = keys.get("recovery_key_version")
+    if not isinstance(backup_version, str) or not _KEY_REF.fullmatch(backup_version):
+        raise BackupError("backup key version is invalid")
+    if not isinstance(recovery_version, str) or not _KEY_REF.fullmatch(recovery_version):
+        raise BackupError("recovery key version is invalid")
+    if backup_version != _key_version(key_provider, "backup", backup_ref):
+        raise BackupError("backup key version mismatch")
+    if recovery_version != _key_version(key_provider, "recovery", recovery_ref):
+        raise BackupError("recovery key version mismatch")
     if expected_recovery_key_ref is not None and recovery_ref != expected_recovery_key_ref:
         raise BackupError("backup recovery-key identity does not match")
     wrapped = keys.get("wrapped_data_key")
@@ -560,6 +643,9 @@ def create_backup(
     backup_key = _key(key_provider, "backup_key", backup_key_ref)
     recovery_key = _key(key_provider, "recovery_key", recovery_key_ref)
     manifest_key = _key(key_provider, "manifest_auth_key")
+    manifest_key_version = _manifest_key_version(key_provider)
+    backup_key_version = _key_version(key_provider, "backup", backup_key_ref)
+    recovery_key_version = _key_version(key_provider, "recovery", recovery_key_ref)
     _safe_output_dir(output_path)
     staging = Path(tempfile.mkdtemp(prefix=".folio-backup-stage-", dir=output_path.parent))
     database_path = staging / DATABASE_NAME
@@ -641,8 +727,11 @@ def create_backup(
                 "nonce": _b64(payload_nonce),
             },
             "keys": {
+                "manifest_key_version": manifest_key_version,
                 "backup_key_ref": backup_key_ref,
+                "backup_key_version": backup_key_version,
                 "recovery_key_ref": recovery_key_ref,
+                "recovery_key_version": recovery_key_version,
                 "wrapped_data_key": {
                     "backup": {
                         "nonce": _b64(backup_wrap_nonce),

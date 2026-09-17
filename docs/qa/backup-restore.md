@@ -6,8 +6,40 @@ encrypts the payload with AES-256-GCM and authenticates the manifest with a
 configured manifest-authentication key. A `BackupKeyProvider` must resolve
 distinct backup-wrapping and recovery key references; key bytes never enter
 the manifest, logs, or evidence. The in-memory provider is test/local wiring
-only. Hosted operations still need an external immutable store, durable key
-custody, separated recovery credentials, and an independent restore witness.
+only. Hosted operations still need live external adapters and an independent
+restore witness.
+
+The provider-neutral hosted seam is `folio_lattice.backup_ops`:
+
+- `DurableBackupKeyCustody.readiness()` returns only redacted provider posture,
+  active key versions, and the set of versions still accepted during a
+  rotation. It does not return key bytes. `BackupOperationsMonitor` rejects a
+  local/in-memory adapter, unavailable custody, an invalid rotation state, or a
+  backup whose recorded key version is no longer accepted.
+- `ImmutableBackupStore.readiness()`, `.latest()`, and `.inspect(backup_id)`
+  require the external adapter to prove existence, checksum verification,
+  immutability, overwrite protection, and delete protection. The contract has
+  no delete or overwrite operation; those controls belong to the provider's
+  WORM/retention policy. A local directory or in-memory object is not hosted
+  evidence.
+- `BackupOperationsConfig` requires explicit schedule interval, RPO, maximum
+  backup age, and adapter IDs. `BackupOperationsMonitor.status()` evaluates
+  the latest observed backup and returns secret-free readiness, alert names,
+  age/RPO status, and bounded metrics. When a hosted HTTP deployment injects
+  the monitor, its `/readyz` dependency is required and fails closed until the
+  real adapters are ready; `/metrics` exports the monitor's backup metrics.
+  The legacy hosted process does not inject an adapter and therefore cannot
+  claim hosted backup readiness or durability evidence.
+
+The exact deployment configuration names are
+`FOLIO_BACKUP_INTERVAL_SECONDS`, `FOLIO_BACKUP_RPO_SECONDS`,
+`FOLIO_BACKUP_MAX_AGE_SECONDS`, `FOLIO_BACKUP_KEY_ADAPTER`,
+`FOLIO_BACKUP_STORE_ADAPTER`, and optional expected active versions
+`FOLIO_BACKUP_KEY_VERSION`/`FOLIO_RECOVERY_KEY_VERSION`. No vendor or cloud
+SDK is selected here. `backup status` validates this configuration but uses
+explicit unavailable adapters until deployment wiring supplies the real
+custody/store objects; it therefore reports `not_ready` rather than claiming a
+local pass.
 
 ## Commands
 
@@ -45,6 +77,9 @@ schema signature, tenant scope, SQLite quick/foreign-key checks, row counts,
 SHA-256 for the metadata database and each referenced blob, and the restore
 order. The encrypted payload contains only the metadata database and checked
 content-addressed blobs; tar members are restricted to exact safe paths.
+The key metadata includes manifest, backup, and recovery key versions; the
+provider must match those versions on verify, so a key-reference swap or
+rotation mismatch fails closed.
 Metadata preserves versions and parents, provenance, graph edges, ACL/grant
 history, external-connection policy and audit records. FTS/index definitions
 and their rebuild inputs are part of the metadata database. Secret values are
@@ -78,9 +113,13 @@ non-empty target, is refused.
 
 The local test is not hosted durability evidence. G8 remains open for an
 immutable hosted-store adapter, durable backup/recovery key custody and
-rotation/retirement, an age/RPO scheduler and alarm, and an independent
-recovery witness. `.23`/`.24` stay open until that hosted adapter and clean
-restore/runtime rerun are independently verified.
+rotation/retirement, a live scheduler/age/RPO alarm, and an independent
+recovery witness. The source slice has contract/readiness/metric coverage in
+`tests/test_backup_ops.py`, including unavailable adapters, missing/stale
+backups, integrity metadata failure, rotation-version mismatch, and denied
+overwrite/delete posture. `.23`/`.24` stay open until real hosted adapters,
+clean restore/runtime rerun, scheduled evidence, and the independent witness
+are independently verified.
 
 ## Fresh evidence isolation
 

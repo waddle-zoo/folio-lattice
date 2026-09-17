@@ -38,6 +38,7 @@ from .auth import (
     reset_request_principal,
     set_request_principal,
 )
+from .backup_ops import BackupOperationsMonitor
 from .bridge import AttachedMcpBridge
 from .identity import (
     DEFAULT_IDENTITY_MAX_RESPONSE_BYTES,
@@ -610,6 +611,7 @@ class FolioHttpApp:
         config_ready: bool = True,
         local_tenant_id: str | None = None,
         local_actor_id: str | None = None,
+        backup_operations: BackupOperationsMonitor | None = None,
     ):
         if max_request_bytes < 1:
             raise ValueError("max_request_bytes must be positive")
@@ -637,6 +639,7 @@ class FolioHttpApp:
         self.config_ready = config_ready
         self.local_tenant_id = local_tenant_id
         self.local_actor_id = local_actor_id
+        self.backup_operations = backup_operations
         self.audit_logger = audit_logger or logging.getLogger("folio_lattice.audit")
         self.audit_logger.setLevel(logging.INFO)
         self._auth_rate_limiters = {
@@ -732,7 +735,19 @@ class FolioHttpApp:
             )
             return
         if scope["method"] == "GET" and scope["path"] == "/metrics":
-            metrics = self.service.audit_metrics()
+            metrics: dict[str, Any] = dict(self.service.audit_metrics())
+            if self.backup_operations is not None:
+                try:
+                    metrics.update(self.backup_operations.metrics())
+                except Exception:
+                    metrics.update(
+                        {
+                            "backup_ready": 0,
+                            "backup_age_seconds": -1,
+                            "backup_store_ready": 0,
+                            "backup_key_custody_ready": 0,
+                        }
+                    )
             await JSONResponse(metrics, headers={"Cache-Control": "no-store"})(
                 scope, receive, secure_send
             )
@@ -947,6 +962,21 @@ class FolioHttpApp:
             identity_ready = self._identity_ready()
         dependencies["provider"] = {"ready": provider_ready, "required": provider_required}
         dependencies["identity"] = {"ready": identity_ready, "required": identity_required}
+        if self.deployment_mode == "hosted" and self.backup_operations is not None:
+            try:
+                backup_status = self.backup_operations.status()
+                dependencies["backup_operations"] = {
+                    "ready": backup_status["ready"],
+                    "required": True,
+                    "alerts": backup_status["alerts"],
+                    "metrics": backup_status["metrics"],
+                }
+            except Exception:
+                dependencies["backup_operations"] = {
+                    "ready": False,
+                    "required": True,
+                    "reason": "hosted backup operations check failed",
+                }
         readiness["dependencies"] = dependencies
         readiness["ready"] = all(
             isinstance(dependency, dict) and dependency.get("ready") is True
