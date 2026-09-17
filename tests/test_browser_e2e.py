@@ -973,8 +973,11 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                 chrome = DevTools(browser, control_origin, root / "chrome-ui")
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.wait("Boolean(document.querySelector('#graph-artifacts button'))")
+                chrome.wait(
+                    "[...document.querySelectorAll('#artifact-library button')].filter((button) => button.textContent.startsWith('same-name.md')).length === 2"
+                )
                 duplicate_labels = chrome.evaluate(
-                    "[...document.querySelectorAll('#graph-artifacts button')].map((button) => button.textContent).filter((text) => text.startsWith('same-name.md'))"
+                    "[...document.querySelectorAll('#artifact-library button')].map((button) => button.textContent).filter((text) => text.startsWith('same-name.md'))"
                 )
                 self.assertEqual(len(duplicate_labels), 2)
                 self.assertTrue(all(" · " in label for label in duplicate_labels))
