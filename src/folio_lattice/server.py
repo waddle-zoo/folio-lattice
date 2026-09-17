@@ -1351,8 +1351,6 @@ class FolioHttpApp:
         actor_id = actor_id or "unknown"
         record = {
             "event": event,
-            "tenant_id": tenant_id,
-            "actor_id": actor_id,
             "correlation_id": correlation_id,
             "method": scope.get("method", ""),
             "outcome": outcome,
