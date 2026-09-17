@@ -10,6 +10,7 @@ import string
 import threading
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
@@ -18,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import uvicorn
 from starlette.responses import JSONResponse, RedirectResponse, Response
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .auth import (
     AuthenticationError,
@@ -55,6 +56,17 @@ from .sessions import (
 )
 
 DEFAULT_MAX_REQUEST_BYTES = 13 * 1024 * 1024
+PUBLIC_MCP_RATE_LIMIT = 120
+PUBLIC_MCP_RATE_MAX_KEYS = 4096
+PUBLIC_MCP_CONCURRENCY_LIMIT = 32
+PUBLIC_MCP_CONCURRENCY_PER_KEY = 8
+PUBLIC_MCP_CONCURRENCY_MAX_KEYS = 4096
+MCP_REQUEST_TOO_LARGE_CODE = "request_too_large"
+MCP_REQUEST_TOO_LARGE_MESSAGE = "Request body exceeds the allowed size."
+MCP_RATE_LIMIT_CODE = "mcp_rate_limited"
+MCP_RATE_LIMIT_MESSAGE = "Too many MCP requests. Try again later."
+MCP_CONCURRENCY_LIMIT_CODE = "mcp_concurrency_limited"
+MCP_CONCURRENCY_LIMIT_MESSAGE = "MCP service is busy. Try again later."
 MAX_AUTH_QUERY_BYTES = 8 * 1024
 MAX_AUTH_QUERY_VALUE = 4 * 1024
 AUTH_RATE_LIMIT_WINDOW_SECONDS = 60.0
@@ -105,6 +117,43 @@ class _BoundedRateLimiter:
                 return False, max(1, math.ceil(self.window_seconds - (now - started_at)))
             self._windows[key] = (started_at, count + 1)
             return True, 0
+
+
+class _BoundedConcurrencyLimiter:
+    def __init__(self, *, limit: int, per_key_limit: int, max_keys: int) -> None:
+        if limit < 1 or per_key_limit < 1 or max_keys < 1:
+            raise ValueError("concurrency bounds must be positive")
+        self.limit = limit
+        self.per_key_limit = per_key_limit
+        self.max_keys = max_keys
+        self._active: dict[str, int] = {}
+        self._total = 0
+        self._lock = threading.Lock()
+
+    def try_acquire(self, key: str) -> bool:
+        with self._lock:
+            active = self._active.get(key, 0)
+            if (
+                self._total >= self.limit
+                or active >= self.per_key_limit
+                or (active == 0 and len(self._active) >= self.max_keys)
+            ):
+                return False
+            self._active[key] = active + 1
+            self._total += 1
+            return True
+
+    def release(self, key: str) -> None:
+        with self._lock:
+            active = self._active.get(key, 0)
+            if active == 0:
+                return
+            if active <= 1:
+                self._active.pop(key, None)
+            else:
+                self._active[key] = active - 1
+            if self._total > 0:
+                self._total -= 1
 
 
 @dataclass(frozen=True)
@@ -408,11 +457,18 @@ class FolioHttpApp:
         auth_redirect_uri: str | None = None,
         control_origin: str | None = None,
         audit_logger: logging.Logger | None = None,
+        max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
+        public_mcp_rate_limit: int = PUBLIC_MCP_RATE_LIMIT,
+        public_mcp_concurrency_limit: int = PUBLIC_MCP_CONCURRENCY_LIMIT,
+        public_mcp_concurrency_per_key: int = PUBLIC_MCP_CONCURRENCY_PER_KEY,
     ):
+        if max_request_bytes < 1:
+            raise ValueError("max_request_bytes must be positive")
         self.app = app
         self.service = service
         self.inspection = inspection
         self.deployment_mode = deployment_mode
+        self.max_request_bytes = max_request_bytes
         self.authenticator = authenticator
         self.session_store = session_store
         self.identity_adapter = identity_adapter
@@ -425,6 +481,15 @@ class FolioHttpApp:
             "/auth/callback": _BoundedRateLimiter(limit=AUTH_CALLBACK_RATE_LIMIT),
             "/auth/logout": _BoundedRateLimiter(limit=AUTH_LOGOUT_RATE_LIMIT),
         }
+        self._public_mcp_rate_limiter = _BoundedRateLimiter(
+            limit=public_mcp_rate_limit,
+            max_keys=PUBLIC_MCP_RATE_MAX_KEYS,
+        )
+        self._public_mcp_concurrency_limiter = _BoundedConcurrencyLimiter(
+            limit=public_mcp_concurrency_limit,
+            per_key_limit=public_mcp_concurrency_per_key,
+            max_keys=PUBLIC_MCP_CONCURRENCY_MAX_KEYS,
+        )
         if deployment_mode == "hosted" and authenticator is None:
             raise ValueError("hosted mode requires configured OIDC authentication")
 
@@ -435,6 +500,12 @@ class FolioHttpApp:
         if scope["type"] != "http":
             await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
             return
+        public_mcp = scope["path"] == "/mcp"
+        public_receive = receive
+        if public_mcp and scope["method"] == "POST":
+            accepted, public_receive = await self._check_public_mcp_body(scope, receive, send)
+            if not accepted:
+                return
         if scope["method"] == "GET" and scope["path"] == "/sign-in":
             await self.inspection(scope, receive, send)
             return
@@ -466,7 +537,7 @@ class FolioHttpApp:
             return
         if scope["method"] == "GET" and scope["path"] == "/v1/me":
             try:
-                principal = self._authenticate(scope)
+                me_principal = self._authenticate(scope)
             except AuthenticationError:
                 await self._error(
                     scope,
@@ -481,8 +552,8 @@ class FolioHttpApp:
             await JSONResponse(
                 {
                     "authenticated": True,
-                    "tenant_id": principal.tenant_id,
-                    "actor_id": principal.actor_id,
+                    "tenant_id": me_principal.tenant_id,
+                    "actor_id": me_principal.actor_id,
                 },
                 headers={"Cache-Control": "no-store"},
             )(scope, receive, send)
@@ -533,10 +604,15 @@ class FolioHttpApp:
             await response(scope, receive, send)
             return
         principal_token = None
+        principal: Principal | None = None
         if self.authenticator is not None:
             try:
                 principal = self._authenticate(scope, allow_session=scope["path"] != "/mcp")
             except AuthenticationError:
+                if public_mcp and not await self._check_public_mcp_rate(
+                    scope, public_receive, send, None
+                ):
+                    return
                 await self._error(
                     scope,
                     receive,
@@ -560,6 +636,36 @@ class FolioHttpApp:
                 or path in {"/api/mcp", "/api/bridge", "/ui.css", "/ui.js"}
             ):
                 await self.inspection(scope, receive, send)
+                return
+            if path == "/mcp":
+                if not await self._check_public_mcp_rate(scope, public_receive, send, principal):
+                    return
+                key = _public_mcp_key(scope, principal)
+                if not self._public_mcp_concurrency_limiter.try_acquire(key):
+                    request_id = uuid.uuid4().hex
+                    self._audit(
+                        scope,
+                        event="mcp_concurrency_limited",
+                        outcome="denied",
+                        status=429,
+                        request_id=request_id,
+                    )
+                    await self._error(
+                        scope,
+                        public_receive,
+                        send,
+                        429,
+                        MCP_CONCURRENCY_LIMIT_CODE,
+                        MCP_CONCURRENCY_LIMIT_MESSAGE,
+                        retryable=True,
+                        headers={"Retry-After": "1"},
+                        request_id=request_id,
+                    )
+                    return
+                try:
+                    await self.app(scope, public_receive, send)
+                finally:
+                    self._public_mcp_concurrency_limiter.release(key)
                 return
             await self.app(scope, receive, send)
         finally:
@@ -772,6 +878,127 @@ class FolioHttpApp:
         )
         await response(scope, receive, send)
 
+    async def _check_public_mcp_body(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> tuple[bool, Receive]:
+        content_lengths = [
+            value
+            for header, value in scope.get("headers", [])
+            if header.lower() == b"content-length"
+        ]
+        if len(content_lengths) == 1:
+            try:
+                declared_size = int(content_lengths[0])
+            except ValueError:
+                pass
+            else:
+                if declared_size > self.max_request_bytes:
+                    await self._public_mcp_error(
+                        scope,
+                        receive,
+                        send,
+                        status_code=413,
+                        code=MCP_REQUEST_TOO_LARGE_CODE,
+                        message=MCP_REQUEST_TOO_LARGE_MESSAGE,
+                        retry_after=0,
+                        retryable=False,
+                        event="mcp_request_too_large",
+                    )
+                    return False, receive
+
+        messages: deque[Message] = deque()
+        body_size = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                messages.append(message)
+                break
+            body = message.get("body", b"")
+            body_size += len(body)
+            if body_size > self.max_request_bytes:
+                await self._public_mcp_error(
+                    scope,
+                    receive,
+                    send,
+                    status_code=413,
+                    code=MCP_REQUEST_TOO_LARGE_CODE,
+                    message=MCP_REQUEST_TOO_LARGE_MESSAGE,
+                    retry_after=0,
+                    retryable=False,
+                    event="mcp_request_too_large",
+                )
+                return False, receive
+            messages.append(message)
+            if not message.get("more_body", False):
+                break
+
+        async def replay() -> Message:
+            if messages:
+                return messages.popleft()
+            return await receive()
+
+        return True, replay
+
+    async def _check_public_mcp_rate(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        principal: Principal | None,
+    ) -> bool:
+        key = _public_mcp_key(scope, principal)
+        try:
+            allowed, retry_after = self._public_mcp_rate_limiter.allow(key)
+        except Exception:
+            allowed, retry_after = False, math.ceil(AUTH_RATE_LIMIT_WINDOW_SECONDS)
+        if allowed:
+            return True
+        await self._public_mcp_error(
+            scope,
+            receive,
+            send,
+            status_code=429,
+            code=MCP_RATE_LIMIT_CODE,
+            message=MCP_RATE_LIMIT_MESSAGE,
+            retry_after=retry_after,
+            retryable=True,
+            event="mcp_rate_limited",
+        )
+        return False
+
+    async def _public_mcp_error(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+        retry_after: int,
+        retryable: bool,
+        event: str,
+    ) -> None:
+        request_id = uuid.uuid4().hex
+        self._audit(
+            scope,
+            event=event,
+            outcome="denied",
+            status=status_code,
+            request_id=request_id,
+        )
+        await self._error(
+            scope,
+            receive,
+            send,
+            status_code,
+            code,
+            message,
+            retryable=retryable,
+            headers={"Retry-After": str(retry_after)},
+            request_id=request_id,
+        )
+
     async def _check_auth_rate(
         self,
         scope: Scope,
@@ -881,6 +1108,13 @@ def _client_key(scope: Scope) -> str:
     if isinstance(client, (tuple, list)) and client and isinstance(client[0], str):
         return client[0]
     return "unknown"
+
+
+def _public_mcp_key(scope: Scope, principal: Principal | None) -> str:
+    client = _client_key(scope)
+    if principal is None:
+        return f"ip:{client}"
+    return f"identity:{principal.tenant_id}\x1f{principal.actor_id}\x1f{client}"
 
 
 def _cookie(scope: Scope, name: str) -> str | None:
@@ -1107,6 +1341,7 @@ def run_http(host: str, port: int) -> None:
             identity_adapter=identity_adapter,
             auth_redirect_uri=auth_redirect_uri,
             control_origin=settings.control_origin,
+            max_request_bytes=settings.max_request_bytes,
         ),
         host=host,
         port=port,
