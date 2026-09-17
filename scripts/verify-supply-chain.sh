@@ -63,6 +63,35 @@ jq -e '
 
 image_name="${IMAGE_REF%@*}"
 digest="${IMAGE_REF##*@}"
+
+verify_cosign_binding() {
+  local path="$1"
+  local label="$2"
+  jq -e \
+    --arg image "$image_name" \
+    --arg digest "$digest" \
+    '
+      type == "array" and length > 0 and
+      any(.[];
+        (.critical.image["docker-manifest-digest"] //
+          .critical.image["Docker-manifest-digest"]) == $digest and
+        (.critical.identity["docker-reference"] == $image or
+          .critical.identity["docker-reference"] == ($image | split("@")[0]) or
+          .critical.identity["docker-reference"] ==
+            ($image | sub(":([^/:]+)$"; "")))
+      )
+    ' "$path" >/dev/null \
+    || fail "$label does not bind the signed object to the image digest"
+}
+
+if [[ "$REQUIRE_SIGNATURE" == 1 ]]; then
+  verify_cosign_binding "$SIGNATURE_PATH" "signature verification"
+  verify_cosign_binding "$ATTESTATION_PATH" "attestation verification"
+  jq -e 'type == "array" and any(.[].payload?; strings | length > 0)' \
+    "$ATTESTATION_PATH" >/dev/null \
+    || fail "attestation verification does not contain a payload"
+fi
+
 jq -e \
   --arg source "$SOURCE_SHA" \
   --arg digest "${digest#sha256:}" \

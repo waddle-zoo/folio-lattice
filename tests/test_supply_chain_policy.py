@@ -51,10 +51,15 @@ class SupplyChainPolicyTests(unittest.TestCase):
             "IMAGE_DIGEST_REF",
             "verify-supply-chain.sh",
             "severity-cutoff: high",
+            "--output json",
+            "overwrite: false",
+            "image_revision",
         ):
             self.assertIn(required, supply_chain)
 
         dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn('org.opencontainers.image.revision="$VCS_REF"', dockerfile)
+        self.assertIn("ARG VCS_REF=unknown", dockerfile)
         base_images = re.findall(r"^FROM\s+(?:--[^\s]+\s+)*([^\s]+)", dockerfile, re.MULTILINE)
         self.assertGreater(len(base_images), 0)
         self.assertTrue(all(re.search(r"@sha256:[0-9a-f]{64}$", image) for image in base_images))
@@ -146,6 +151,104 @@ class SupplyChainPolicyTests(unittest.TestCase):
             )
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("provenance fields", rejected.stderr)
+
+    def test_supply_chain_verifier_binds_cosign_outputs_to_digest(self) -> None:
+        verifier_source = ROOT / "scripts/verify-supply-chain.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_root = Path(directory)
+            scripts = fixture_root / "scripts"
+            scripts.mkdir()
+            verifier = scripts / verifier_source.name
+            verifier.write_text(verifier_source.read_text())
+            verifier.chmod(0o755)
+            (fixture_root / "fixture.txt").write_text("clean fixture\n")
+            self._run_git(fixture_root, "init", "-q")
+            self._run_git(fixture_root, "config", "user.email", "qa@example.invalid")
+            self._run_git(fixture_root, "config", "user.name", "QA fixture")
+            self._run_git(fixture_root, "add", "fixture.txt", "scripts/verify-supply-chain.sh")
+            self._run_git(fixture_root, "commit", "-qm", "fixture")
+            source_sha = self._run_git(fixture_root, "rev-parse", "HEAD")
+
+            evidence = fixture_root / "evidence"
+            evidence.mkdir()
+            (evidence / "sbom.json").write_text(
+                json.dumps({"bomFormat": "CycloneDX", "components": [{"name": "fixture"}]})
+            )
+            (evidence / "licenses.json").write_text(
+                json.dumps({"components": [{"name": "fixture"}]})
+            )
+            (evidence / "vulnerabilities.json").write_text(
+                json.dumps({"runs": [{"tool": {"driver": {"rules": []}}}]})
+            )
+            image_name = f"ghcr.io/example/folio-lattice:sha-{source_sha}"
+            digest = "sha256:" + "0" * 64
+            image = f"{image_name}@{digest}"
+            provenance = self._provenance(source_sha, image_name)
+            provenance_path = evidence / "provenance.json"
+            provenance_path.write_text(json.dumps(provenance))
+            signature_path = evidence / "signature.json"
+            attestation_path = evidence / "attestation.json"
+            signature_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "critical": {
+                                "identity": {"docker-reference": image_name},
+                                "image": {"docker-manifest-digest": digest},
+                            },
+                            "payload": "e30=",
+                        }
+                    ]
+                )
+            )
+            attestation_path.write_text(signature_path.read_text())
+            environment = {
+                **os.environ,
+                "SOURCE_SHA": source_sha,
+                "SOURCE_REPOSITORY": "https://github.com/example/folio-lattice",
+                "WORKFLOW_REF": "example/folio-lattice/.github/workflows/supply-chain.yml@refs/tags/v0.1.0",
+                "BUILDER_ID": "https://github.com/example/folio-lattice/.github/workflows/supply-chain.yml@refs/tags/v0.1.0",
+                "IMAGE_REF": image,
+                "SBOM_PATH": str(evidence / "sbom.json"),
+                "LICENSE_PATH": str(evidence / "licenses.json"),
+                "VULNERABILITY_PATH": str(evidence / "vulnerabilities.json"),
+                "PROVENANCE_PATH": str(provenance_path),
+                "SIGNATURE_PATH": str(signature_path),
+                "ATTESTATION_PATH": str(attestation_path),
+                "REQUIRE_SIGNATURE": "1",
+            }
+            passed = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(passed.returncode, 0, passed.stderr)
+            self.assertEqual(json.loads(passed.stdout)["signature"], "verified")
+
+            attestation_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "critical": {
+                                "identity": {"docker-reference": image_name},
+                                "image": {"docker-manifest-digest": "sha256:" + "f" * 64},
+                            },
+                            "payload": "e30=",
+                        }
+                    ]
+                )
+            )
+            rejected = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("attestation verification", rejected.stderr)
 
     @staticmethod
     def _run_git(cwd: Path, *arguments: str) -> str:

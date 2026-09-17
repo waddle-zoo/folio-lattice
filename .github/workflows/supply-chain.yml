@@ -138,6 +138,18 @@ jobs:
             '{status: "pass", source_sha: $source, image_ref: $image,
               promotion: "digest-pinned"}' > evidence/image-digest.json
 
+      - name: Verify image source label
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE_DIGEST_REF" >/dev/null
+          image_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_DIGEST_REF")"
+          [[ "$image_revision" == "$SOURCE_SHA" ]]
+          jq -n --arg source "$SOURCE_SHA" --arg image "$IMAGE_DIGEST_REF" \
+            --arg revision "$image_revision" \
+            '{status: "pass", image_ref: $image, source_sha: $source,
+              image_revision: $revision, vcs_ref_bound: true}' \
+            > evidence/image-source.json
+
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
@@ -215,15 +227,26 @@ jobs:
             --predicate evidence/provenance.json --type slsaprovenance \
             "$IMAGE_DIGEST_REF"
           cosign verify "$IMAGE_DIGEST_REF" \
+            --output json \
             --certificate-identity "$COSIGN_IDENTITY" \
             --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
-            > evidence/signature-verification.json
+            > "$RUNNER_TEMP/signature-verification.json"
           cosign verify-attestation "$IMAGE_DIGEST_REF" \
             --type slsaprovenance \
+            --output json \
             --certificate-identity "$COSIGN_IDENTITY" \
             --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+            > "$RUNNER_TEMP/attestation-verification.json"
+          jq -s 'map(if type == "array" then .[] else . end) |
+            map({critical: .critical})' \
+            "$RUNNER_TEMP/signature-verification.json" \
+            > evidence/signature-verification.json
+          jq -s 'map(if type == "array" then .[] else . end) |
+            map({critical: .critical, payload: .payload})' \
+            "$RUNNER_TEMP/attestation-verification.json" \
             > evidence/attestation-verification.json
-          jq -s -e '.[0].payload' evidence/attestation-verification.json \
+          jq -s -e 'map(if type == "array" then .[] else . end) |
+            .[0].payload' "$RUNNER_TEMP/attestation-verification.json" \
             | base64 --decode > evidence/provenance.statement.json
 
       - name: Verify signed release inputs
@@ -243,6 +266,17 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: supply-chain-${{ github.run_id }}
-          path: evidence
+          path: |
+            evidence/image-digest.json
+            evidence/image-source.json
+            evidence/sbom.cdx.json
+            evidence/licenses.json
+            evidence/vulnerability.sarif
+            evidence/provenance.statement.json
+            evidence/pre-sign-verification.json
+            evidence/signature-verification.json
+            evidence/attestation-verification.json
+            evidence/verification.json
           retention-days: 90
-          if-no-files-found: ignore
+          overwrite: false
+          if-no-files-found: error
