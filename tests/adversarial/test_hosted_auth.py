@@ -113,9 +113,7 @@ def test_authenticated_principal_cannot_cross_tenant_acl_boundary(
     token_a = _token(target)
     fixture = _seed_private_graph(mcp, token_a)
     token_b = _token(target, "member_b")
-    other = mcp.call_tool(
-        "artifact_read", {"artifact_id": fixture["artifact_id"]}, token=token_b
-    )
+    other = mcp.call_tool("artifact_read", {"artifact_id": fixture["artifact_id"]}, token=token_b)
     unknown = mcp.call_tool(
         "artifact_read", {"artifact_id": "artifact-that-does-not-exist-0001"}, token=token_b
     )
