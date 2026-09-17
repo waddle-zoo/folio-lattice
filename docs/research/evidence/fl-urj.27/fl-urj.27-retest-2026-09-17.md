@@ -248,8 +248,7 @@ comment was written because the shared Dolt server was also unreachable
 handoff.
 
 The evidence branch push was attempted and blocked because the environment
-could not resolve github.com. The local evidence commit remains
-e030097; no product files are included.
+could not resolve github.com. The local evidence commit contains no product files.
 
 Actionable routing is explicit in each failure: interaction/discoverability
 remediation to fl-urj.7.7, tenant/admin/connection/audit surfaces to
