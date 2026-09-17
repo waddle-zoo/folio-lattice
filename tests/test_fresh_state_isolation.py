@@ -9,6 +9,53 @@ from pathlib import Path
 
 
 class FreshStateIsolationTests(unittest.TestCase):
+    def test_make_rejects_shell_metacharacter_project_names(self) -> None:
+        root = Path(__file__).parents[1]
+        valid_environment = {**os.environ, "FOLIO_COMPOSE_PROJECT": "folio-fresh-test_1"}
+        valid = subprocess.run(
+            ["make", "validate-compose-project"],
+            cwd=root,
+            env=valid_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        for project in (
+            "safe; printf SHELL_INJECTION_MARKER",
+            "safe project",
+            "$(printf SHELL_INJECTION_MARKER)",
+            "`printf SHELL_INJECTION_MARKER`",
+            "$HOME",
+        ):
+            with self.subTest(project=project):
+                environment = {**os.environ, "FOLIO_COMPOSE_PROJECT": project}
+                rejected = subprocess.run(
+                    ["make", "validate-compose-project"],
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("project-name grammar", rejected.stderr)
+
+                dry_run = subprocess.run(
+                    ["make", "-n", "docker-down"],
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
+                self.assertNotIn("SHELL_INJECTION_MARKER", dry_run.stdout)
+                self.assertIn(
+                    'COMPOSE_PROJECT_NAME="${FOLIO_COMPOSE_PROJECT:-${COMPOSE_PROJECT_NAME:-}}"',
+                    dry_run.stdout,
+                )
+
     def test_docker_test_starts_pinned_compose_and_uses_selected_urls(self) -> None:
         root = Path(__file__).parents[1]
         result = subprocess.run(
@@ -30,7 +77,10 @@ class FreshStateIsolationTests(unittest.TestCase):
         self.assertIn(
             'build --build-arg VCS_REF="1f9fb0164f1902981801aa11e9205d6e4d07beaf"', result.stdout
         )
-        self.assertIn("docker compose -p folio-fresh-test up -d", result.stdout)
+        self.assertIn(
+            'COMPOSE_PROJECT_NAME="${FOLIO_COMPOSE_PROJECT:-${COMPOSE_PROJECT_NAME:-}}" docker compose up -d',
+            result.stdout,
+        )
         self.assertIn(
             'FOLIO_BASE_URL="${FOLIO_BASE_URL:-http://127.0.0.1:${FOLIO_HOST_PORT:-8000}}"',
             result.stdout,
