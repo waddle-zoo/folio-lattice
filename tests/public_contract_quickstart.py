@@ -149,6 +149,29 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
             assert read["version"]["id"] == child["version"]["id"]
             assert read["content_base64"] == base64.b64encode(spec[1]).decode()
 
+        html = next(item for item in children if item["artifact"]["name"].endswith(".html"))
+        css = next(item for item in children if item["artifact"]["name"].endswith(".css"))
+        javascript = next(item for item in children if item["artifact"]["name"].endswith(".js"))
+        css_url = f"/content/{css['artifact']['id']}/{css['version']['id']}"
+        javascript_url = f"/content/{javascript['artifact']['id']}/{javascript['version']['id']}"
+        linked_html = f"""<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><title>{marker}</title>
+<link rel="stylesheet" href="{css_url}"></head><body>
+<main><h1>{body_marker}</h1><p data-asset-status>Loading</p></main>
+<script src="{javascript_url}"></script></body></html>"""
+        html_version_2 = await call(
+            client,
+            "artifact_write",
+            {
+                "artifact_id": html["artifact"]["id"],
+                "parent_version_id": html["version"]["id"],
+                "content_base64": base64.b64encode(linked_html.encode()).decode(),
+                "media_type": "text/html",
+                "reason": "version-pinned linked asset regression",
+            },
+        )
+        html_render_version = html_version_2["id"]
+
         first_page = await call(
             client,
             "artifact_list",
@@ -314,9 +337,6 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         assert "attached artifact" in ambiguous_error
 
     render_url = render_url.rstrip("/")
-    html = next(item for item in children if item["artifact"]["name"].endswith(".html"))
-    css = next(item for item in children if item["artifact"]["name"].endswith(".css"))
-    javascript = next(item for item in children if item["artifact"]["name"].endswith(".js"))
     binary = next(item for item in children if item["artifact"]["name"].endswith(".bin"))
     with urllib.request.urlopen(
         f"{base_url.rstrip('/')}/standalone/{html['artifact']['id']}", timeout=10
@@ -325,8 +345,13 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         assert response.status == 200
         assert response.headers["Content-Type"].startswith("text/html")
         assert 'id="human-preview"' in standalone
-    with iframe_get(f"{render_url}/render/{html['artifact']['id']}") as response:
-        assert response.read().decode() == f"<h1>{body_marker}</h1>"
+    with iframe_get(
+        f"{render_url}/render/{html['artifact']['id']}?version_id={html_render_version}"
+    ) as response:
+        rendered_html = response.read().decode()
+        assert rendered_html == linked_html
+        assert css_url in rendered_html
+        assert javascript_url in rendered_html
         policy = response.headers["Content-Security-Policy"]
         assert "default-src 'none'" in policy
         assert "connect-src 'none'" in policy
@@ -343,6 +368,22 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
             timeout=10,
         ) as response:
             assert response.read()
+
+    # The immutable HTML version continues to resolve its original CSS/JS
+    # IDs. A mismatched pair and a missing asset are not alternate lookup
+    # forms and must fail closed at the renderer/MCP boundary.
+    try:
+        iframe_get(f"{render_url}/content/{css['artifact']['id']}/{javascript['version']['id']}")
+    except urllib.error.HTTPError as error:
+        assert error.code in {400, 404}
+    else:
+        raise AssertionError("mismatched artifact/version URL unexpectedly succeeded")
+    try:
+        iframe_get(f"{render_url}/content/art_missing/ver_missing")
+    except urllib.error.HTTPError as error:
+        assert error.code in {400, 404}
+    else:
+        raise AssertionError("missing asset URL unexpectedly succeeded")
 
     try:
         iframe_get(f"{render_url}/render/{binary['artifact']['id']}")

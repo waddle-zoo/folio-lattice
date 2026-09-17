@@ -780,6 +780,17 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 )
                 js_id = javascript["artifact"]["id"]
                 js_version = javascript["version"]["id"]
+                css_id = css["artifact"]["id"]
+                css_version = css["version"]["id"]
+                linked_source = f"""<!doctype html><html><head>
+<link rel="stylesheet" href="/content/{css_id}/{css_version}"></head><body>
+<p id="linked-status">Loading</p>
+<script src="/content/{js_id}/{js_version}"></script>
+<script>
+const linked = getComputedStyle(document.body).color === 'rgb(1, 2, 3)';
+parent.postMessage({{type: 'folio-linked-assets', value: linked ? 'linked-assets-loaded' : 'linked-css-missing'}}, '*');
+</script></body></html>""".encode()
+                linked = create(control_origin, "linked.html", linked_source, "text/html")
                 hostile_source = self._hostile_source(
                     harness_origin, render_origin, js_id, js_version
                 ).encode()
@@ -790,6 +801,10 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     {
                         "javascript": f"{render_origin}/render/{js_id}",
                         "stylesheet": f"{render_origin}/render/{css['artifact']['id']}",
+                        "linked": (
+                            f"{render_origin}/render/{linked['artifact']['id']}"
+                            f"?version_id={linked['version']['id']}"
+                        ),
                     },
                 )
                 harness = ThreadingHTTPServer(("127.0.0.1", harness_port), handler)
@@ -841,6 +856,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 embedded_dom = dump_dom(browser, f"{harness_origin}/embedded", root / "chrome-3")
                 self.assertIn("javascript-ran", embedded_dom)
                 self.assertIn("stylesheet-loaded", embedded_dom)
+                self.assertIn("linked-assets-loaded", embedded_dom)
             finally:
                 if renderer is not None:
                     stop_server(renderer)
@@ -2030,6 +2046,7 @@ addEventListener('message', (event) => {{ const frame = document.getElementById(
             embedded_page = f"""<!doctype html><body><pre id="embedded-result">waiting</pre>
 <iframe id="javascript" sandbox="allow-scripts" src="{embedded_urls["javascript"]}"></iframe>
 <iframe id="stylesheet" sandbox="allow-scripts" src="{embedded_urls["stylesheet"]}"></iframe>
+<iframe id="linked" sandbox="allow-scripts" src="{embedded_urls["linked"]}"></iframe>
 <script>
 const result = document.getElementById('embedded-result');
 const values = new Set();
@@ -2037,6 +2054,7 @@ const report = (value) => {{ values.add(value); result.textContent = [...values]
 document.getElementById('stylesheet').addEventListener('load', () => report('stylesheet-loaded'));
 addEventListener('message', (event) => {{
   if (event.source === document.getElementById('javascript').contentWindow && event.data?.type === 'folio-render-result') report(event.data.value);
+  if (event.source === document.getElementById('linked').contentWindow && event.data?.type === 'folio-linked-assets') report(event.data.value);
 }});
 </script></body>""".encode()
 

@@ -21,7 +21,7 @@ from folio_lattice.bridge import AttachedMcpBridge, BridgeRequestError, validate
 from folio_lattice.inspection import InspectionApp, ui_html
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.public_mcp import AdminMcpClient, HttpMcpClient, PublicMcpError
-from folio_lattice.renderer import RendererApp
+from folio_lattice.renderer import RendererApp, versioned_content_url
 from folio_lattice.server import Settings, _optional_mcp_url_env, _origin_env
 from folio_lattice.service import FolioLattice
 
@@ -913,6 +913,129 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         status, headers, _ = await call(self.renderer, "POST", f"/render/{html_id}")
         self.assertEqual(status, 405)
         self.assertIn("sandbox allow-scripts", headers["content-security-policy"])
+
+    async def test_version_pinned_linked_assets_are_acl_and_version_bound(self) -> None:
+        css_id = self.css["artifact"]["id"]
+        css_version = self.css["version"]["id"]
+        javascript_id = self.javascript["artifact"]["id"]
+        javascript_version = self.javascript["version"]["id"]
+        css_url = versioned_content_url(css_id, css_version)
+        javascript_url = versioned_content_url(javascript_id, javascript_version)
+        html_source = (
+            "<!doctype html><html><head>"
+            f'<link rel="stylesheet" href="{css_url}"></head><body>'
+            '<main id="asset-recipe">Linked assets</main>'
+            f'<script src="{javascript_url}"></script></body></html>'
+        ).encode()
+        linked = self.service.create_artifact(
+            tenant_id="web",
+            name="linked-site.html",
+            data=html_source,
+            media_type="text/html",
+            actor="dev",
+        )
+        self.service.link("web", linked["artifact"]["id"], self.css["artifact"]["id"], "references")
+        self.service.link(
+            "web", linked["artifact"]["id"], self.javascript["artifact"]["id"], "references"
+        )
+        status, _, rendered = await call(
+            self.renderer,
+            "GET",
+            f"/render/{linked['artifact']['id']}",
+            query=f"version_id={linked['version']['id']}",
+            fetch_dest="iframe",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(rendered, html_source)
+        self.assertIn(css_url.encode(), rendered)
+        self.assertIn(javascript_url.encode(), rendered)
+
+        for artifact_id, version_id, expected in (
+            (css_id, css_version, b"body{color:red}"),
+            (javascript_id, javascript_version, b"document.body.dataset.ran='yes'"),
+        ):
+            status, _, content = await call(
+                self.renderer, "GET", versioned_content_url(artifact_id, version_id)
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(content, expected)
+
+        css_updated = self.service.write_version(
+            tenant_id="web",
+            artifact_id=css_id,
+            data=b"body{color:blue}",
+            media_type="text/css",
+            actor="dev",
+            reason="asset version regression",
+            source_context={},
+            parent_version_id=css_version,
+        )
+        status, _, old_content = await call(
+            self.renderer, "GET", versioned_content_url(css_id, css_version)
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(old_content, b"body{color:red}")
+        status, _, new_content = await call(
+            self.renderer, "GET", versioned_content_url(css_id, css_updated["id"])
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(new_content, b"body{color:blue}")
+
+        # A version belongs to one artifact.  The renderer must not turn a
+        # mismatched immutable ID pair into a readable resource.
+        status, _, body = await call(
+            self.renderer, "GET", versioned_content_url(css_id, javascript_version)
+        )
+        self.assertIn(status, {400, 404})
+        self.assertNotIn(b"body{color:red}", body)
+
+        # The MCP caller supplies tenant and ACL enforcement; the renderer
+        # never reads another tenant just because an ID was placed in a URL.
+        other = self.service.create_artifact(
+            tenant_id="other",
+            name="private.css",
+            data=b"body{color:lime}",
+            media_type="text/css",
+            actor="other-user",
+        )
+        status, _, body = await call(
+            self.renderer,
+            "GET",
+            versioned_content_url(other["artifact"]["id"], other["version"]["id"]),
+        )
+        self.assertIn(status, {400, 404})
+        self.assertNotIn(b"color:lime", body)
+
+        status, _, body = await call(self.renderer, "GET", "/content/art_missing/ver_missing")
+        self.assertIn(status, {400, 404})
+        self.assertNotIn(b"private.css", body)
+
+        private = self.service.create_artifact(
+            tenant_id="web",
+            name="unshared.css",
+            data=b"body{color:orange}",
+            media_type="text/css",
+            actor="owner-only",
+        )
+        token = set_request_principal(
+            Principal(
+                tenant_id="web",
+                actor_id="web-user",
+                issuer="https://issuer.example",
+                subject="web-user-subject",
+                scopes=frozenset({"artifact:read"}),
+            )
+        )
+        try:
+            status, _, body = await call(
+                self.renderer,
+                "GET",
+                versioned_content_url(private["artifact"]["id"], private["version"]["id"]),
+            )
+        finally:
+            reset_request_principal(token)
+        self.assertIn(status, {400, 404})
+        self.assertNotIn(b"color:orange", body)
 
     async def test_renderer_denies_top_level_render_navigation_but_allows_iframe(self) -> None:
         html_id = self.html["artifact"]["id"]

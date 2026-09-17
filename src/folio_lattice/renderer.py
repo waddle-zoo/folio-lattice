@@ -41,8 +41,24 @@ def _base_media_type(value: str) -> str:
     return value.split(";", 1)[0].strip().lower()
 
 
+def versioned_content_url(artifact_id: str, version_id: str) -> str:
+    """Build the only asset URL form exposed by the isolated renderer.
+
+    Asset links must retain both stable IDs.  Names are labels (and can be
+    duplicated), while omitting the version would make an old HTML version
+    silently load a later mutable pointer.  Keep URL construction in one place
+    so renderer wrappers and agent-facing examples cannot drift apart.
+    """
+
+    if not isinstance(artifact_id, str) or not artifact_id:
+        raise ValueError("artifact_id is required")
+    if not isinstance(version_id, str) or not version_id:
+        raise ValueError("version_id is required")
+    return f"/content/{quote(artifact_id, safe='')}/{quote(version_id, safe='')}"
+
+
 def _wrapper(artifact_id: str, version_id: str, media_type: str) -> str:
-    source = f"/content/{quote(artifact_id, safe='')}/{quote(version_id, safe='')}"
+    source = versioned_content_url(artifact_id, version_id)
     if media_type == "text/css":
         head = f'<link rel="stylesheet" href="{escape(source, quote=True)}">'
         body = "<main><h1>Stylesheet preview</h1><p>Folio Lattice CSS artifact.</p><button>Button</button></main>"

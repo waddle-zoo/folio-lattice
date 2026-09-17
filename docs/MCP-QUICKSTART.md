@@ -58,22 +58,13 @@ server context and are returned or applied by the server.
 ### 1. Create each body separately
 
 `content_base64` is the standard base64 encoding of the complete body bytes.
-These are five separate `artifact_create` calls, not one multi-file request.
+These are separate `artifact_create` calls, not one multi-file request. Create
+the Markdown and binary nodes directly, then create CSS/JavaScript followed by
+HTML using the render-safe linked recipe below so the HTML can retain the
+exact asset URLs.
 
 ```json
 {"name":"agent-graph.md","media_type":"text/markdown","content_base64":"IyBBZ2VudCBncmFwaApxdWlja3N0YXJ0IGJvZHkgbWFya2VyCg==","reason":"agent quickstart"}
-```
-
-```json
-{"name":"agent-graph.html","media_type":"text/html","content_base64":"PGgxPkFnZW50IGdyYXBoPC9oMT4K","reason":"agent quickstart"}
-```
-
-```json
-{"name":"agent-graph.css","media_type":"text/css","content_base64":"Ym9keSB7IGNvbG9yOiBuYXZ5OyB9Cg==","reason":"agent quickstart"}
-```
-
-```json
-{"name":"agent-graph.js","media_type":"application/javascript","content_base64":"ZG9jdW1lbnQuYm9keS5kYXRhc2V0LnJlYWR5ID0gJ3llcyc7Cg==","reason":"agent quickstart"}
 ```
 
 ```json
@@ -102,6 +93,57 @@ the name:
 Store the corresponding values from the other four responses as
 `html_artifact_id`/`html_version_id`, `css_artifact_id`/`css_version_id`,
 `js_artifact_id`/`js_version_id`, and `binary_artifact_id`/`binary_version_id`.
+
+### Render-safe links for HTML, CSS, and JavaScript
+
+An HTML artifact does not resolve `href="agent-graph.css"` or
+`src="agent-graph.js"` by filename. Names are labels and may be duplicated.
+Create the CSS and JavaScript artifacts first, retain both IDs from each
+response, and build the HTML body with immutable, first-party `/content`
+URLs:
+
+```python
+import base64
+
+css = await call("artifact_create", {
+    "name": "agent-graph.css",
+    "media_type": "text/css",
+    "content_base64": base64.b64encode(
+        b":root { color-scheme: light; } body { color: #17324d; font: 16px system-ui; }"
+    ).decode(),
+    "reason": "agent quickstart",
+})
+javascript = await call("artifact_create", {
+    "name": "agent-graph.js",
+    "media_type": "application/javascript",
+    "content_base64": base64.b64encode(
+        b"document.querySelector('[data-agent-status]').textContent = 'Ready';"
+    ).decode(),
+    "reason": "agent quickstart",
+})
+css_url = f"/content/{css['artifact']['id']}/{css['version']['id']}"
+javascript_url = f"/content/{javascript['artifact']['id']}/{javascript['version']['id']}"
+html_body = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent graph</title>
+<link rel="stylesheet" href="{css_url}"></head>
+<body><main><h1>Agent graph</h1><p data-agent-status>Loading</p></main>
+<script src="{javascript_url}"></script></body></html>"""
+html = await call("artifact_create", {
+    "name": "agent-graph.html",
+    "media_type": "text/html",
+    "content_base64": base64.b64encode(html_body.encode()).decode(),
+    "reason": "agent quickstart",
+})
+```
+
+The returned `html.artifact.id` and `html.version.id` are the values used for
+the HTML node below. The two URLs are intentionally version-pinned: a later
+write creates a new version and never changes what an older HTML version
+loads. The renderer serves these URLs only after the authenticated MCP
+`artifact_read` applies tenant and ACL checks; missing artifacts, mismatched
+artifact/version pairs, cross-tenant IDs, and denied artifacts fail closed.
+Do not substitute an artifact name, a mutable `render/<id>` URL, a remote URL,
+or a guessed version.
 
 ### 2. Link the Markdown root to every asset
 
@@ -398,4 +440,7 @@ artifact/version IDs, unified filename/media-type/body discovery with bounded
 search cursors, component and graph-root scope, backward-compatible listing,
 literal grep, chunk reads, renderer headers, and the attached-MCP allow path.
 It also verifies bridge rejection for an out-of-graph artifact ID and for a
-filename used as an ambiguous duplicate-name target.
+filename used as an ambiguous duplicate-name target. The renderer regression
+also loads an HTML version containing the exact CSS/JavaScript `/content`
+links, reads the pinned old versions after a write creates new versions, and
+rejects missing, mismatched, cross-tenant, and unauthorized asset IDs.
