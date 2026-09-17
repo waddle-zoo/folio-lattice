@@ -2909,54 +2909,6 @@ class FolioLattice:
         acl_ready = False
         external_mcp_ready = False
         audit_ready = False
-        try:
-            with self.connect() as db:
-                objects = {
-                    row[0]
-                    for row in db.execute("SELECT name FROM sqlite_master WHERE name IS NOT NULL")
-                }
-                indexes = {
-                    row[0]
-                    for row in db.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'index' AND name IS NOT NULL"
-                    )
-                }
-                columns_ready = all(
-                    required <= {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
-                    for table, required in REQUIRED_SCHEMA_COLUMNS.items()
-                )
-                quick_check = db.execute("PRAGMA quick_check").fetchone()
-                database_ready = quick_check is not None and quick_check[0] == "ok"
-                migration_ready = (
-                    REQUIRED_SCHEMA_OBJECTS <= objects
-                    and REQUIRED_SCHEMA_INDEXES <= indexes
-                    and columns_ready
-                )
-                acl_ready = (
-                    "acl_grants" in objects
-                    and "acl_grants_lookup_idx" in indexes
-                    and "acl_grants_active_idx" in indexes
-                    and REQUIRED_SCHEMA_COLUMNS["acl_grants"]
-                    <= {row[1] for row in db.execute("PRAGMA table_info(acl_grants)")}
-                )
-                external_mcp_ready = {
-                    "external_mcp_connections",
-                    "external_mcp_audit",
-                } <= objects and {
-                    "external_mcp_connections_name_idx",
-                    "external_mcp_connections_tenant_idx",
-                    "external_mcp_audit_lookup_idx",
-                } <= indexes
-                audit_ready = {
-                    "audit_events",
-                    "audit_exports",
-                } <= objects and {
-                    "audit_events_lookup_idx",
-                    "audit_exports_lookup_idx",
-                } <= indexes
-        except (OSError, sqlite3.Error):
-            pass
-
         database_parent = self.db_path.parent
         if self.read_only:
             database_access = (
@@ -2970,6 +2922,57 @@ class FolioLattice:
                 and os.access(self.db_path, os.R_OK | os.W_OK)
                 and os.access(database_parent, os.R_OK | os.W_OK | os.X_OK)
             )
+        # Do not let a health probe recreate a missing SQLite database.
+        if database_access:
+            try:
+                with self.connect() as db:
+                    objects = {
+                        row[0]
+                        for row in db.execute(
+                            "SELECT name FROM sqlite_master WHERE name IS NOT NULL"
+                        )
+                    }
+                    indexes = {
+                        row[0]
+                        for row in db.execute(
+                            "SELECT name FROM sqlite_master WHERE type = 'index' AND name IS NOT NULL"
+                        )
+                    }
+                    columns_ready = all(
+                        required <= {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+                        for table, required in REQUIRED_SCHEMA_COLUMNS.items()
+                    )
+                    quick_check = db.execute("PRAGMA quick_check").fetchone()
+                    database_ready = quick_check is not None and quick_check[0] == "ok"
+                    migration_ready = (
+                        REQUIRED_SCHEMA_OBJECTS <= objects
+                        and REQUIRED_SCHEMA_INDEXES <= indexes
+                        and columns_ready
+                    )
+                    acl_ready = (
+                        "acl_grants" in objects
+                        and "acl_grants_lookup_idx" in indexes
+                        and "acl_grants_active_idx" in indexes
+                        and REQUIRED_SCHEMA_COLUMNS["acl_grants"]
+                        <= {row[1] for row in db.execute("PRAGMA table_info(acl_grants)")}
+                    )
+                    external_mcp_ready = {
+                        "external_mcp_connections",
+                        "external_mcp_audit",
+                    } <= objects and {
+                        "external_mcp_connections_name_idx",
+                        "external_mcp_connections_tenant_idx",
+                        "external_mcp_audit_lookup_idx",
+                    } <= indexes
+                    audit_ready = {
+                        "audit_events",
+                        "audit_exports",
+                    } <= objects and {
+                        "audit_events_lookup_idx",
+                        "audit_exports_lookup_idx",
+                    } <= indexes
+            except (OSError, sqlite3.Error):
+                pass
         database_ready = database_ready and database_access
 
         blob_access = os.R_OK | os.X_OK if self.read_only else os.R_OK | os.W_OK | os.X_OK
