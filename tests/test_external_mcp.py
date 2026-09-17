@@ -1,12 +1,14 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 from mcp import Client
 
 from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
-from folio_lattice.external_mcp import ExternalMcpBroker
+from folio_lattice.external_mcp import ExternalMcpBroker, HttpExternalMcpTransport
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.service import FolioError, FolioLattice
 
@@ -49,6 +51,40 @@ class FakeTransport:
     def read_resource(self, endpoint: str, resource_uri: str, *, credential: str | None) -> Any:
         self.last_credential = credential
         return {"endpoint": endpoint, "resource": resource_uri}
+
+
+class HttpExternalMcpTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_result_unwraps_sdk_result_envelope(self) -> None:
+        result = SimpleNamespace(
+            is_error=False,
+            structured_content={"result": {"upstream": "approved"}},
+        )
+        session = AsyncMock()
+        session.initialize.return_value = None
+        session.call_tool.return_value = result
+        session_context = AsyncMock()
+        session_context.__aenter__.return_value = session
+        stream_context = AsyncMock()
+        stream_context.__aenter__.return_value = (object(), object(), object())
+        http_context = AsyncMock()
+        http_context.__aenter__.return_value = object()
+
+        with (
+            patch("httpx2.AsyncClient", return_value=http_context),
+            patch(
+                "mcp.client.streamable_http.streamable_http_client",
+                return_value=stream_context,
+            ),
+            patch("mcp.client.session.ClientSession", return_value=session_context),
+        ):
+            value = await HttpExternalMcpTransport()._request(
+                "https://calendar.example/mcp",
+                "credential",
+                "tool",
+                (TOOL, {"limit": 5}),
+            )
+
+        self.assertEqual(value, {"upstream": "approved"})
 
 
 class ExternalMcpServiceTests(unittest.TestCase):

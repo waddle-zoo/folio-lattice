@@ -146,6 +146,8 @@ class HttpExternalMcpTransport:
             raise ExternalMcpError("external MCP upstream call failed")
         structured = getattr(result, "structured_content", None)
         if structured is not None:
+            if isinstance(structured, Mapping) and set(structured) == {"result"}:
+                return structured["result"]
             return structured
         return result.model_dump(mode="json")
 
