@@ -18,7 +18,9 @@ from .bridge import (
     BridgeRequestError,
     validate_bridge_request,
 )
-from .public_mcp import PUBLIC_TOOLS, PublicMcpError, ToolCaller
+from .connections import CONNECTIONS_CSS, CONNECTIONS_JS, connections_html
+from .mcp_protocol import EXTERNAL_MCP_ADMIN_SCOPE
+from .public_mcp import ADMIN_TOOLS, PUBLIC_TOOLS, PublicMcpError, ToolCaller
 from .resource_limits import BoundedConcurrencyLimiter, DimensionRateLimiter
 
 CONTROL_HEADERS = {
@@ -337,6 +339,8 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
 .human-route .topbar { height: 3.6rem; min-height: 3.6rem; flex-wrap: nowrap; padding-block: .65rem; }
 .human-route .page { width: 100%; max-width: none; height: calc(100vh - 3.6rem); min-height: 0; padding: 0; }
 .standalone-route .page { height: 100vh; }
+.standalone-back { position: fixed; z-index: 2; top: .8rem; left: .9rem; border: 1px solid var(--line-strong); border-radius: 7px; padding: .45rem .65rem; background: rgb(255 255 255 / 92%); color: var(--ink); font-size: .78rem; font-weight: 800; text-decoration: none; }
+.standalone-back:focus-visible { outline-offset: 2px; }
 .human-route #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .human-route .error, .human-route .auth-recovery { margin: 1rem; }
 .human-viewer { height: 100%; min-height: 0; }
@@ -1802,6 +1806,17 @@ function button(label, action) {
   value.className = 'inline-action';
   value.textContent = label; value.addEventListener('click', action); return value;
 }
+function artifactNameCounts(items) {
+  const counts = new Map();
+  items.forEach((item) => {
+    if (item?.name) counts.set(item.name, (counts.get(item.name) || 0) + 1);
+  });
+  return counts;
+}
+function stableArtifactLabel(name, id, counts) {
+  if (!name || counts?.get(name) < 2) return name || 'Open artifact';
+  return `${name} · ${String(id || '').slice(0, 8)}`;
+}
 function setWorkspaceMode(mode, persist = true) {
   const graph = mode === 'graph';
   if (graph && workspaceEditMode) setWorkspaceEditMode(false, false);
@@ -1920,6 +1935,7 @@ function renderArtifactTree(artifacts) {
     const empty = document.createElement('p'); empty.className = 'muted';
     empty.textContent = 'No artifacts yet.'; target.append(empty); return;
   }
+  const names = artifactNameCounts(artifacts);
   const root = {folders: new Map(), files: []};
   artifacts.forEach((artifact) => {
     const parts = String(artifact.name || artifact.id).split('/').filter(Boolean);
@@ -1940,8 +1956,9 @@ function renderArtifactTree(artifacts) {
     });
     [...node.files].sort((left, right) => left.name.localeCompare(right.name)).forEach(({name, artifact}) => {
       const item = document.createElement('li');
-      const open = button(name, () => location.assign(workspacePath(artifact.id)));
-      open.classList.add('tree-file'); open.setAttribute('aria-label', `Open ${artifact.name}`);
+      const label = stableArtifactLabel(artifact.name, artifact.id, names);
+      const open = button(label, () => location.assign(workspacePath(artifact.id)));
+      open.classList.add('tree-file'); open.setAttribute('aria-label', `Open ${label}`);
       if (artifact.id === artifactId) open.setAttribute('aria-current', 'page');
       item.append(open); list.append(item);
     });
@@ -1970,9 +1987,10 @@ function renderGraphMap(edges, component = []) {
     empty.textContent = 'No connected artifacts.'; map.append(empty); return;
   }
   const links = document.createElement('div'); links.className = 'graph-links';
+  const names = artifactNameCounts([...targets.values()]);
   targets.forEach((artifact, id) => {
     const edge = edgeById.get(id);
-    const target = artifact.name || 'Related artifact';
+    const target = stableArtifactLabel(artifact.name, id, names);
     const link = button(target, () => location.assign(workspacePath(id)));
     link.classList.add('graph-node', 'graph-target');
     link.setAttribute('aria-label', `${edge?.edge_type || 'connected'}: ${target}`);
@@ -2378,13 +2396,15 @@ async function loadLibrary() {
   status('Loading recent artifacts…');
   try {
     const artifacts = await call('artifact_list', {limit: 20});
+    const nameCounts = artifactNameCounts(artifacts);
     const renderArtifact = (artifact, destination = (debugMode ? artifactPath : workspacePath)) => {
       const li = document.createElement('li'); li.className = 'library-item';
-      const open = button(artifact.name, () => {
+      const label = stableArtifactLabel(artifact.name, artifact.id, nameCounts);
+      const open = button(label, () => {
         location.assign(destination(artifact.id));
       });
       if (isWebArtifact(artifact, {media_type: artifact.media_type})) {
-        open.setAttribute('aria-label', `Open artifact ${artifact.name}`);
+        open.setAttribute('aria-label', `Open artifact ${label}`);
         const action = document.createElement('a'); action.className = 'library-action';
         action.href = standalonePath(artifact.id); action.target = '_blank'; action.rel = 'noreferrer';
         action.textContent = 'Open site ↗'; li.append(open, action);
@@ -2396,14 +2416,15 @@ async function loadLibrary() {
     const renderGraphCard = (artifact) => {
       const li = document.createElement('li'); li.className = 'graph-picker-card';
       const open = document.createElement('button'); open.type = 'button';
-      open.className = 'graph-card-action'; open.setAttribute('aria-label', `Open graph ${artifact.name}`);
+      const label = stableArtifactLabel(artifact.name, artifact.id, nameCounts);
+      open.className = 'graph-card-action'; open.setAttribute('aria-label', `Open graph ${label}`);
       open.addEventListener('click', () => location.assign(workspacePath(artifact.id)));
       const top = document.createElement('span'); top.className = 'graph-card-top';
       const icon = document.createElement('span'); icon.className = 'graph-icon'; icon.setAttribute('aria-hidden', 'true');
       if (/\.(html?|css|m?js)$/i.test(artifact.name)) icon.dataset.kind = 'web';
       const mark = document.createElement('span'); mark.className = 'graph-open-mark';
       mark.setAttribute('aria-hidden', 'true'); top.append(icon, mark);
-      const title = document.createElement('h3'); title.textContent = artifact.name;
+      const title = document.createElement('h3'); title.textContent = label;
       const description = document.createElement('p'); description.className = 'graph-description';
       const relatedItems = (artifact.component_items || []).filter((item) => item.name !== artifact.name);
       const relatedNames = relatedItems.map((item) => item.name);
@@ -2415,8 +2436,9 @@ async function loadLibrary() {
       if (relatedItems.length) {
         const related = document.createElement('div'); related.className = 'graph-related';
         relatedItems.slice(0, 4).forEach((item) => {
-          const relatedButton = button(item.name, () => location.assign(workspacePath(item.id)));
-          relatedButton.setAttribute('aria-label', `Open graph item ${item.name}`);
+          const relatedLabel = stableArtifactLabel(item.name, item.id, nameCounts);
+          const relatedButton = button(relatedLabel, () => location.assign(workspacePath(item.id)));
+          relatedButton.setAttribute('aria-label', `Open graph item ${relatedLabel}`);
           related.append(relatedButton);
         });
         li.append(related);
@@ -2826,6 +2848,7 @@ def ui_html(
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Artifact</title><link rel="stylesheet" href="/ui.css"></head>
 <body class="human-route standalone-route" data-render-origin="{origin}" data-auth-state="{state}">
+<a id="standalone-back" class="standalone-back" href="/">← Library</a>
 <main id="main" class="page" aria-busy="false">
   <div class="live-region sr-only"><p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" aria-live="assertive" tabindex="-1" hidden></p></div>
   <section id="auth-recovery" class="auth-recovery" aria-labelledby="auth-recovery-title" hidden><h2 id="auth-recovery-title">Authentication required</h2><p id="auth-recovery-message"></p><a id="auth-action" href="/sign-in?return_to=%2F" hidden>Sign in</a></section>
@@ -3067,7 +3090,7 @@ def ui_html(
             '<a href="/#new"><span class="nav-index" aria-hidden="true">04</span>New</a>'
             if debug
             else (
-                '<a href="/#find">Search</a><a href="/#shared">Shared with me</a>'
+                '<a href="/#find">Search</a><a href="/#shared">Shared with me</a><a href="/settings/connections">Settings</a>'
                 + (
                     f'<span class="avatar" aria-label="{escape(actor or "Your account", quote=True)}">{avatar_initials}</span>'
                     if auth_state == "authenticated"
@@ -3194,6 +3217,7 @@ class InspectionApp:
         render_origin: str,
         max_request_bytes: int,
         bridge: AttachedMcpBridge | None = None,
+        admin_caller: ToolCaller | None = None,
         auth_state: str = "local",
         organization: str | None = None,
         actor: str | None = None,
@@ -3217,6 +3241,7 @@ class InspectionApp:
         self.render_origin = render_origin
         self.max_request_bytes = max_request_bytes
         self.bridge = bridge or AttachedMcpBridge(caller)
+        self.admin_caller = admin_caller
         self.auth_state = auth_state
         self.organization = organization
         self.actor = actor
@@ -3249,6 +3274,15 @@ class InspectionApp:
                     auth_state=self.auth_state,
                     sign_in=True,
                     return_to=_request_return_to(scope),
+                ),
+                headers=headers,
+            )(scope, receive, send)
+            return
+        if method == "GET" and path == "/settings/connections":
+            principal = get_request_principal()
+            await HTMLResponse(
+                connections_html(
+                    auth_state="authenticated" if principal is not None else self.auth_state
                 ),
                 headers=headers,
             )(scope, receive, send)
@@ -3287,8 +3321,24 @@ class InspectionApp:
                 scope, receive, send
             )
             return
-        if method == "POST" and path in {"/api/mcp", "/api/bridge"}:
-            await self._api(scope, receive, send, bridge=path == "/api/bridge")
+        if method == "GET" and path == "/connections.css":
+            await Response(CONNECTIONS_CSS, media_type="text/css", headers=headers)(
+                scope, receive, send
+            )
+            return
+        if method == "GET" and path == "/connections.js":
+            await Response(CONNECTIONS_JS, media_type="application/javascript", headers=headers)(
+                scope, receive, send
+            )
+            return
+        if method == "POST" and path in {"/api/mcp", "/api/admin/mcp", "/api/bridge"}:
+            await self._api(
+                scope,
+                receive,
+                send,
+                bridge=path == "/api/bridge",
+                admin=path == "/api/admin/mcp",
+            )
             return
         await JSONResponse({"error": "not found"}, status_code=404, headers=CONTROL_HEADERS)(
             scope, receive, send
@@ -3326,7 +3376,15 @@ class InspectionApp:
             headers=headers,
         )(scope, receive, send)
 
-    async def _api(self, scope: Scope, receive: Receive, send: Send, *, bridge: bool) -> None:
+    async def _api(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        bridge: bool,
+        admin: bool = False,
+    ) -> None:
         request_id = uuid.uuid4().hex
         allowed, retry_after = self._rate_limiter.allow(self._resource_dimensions(scope))
         if not allowed:
@@ -3359,7 +3417,12 @@ class InspectionApp:
             try:
                 async with asyncio.timeout(self.timeout_seconds):
                     await self._api_request(
-                        scope, receive, send, bridge=bridge, request_id=request_id
+                        scope,
+                        receive,
+                        send,
+                        bridge=bridge,
+                        request_id=request_id,
+                        admin=admin,
                     )
             except TimeoutError:
                 await self._api_error(
@@ -3383,6 +3446,7 @@ class InspectionApp:
         *,
         bridge: bool,
         request_id: str,
+        admin: bool = False,
     ) -> None:
         headers = {key.lower(): value for key, value in scope["headers"]}
         origin = headers.get(b"origin", b"").decode("latin-1")
@@ -3406,6 +3470,21 @@ class InspectionApp:
             )(scope, receive, send)
             return
         try:
+            if admin:
+                principal = get_request_principal()
+                if principal is not None and EXTERNAL_MCP_ADMIN_SCOPE not in principal.scopes:
+                    await JSONResponse(
+                        {
+                            "code": "permission_denied",
+                            "message": "Organization administrator permission is required.",
+                            "reauthenticate": False,
+                        },
+                        status_code=403,
+                        headers=CONTROL_HEADERS,
+                    )(scope, receive, send)
+                    return
+                if self.admin_caller is None:
+                    raise PublicMcpError("admin connection service is unavailable")
             maximum = (
                 min(self.max_request_bytes, MAX_BRIDGE_BODY_BYTES)
                 if bridge
@@ -3425,8 +3504,13 @@ class InspectionApp:
                     raise PublicMcpError("MCP request has invalid fields")
                 tool = payload["tool"]
                 arguments = payload["arguments"]
-                if not isinstance(tool, str) or tool not in PUBLIC_TOOLS:
-                    raise PublicMcpError("tool is not part of the Folio MCP contract")
+                allowed_tools = ADMIN_TOOLS if admin else PUBLIC_TOOLS
+                if not isinstance(tool, str) or tool not in allowed_tools:
+                    raise PublicMcpError(
+                        "tool is not part of the admin MCP contract"
+                        if admin
+                        else "tool is not part of the Folio MCP contract"
+                    )
                 if not isinstance(arguments, dict):
                     raise PublicMcpError("arguments must be a JSON object")
                 try:
@@ -3437,7 +3521,9 @@ class InspectionApp:
                     raise PublicMcpError("arguments must be JSON serializable") from exc
                 if len(encoded_arguments) > MAX_RESOURCE_ARGUMENT_BYTES:
                     raise _ArgumentLimitExceeded
-                response = await self.caller.call(tool, arguments)
+                caller = self.admin_caller if admin else self.caller
+                assert caller is not None
+                response = await caller.call(tool, arguments)
             try:
                 encoded_response = json.dumps(
                     response, separators=(",", ":"), allow_nan=False

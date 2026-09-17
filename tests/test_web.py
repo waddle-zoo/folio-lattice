@@ -16,10 +16,11 @@ from unittest.mock import patch
 
 from mcp import Client
 
+from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
 from folio_lattice.bridge import AttachedMcpBridge, BridgeRequestError, validate_bridge_request
 from folio_lattice.inspection import InspectionApp, ui_html
 from folio_lattice.mcp_protocol import build_mcp_server
-from folio_lattice.public_mcp import HttpMcpClient, PublicMcpError
+from folio_lattice.public_mcp import AdminMcpClient, HttpMcpClient, PublicMcpError
 from folio_lattice.renderer import RendererApp
 from folio_lattice.server import Settings, _optional_mcp_url_env, _origin_env
 from folio_lattice.service import FolioLattice
@@ -174,11 +175,13 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         )
         server = build_mcp_server(self.service, tenant_id="web", actor="web-user")
         self.caller = LocalMcpCaller(server)
+        self.admin_caller = AdminMcpClient(server)
         self.inspection = InspectionApp(
             self.caller,
             control_origin=CONTROL_ORIGIN,
             render_origin=RENDER_ORIGIN,
             max_request_bytes=1000,
+            admin_caller=self.admin_caller,
         )
         self.renderer = RendererApp(self.caller, control_origin=CONTROL_ORIGIN)
 
@@ -199,6 +202,16 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status, 200)
             self.assertIn(expected, body)
             self.assertEqual(headers["cache-control"], "no-store")
+        standalone = (
+            await call(self.inspection, "GET", f"/standalone/{self.html['artifact']['id']}")
+        )[2]
+        self.assertIn(b'id="standalone-back"', standalone)
+        settings = (await call(self.inspection, "GET", "/settings/connections"))[2]
+        self.assertIn(b"Approved connections", settings)
+        self.assertNotIn(b"credential_ref", settings)
+        script = (await call(self.inspection, "GET", "/connections.js"))[2]
+        self.assertIn(b"/api/admin/mcp", script)
+        self.assertNotIn(b"credential_ref", script)
         _, headers, page = await call(self.inspection, "GET", "/")
         self.assertIn(f"frame-src {RENDER_ORIGIN}", headers["content-security-policy"])
         self.assertNotIn(b"allow-same-origin", page)
@@ -219,6 +232,83 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="fullscreen-preview"',
         ):
             self.assertNotIn(forbidden, page)
+
+    async def test_connections_admin_uses_real_tools_and_keeps_states_secret_free(self) -> None:
+        arguments = {
+            "name": "Calendar approval",
+            "endpoint": "https://example.com/mcp",
+            "approved_tools": ["calendar.events.list"],
+            "approved_resources": [],
+            "allowed_origins": ["https://example.com"],
+            "reason": "web test approval",
+        }
+        with patch("folio_lattice.external_mcp.HttpExternalMcpTransport.validate_registration"):
+            status, _, body = await call(
+                self.inspection,
+                "POST",
+                "/api/admin/mcp",
+                body=request("external_mcp_connection_register", arguments),
+                content_type="application/json",
+                origin=CONTROL_ORIGIN,
+            )
+        self.assertEqual(status, 200)
+        registered = json.loads(body)
+        connection_id = registered["id"]
+        self.assertEqual(registered["status"], "active")
+        self.assertFalse(registered["credential_configured"])
+        self.assertNotIn("credential_ref", registered)
+
+        status, _, body = await call(
+            self.inspection,
+            "POST",
+            "/api/admin/mcp",
+            body=request("external_mcp_connection_status", {"connection_id": connection_id}),
+            content_type="application/json",
+            origin=CONTROL_ORIGIN,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["status"], "active")
+
+        status, _, body = await call(
+            self.inspection,
+            "POST",
+            "/api/admin/mcp",
+            body=request(
+                "external_mcp_connection_revoke",
+                {"connection_id": connection_id, "reason": "web test revoke"},
+            ),
+            content_type="application/json",
+            origin=CONTROL_ORIGIN,
+        )
+        self.assertEqual(status, 200)
+        revoked = json.loads(body)
+        self.assertEqual(revoked["status"], "revoked")
+        self.assertNotIn("credential_ref", revoked)
+
+    async def test_connections_admin_denies_authenticated_non_admin(self) -> None:
+        token = set_request_principal(
+            Principal(
+                tenant_id="web",
+                actor_id="reader",
+                issuer="https://issuer.example",
+                subject="reader-subject",
+                scopes=frozenset({"artifact:read"}),
+            )
+        )
+        try:
+            status, _, body = await call(
+                self.inspection,
+                "POST",
+                "/api/admin/mcp",
+                body=request("external_mcp_connection_list", {"limit": 10}),
+                content_type="application/json",
+                origin=CONTROL_ORIGIN,
+            )
+        finally:
+            reset_request_principal(token)
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(body)["code"], "permission_denied")
+        self.assertFalse(json.loads(body)["reauthenticate"])
 
     async def test_sign_in_shell_is_safe_and_does_not_offer_local_fake_auth(self) -> None:
         status, headers, page = await call(

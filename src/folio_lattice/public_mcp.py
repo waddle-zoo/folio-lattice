@@ -26,6 +26,16 @@ PUBLIC_TOOLS = frozenset(
     }
 )
 
+ADMIN_TOOLS = frozenset(
+    {
+        "external_mcp_connection_register",
+        "external_mcp_connection_list",
+        "external_mcp_connection_status",
+        "external_mcp_connection_revoke",
+        "external_mcp_audit",
+    }
+)
+
 
 class PublicMcpError(Exception):
     """Bounded, client-visible failure from the public MCP boundary."""
@@ -100,3 +110,39 @@ class HttpMcpClient:
             return "artifact_read" in {tool.name for tool in tools.tools}
         except Exception:
             return False
+
+
+class AdminMcpClient:
+    """Call tenant-admin tools on the authenticated server context."""
+
+    def __init__(self, server: Any, *, timeout_seconds: float = 5):
+        if timeout_seconds <= 0:
+            raise ValueError("MCP client timeout must be positive")
+        self.server = server
+        self.timeout_seconds = timeout_seconds
+
+    async def call(self, tool: str, arguments: Mapping[str, Any]) -> Any:
+        if tool not in ADMIN_TOOLS:
+            raise PublicMcpError("tool is not part of the admin MCP contract")
+        try:
+            async with asyncio.timeout(self.timeout_seconds):
+                async with Client(self.server, raise_exceptions=False) as client:
+                    result = await client.call_tool(tool, dict(arguments))
+        except TimeoutError as exc:
+            raise PublicMcpError("admin MCP call timed out") from exc
+        except PublicMcpError:
+            raise
+        except Exception as exc:
+            raise PublicMcpError("admin MCP service unavailable") from exc
+        if result.is_error:
+            messages = [item.text for item in result.content if item.type == "text"]
+            raise PublicMcpError(" ".join(messages).strip()[:500] or "Admin MCP tool failed")
+        value = result.structured_content
+        if value is None:
+            raise PublicMcpError("admin MCP tool returned no structured result")
+        if isinstance(value, dict) and set(value) == {"result"}:
+            return value["result"]
+        return value
+
+    async def ready(self) -> bool:
+        return True

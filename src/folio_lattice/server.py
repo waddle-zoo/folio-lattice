@@ -50,7 +50,7 @@ from .identity import (
 )
 from .inspection import InspectionApp
 from .mcp_protocol import build_mcp_server
-from .public_mcp import HttpMcpClient
+from .public_mcp import AdminMcpClient, HttpMcpClient
 from .renderer import RendererApp
 from .service import DEFAULT_MAX_ARTIFACT_BYTES, FolioLattice
 from .sessions import (
@@ -826,7 +826,17 @@ class FolioHttpApp:
                 or path.startswith("/artifacts/")
                 or path.startswith("/standalone/")
                 or path.startswith("/workspace/")
-                or path in {"/api/mcp", "/api/bridge", "/ui.css", "/ui.js"}
+                or path
+                in {
+                    "/api/mcp",
+                    "/api/admin/mcp",
+                    "/api/bridge",
+                    "/connections.css",
+                    "/connections.js",
+                    "/settings/connections",
+                    "/ui.css",
+                    "/ui.js",
+                }
             ):
                 await self.inspection(scope, receive, secure_send)
                 return
@@ -1630,6 +1640,7 @@ def run_http(host: str, port: int) -> None:
         render_origin=settings.render_origin,
         max_request_bytes=settings.max_request_bytes,
         bridge=AttachedMcpBridge(caller, timeout_seconds=settings.bridge_timeout_seconds),
+        admin_caller=AdminMcpClient(mcp, timeout_seconds=settings.public_mcp_timeout_seconds),
         auth_state="hosted" if authenticator is not None else "local",
         organization=settings.tenant_id if authenticator is None else None,
         actor=settings.actor if authenticator is None else None,

@@ -883,6 +883,15 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 self.assertFalse(
                     chrome.evaluate("document.body.innerText.includes('Folio Lattice')")
                 )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#standalone-back').getAttribute('href')"
+                    ),
+                    "/",
+                )
+                chrome.evaluate("document.querySelector('#standalone-back').click()")
+                chrome.wait("location.pathname === '/'")
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
             finally:
                 if chrome is not None:
                     chrome.close()
@@ -964,6 +973,11 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                 chrome = DevTools(browser, control_origin, root / "chrome-ui")
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.wait("Boolean(document.querySelector('#graph-artifacts button'))")
+                duplicate_labels = chrome.evaluate(
+                    "[...document.querySelectorAll('#graph-artifacts button')].map((button) => button.textContent).filter((text) => text.startsWith('same-name.md'))"
+                )
+                self.assertEqual(len(duplicate_labels), 2)
+                self.assertTrue(all(" · " in label for label in duplicate_labels))
 
                 chrome.evaluate("document.querySelector('#find').open = true")
                 chrome.evaluate("""
