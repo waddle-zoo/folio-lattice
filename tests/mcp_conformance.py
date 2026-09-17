@@ -32,6 +32,7 @@ from mcp import Client, StdioServerParameters
 PROTOCOL_VERSION = "2025-06-18"
 SCHEMA_VERSION = "folio-lattice.mcp-conformance.v1"
 EXPECTED_TOOLS = (
+    "audit_export",
     "artifact_create",
     "artifact_write",
     "artifact_list",

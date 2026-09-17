@@ -40,6 +40,7 @@ TOOL_SCOPES = {
     "external_mcp_audit": EXTERNAL_MCP_ADMIN_SCOPE,
     "external_mcp_tool_call": EXTERNAL_MCP_ADMIN_SCOPE,
     "external_mcp_resource_read": EXTERNAL_MCP_ADMIN_SCOPE,
+    "audit_export": EXTERNAL_MCP_ADMIN_SCOPE,
 }
 
 
@@ -445,6 +446,31 @@ def build_mcp_server(
                 actor=request_actor,
                 connection_id=connection_id,
                 limit=limit,
+            )
+        )
+
+    @server.tool(
+        description=(
+            "Export bounded, tenant-scoped security audit events as an integrity-checkable "
+            "audit-v1 result. Events contain opaque IDs and reason codes only; content, "
+            "credentials, arguments, and raw URLs are excluded. Continue with next_cursor."
+        )
+    )
+    def audit_export(
+        from_time: Annotated[str | None, Field(max_length=64)] = None,
+        to_time: Annotated[str | None, Field(max_length=64)] = None,
+        limit: Annotated[int, Field(ge=1, le=10_000)] = 10_000,
+        cursor: Annotated[str | None, Field(max_length=512)] = None,
+    ) -> dict[str, Any]:
+        request_tenant, request_actor = identity(TOOL_SCOPES["audit_export"])
+        return _tool_errors(
+            lambda: service.export_audit_events(
+                request_tenant,
+                actor=request_actor,
+                from_time=from_time,
+                to_time=to_time,
+                limit=limit,
+                cursor=cursor,
             )
         )
 

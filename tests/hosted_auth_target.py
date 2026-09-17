@@ -81,6 +81,7 @@ TOOL_SCOPES = {
     "external_mcp_audit": "tenant:admin",
     "external_mcp_tool_call": "tenant:admin",
     "external_mcp_resource_read": "tenant:admin",
+    "audit_export": "tenant:admin",
 }
 
 

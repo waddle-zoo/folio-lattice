@@ -16,6 +16,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .audit import (
+    AUDIT_EXPORT_TTL_SECONDS,
+    AUDIT_MAX_EVENTS_PER_EXPORT,
+    AUDIT_MAX_EXPORT_BYTES,
+    AUDIT_SCHEMA_VERSION,
+    AuditValidationError,
+    expiry_for,
+    export_line,
+    integrity_hash,
+    safe_details,
+    validate_token,
+)
+
 TEXT_MEDIA_TYPES = {
     "application/javascript",
     "application/json",
@@ -64,6 +77,8 @@ REQUIRED_SCHEMA_OBJECTS = frozenset(
         "acl_grants",
         "external_mcp_connections",
         "external_mcp_audit",
+        "audit_events",
+        "audit_exports",
     }
 )
 REQUIRED_SCHEMA_INDEXES = frozenset(
@@ -76,6 +91,8 @@ REQUIRED_SCHEMA_INDEXES = frozenset(
         "external_mcp_connections_name_idx",
         "external_mcp_connections_tenant_idx",
         "external_mcp_audit_lookup_idx",
+        "audit_events_lookup_idx",
+        "audit_exports_lookup_idx",
     }
 )
 REQUIRED_SCHEMA_COLUMNS = {
@@ -94,6 +111,23 @@ REQUIRED_SCHEMA_COLUMNS = {
     ),
     "external_mcp_audit": frozenset(
         {"tenant_id", "connection_id", "actor_id", "action", "outcome"}
+    ),
+    "audit_events": frozenset(
+        {
+            "id",
+            "tenant_id",
+            "actor_id",
+            "request_id",
+            "correlation_id",
+            "action",
+            "outcome",
+            "integrity_hash",
+            "expires_at",
+            "legal_hold",
+        }
+    ),
+    "audit_exports": frozenset(
+        {"id", "tenant_id", "requested_by", "checksum", "schema_version", "expires_at"}
     ),
 }
 
@@ -339,6 +373,46 @@ class FolioLattice:
                 );
                 CREATE INDEX IF NOT EXISTS external_mcp_audit_lookup_idx
                     ON external_mcp_audit(tenant_id, connection_id, created_at, id);
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id TEXT PRIMARY KEY,
+                    occurred_at TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+                    actor_id TEXT NOT NULL,
+                    actor_type TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    correlation_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    resource_type TEXT NOT NULL,
+                    resource_id TEXT,
+                    outcome TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    policy_version TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    retention_class TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    legal_hold INTEGER NOT NULL DEFAULT 0,
+                    integrity_hash TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS audit_events_lookup_idx
+                    ON audit_events(tenant_id, occurred_at, id);
+                CREATE INDEX IF NOT EXISTS audit_events_retention_idx
+                    ON audit_events(expires_at, legal_hold, tenant_id);
+                CREATE TABLE IF NOT EXISTS audit_exports (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+                    requested_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    from_time TEXT,
+                    to_time TEXT,
+                    event_count INTEGER NOT NULL,
+                    checksum TEXT NOT NULL,
+                    schema_version TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    status TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS audit_exports_lookup_idx
+                    ON audit_exports(tenant_id, created_at, id);
                 """
             )
             grant_columns = {row["name"] for row in db.execute("PRAGMA table_info(acl_grants)")}
@@ -1710,6 +1784,10 @@ class FolioLattice:
         tool_name: str | None = None,
         resource_uri: str | None = None,
     ) -> None:
+        # Resource URIs are caller-controlled and may carry query credentials
+        # or content identifiers. The connection and action are sufficient for
+        # the decision audit; never persist the raw URI.
+        resource_uri = None
         db.execute(
             """
             INSERT INTO external_mcp_audit(
@@ -2064,12 +2142,488 @@ class FolioLattice:
                 ).fetchall()
         return [dict(row) for row in rows]
 
+    @staticmethod
+    def _audit_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        try:
+            item["details"] = json.loads(item.pop("details_json"))
+        except (TypeError, json.JSONDecodeError):
+            item["details"] = {}
+            item.pop("details_json", None)
+        item["legal_hold"] = bool(item["legal_hold"])
+        return item
+
+    @staticmethod
+    def _audit_integrity_ok(event: Mapping[str, Any]) -> bool:
+        stored = event.get("integrity_hash")
+        payload = dict(event)
+        payload.pop("integrity_hash", None)
+        return isinstance(stored, str) and stored == integrity_hash(payload)
+
+    @classmethod
+    def _verified_audit_row(cls, row: sqlite3.Row) -> dict[str, Any]:
+        event = cls._audit_row(row)
+        if not cls._audit_integrity_ok(event):
+            raise FolioError("audit integrity verification failed")
+        return event
+
+    @staticmethod
+    def _build_audit_event(
+        *,
+        tenant_id: str,
+        actor_id: str,
+        action: str,
+        outcome: str,
+        request_id: str | None,
+        correlation_id: str | None,
+        resource_type: str,
+        resource_id: str | None,
+        reason: str,
+        policy_version: str,
+        source: str,
+        details: Mapping[str, Any] | None,
+        retention_class: str,
+    ) -> dict[str, Any]:
+        try:
+            tenant_id = validate_token("tenant_id", tenant_id)
+            actor_id = validate_token("actor_id", actor_id)
+            action = validate_token("action", action)
+            outcome = validate_token("outcome", outcome)
+            resource_type = validate_token("resource_type", resource_type)
+            policy_version = validate_token("policy_version", policy_version)
+            source = validate_token("source", source)
+            reason = validate_token("reason", reason)
+            if resource_id is not None:
+                resource_id = validate_token("resource_id", resource_id)
+            request_id = validate_token("request_id", request_id or new_id("req"))
+            correlation_id = validate_token("correlation_id", correlation_id or request_id)
+            safe = safe_details(details)
+            expires_at = expiry_for(retention_class)
+        except AuditValidationError as exc:
+            raise FolioError(str(exc)) from exc
+
+        event = {
+            "id": new_id("audit"),
+            "occurred_at": utc_now(),
+            "tenant_id": tenant_id,
+            "actor_id": actor_id,
+            "actor_type": "actor",
+            "request_id": request_id,
+            "correlation_id": correlation_id,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "outcome": outcome,
+            "reason": reason,
+            "policy_version": policy_version,
+            "source": source,
+            "details": safe,
+            "retention_class": retention_class,
+            "expires_at": expires_at,
+            "legal_hold": False,
+        }
+        event["integrity_hash"] = integrity_hash(event)
+        return event
+
+    @staticmethod
+    def _insert_audit_event(db: sqlite3.Connection, event: Mapping[str, Any]) -> None:
+        db.execute(
+            """
+            INSERT INTO audit_events(
+                id, occurred_at, tenant_id, actor_id, actor_type,
+                request_id, correlation_id, action, resource_type, resource_id,
+                outcome, reason, policy_version, source, details_json,
+                retention_class, expires_at, legal_hold, integrity_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event["id"],
+                event["occurred_at"],
+                event["tenant_id"],
+                event["actor_id"],
+                event["actor_type"],
+                event["request_id"],
+                event["correlation_id"],
+                event["action"],
+                event["resource_type"],
+                event["resource_id"],
+                event["outcome"],
+                event["reason"],
+                event["policy_version"],
+                event["source"],
+                json.dumps(event["details"], sort_keys=True, separators=(",", ":")),
+                event["retention_class"],
+                event["expires_at"],
+                int(bool(event["legal_hold"])),
+                event["integrity_hash"],
+            ),
+        )
+
+    @staticmethod
+    def _audit_window(from_time: str | None, to_time: str | None) -> tuple[str | None, str | None]:
+        parsed: dict[str, datetime] = {}
+        try:
+            for field, value in (("from_time", from_time), ("to_time", to_time)):
+                if value is None:
+                    continue
+                if len(value) > 64 or any(ord(char) < 0x20 for char in value):
+                    raise AuditValidationError(f"{field} is invalid")
+                candidate = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if candidate.tzinfo is None or candidate.utcoffset() is None:
+                    raise AuditValidationError(f"{field} must include a timezone")
+                parsed[field] = candidate.astimezone(UTC)
+        except (AuditValidationError, TypeError, ValueError) as exc:
+            if isinstance(exc, AuditValidationError):
+                raise FolioError(str(exc)) from exc
+            raise FolioError("audit time window is invalid") from exc
+        if (
+            "from_time" in parsed
+            and "to_time" in parsed
+            and parsed["from_time"] > parsed["to_time"]
+        ):
+            raise FolioError("audit time window is inverted")
+        return (
+            parsed["from_time"].isoformat(timespec="milliseconds")
+            if "from_time" in parsed
+            else None,
+            parsed["to_time"].isoformat(timespec="milliseconds") if "to_time" in parsed else None,
+        )
+
+    def record_audit_event(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        action: str,
+        outcome: str,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        resource_type: str = "service",
+        resource_id: str | None = None,
+        reason: str = "unspecified",
+        policy_version: str = AUDIT_SCHEMA_VERSION,
+        source: str = "service",
+        details: Mapping[str, Any] | None = None,
+        retention_class: str = "security",
+    ) -> dict[str, Any]:
+        """Persist one minimized, integrity-checkable security event.
+
+        The details allowlist is deliberately small. Callers must put opaque IDs
+        and reason codes in details; content, credentials, arguments, and URLs
+        never enter the durable audit store.
+        """
+
+        event = self._build_audit_event(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=action,
+            outcome=outcome,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            reason=reason,
+            policy_version=policy_version,
+            source=source,
+            details=details,
+            retention_class=retention_class,
+        )
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._ensure_tenant(db, event["tenant_id"])
+            self._insert_audit_event(db, event)
+        return event
+
+    def list_audit_events(
+        self,
+        tenant_id: str,
+        *,
+        actor: str,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        limit: int = AUDIT_MAX_EVENTS_PER_EXPORT,
+        cursor: str | None = None,
+    ) -> list[dict[str, Any]]:
+        try:
+            tenant_id = validate_token("tenant_id", tenant_id)
+            validate_token("actor_id", actor)
+        except AuditValidationError as exc:
+            raise FolioError(str(exc)) from exc
+        from_time, to_time = self._audit_window(from_time, to_time)
+        cursor_timestamp: str | None = None
+        cursor_id: str | None = None
+        if cursor is not None:
+            try:
+                cursor_timestamp, cursor_id = _parse_artifact_list_cursor(cursor)
+            except FolioError as exc:
+                raise FolioError("invalid audit cursor") from exc
+        conditions = ["tenant_id = ?"]
+        params: list[Any] = [tenant_id]
+        if from_time is not None:
+            conditions.append("occurred_at >= ?")
+            params.append(from_time)
+        if to_time is not None:
+            conditions.append("occurred_at <= ?")
+            params.append(to_time)
+        if cursor_timestamp is not None and cursor_id is not None:
+            conditions.append("(occurred_at > ? OR (occurred_at = ? AND id > ?))")
+            params.extend((cursor_timestamp, cursor_timestamp, cursor_id))
+        params.append(max(1, min(limit, AUDIT_MAX_EVENTS_PER_EXPORT)))
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT id, occurred_at, tenant_id, actor_id, actor_type, request_id, "
+                "correlation_id, action, resource_type, resource_id, outcome, reason, "
+                "policy_version, source, details_json, retention_class, expires_at, "
+                "legal_hold, integrity_hash FROM audit_events WHERE "
+                + " AND ".join(conditions)
+                + " ORDER BY occurred_at ASC, id ASC LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._verified_audit_row(row) for row in rows]
+
+    def export_audit_events(
+        self,
+        tenant_id: str,
+        *,
+        actor: str,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        limit: int = AUDIT_MAX_EVENTS_PER_EXPORT,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            tenant_id = validate_token("tenant_id", tenant_id)
+            actor = validate_token("actor_id", actor)
+        except AuditValidationError as exc:
+            raise FolioError(str(exc)) from exc
+        from_time, to_time = self._audit_window(from_time, to_time)
+        requested_limit = max(1, min(limit, AUDIT_MAX_EVENTS_PER_EXPORT))
+        cursor_timestamp: str | None = None
+        cursor_id: str | None = None
+        if cursor is not None:
+            try:
+                cursor_timestamp, cursor_id = _parse_artifact_list_cursor(cursor)
+            except FolioError as exc:
+                raise FolioError("invalid audit cursor") from exc
+        conditions = ["tenant_id = ?"]
+        params: list[Any] = [tenant_id]
+        if from_time is not None:
+            conditions.append("occurred_at >= ?")
+            params.append(from_time)
+        if to_time is not None:
+            conditions.append("occurred_at <= ?")
+            params.append(to_time)
+        if cursor_timestamp is not None and cursor_id is not None:
+            conditions.append("(occurred_at > ? OR (occurred_at = ? AND id > ?))")
+            params.extend((cursor_timestamp, cursor_timestamp, cursor_id))
+        params.append(requested_limit + 1)
+        select = (
+            "SELECT id, occurred_at, tenant_id, actor_id, actor_type, request_id, "
+            "correlation_id, action, resource_type, resource_id, outcome, reason, "
+            "policy_version, source, details_json, retention_class, expires_at, "
+            "legal_hold, integrity_hash FROM audit_events WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY occurred_at ASC, id ASC LIMIT ?"
+        )
+        events: list[dict[str, Any]] = []
+        lines: list[bytes] = []
+        ndjson_bytes = 0
+        has_more = False
+        with self.connect() as db:
+            rows = db.execute(select, params)
+            while len(events) < requested_limit:
+                batch = rows.fetchmany(128)
+                if not batch:
+                    break
+                for position, row in enumerate(batch):
+                    event = self._verified_audit_row(row)
+                    line = export_line(event)
+                    if ndjson_bytes + len(line) > AUDIT_MAX_EXPORT_BYTES:
+                        if not events:
+                            raise FolioError("audit export exceeds the allowed size")
+                        has_more = True
+                        break
+                    events.append(event)
+                    lines.append(line)
+                    ndjson_bytes += len(line)
+                    if len(events) >= requested_limit:
+                        has_more = position + 1 < len(batch) or rows.fetchone() is not None
+                        break
+                if has_more or len(events) >= requested_limit:
+                    break
+        ndjson = b"".join(lines)
+        created_at = utc_now()
+        export_id = new_id("audit-export")
+        expires_at = datetime.now(UTC).timestamp() + AUDIT_EXPORT_TTL_SECONDS
+        expires_text = datetime.fromtimestamp(expires_at, UTC).isoformat(timespec="milliseconds")
+        checksum = integrity_hash({"schema_version": AUDIT_SCHEMA_VERSION, "ndjson": ndjson.hex()})
+        next_cursor = None
+        if events and has_more:
+            last = events[-1]
+            next_cursor = f"{last['occurred_at']}|{last['id']}"
+        export_event = self._build_audit_event(
+            tenant_id=tenant_id,
+            actor_id=actor,
+            action="audit_export",
+            outcome="allowed",
+            request_id=export_id,
+            correlation_id=export_id,
+            resource_type="audit_export",
+            resource_id=export_id,
+            reason="export_created",
+            policy_version=AUDIT_SCHEMA_VERSION,
+            source="audit",
+            details={"status_code": 200, "transport": "mcp"},
+            retention_class="security",
+        )
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._ensure_tenant(db, tenant_id)
+            db.execute(
+                """
+                INSERT INTO audit_exports(
+                    id, tenant_id, requested_by, created_at, from_time, to_time,
+                    event_count, checksum, schema_version, expires_at, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready')
+                """,
+                (
+                    export_id,
+                    tenant_id,
+                    actor,
+                    created_at,
+                    from_time,
+                    to_time,
+                    len(events),
+                    checksum,
+                    AUDIT_SCHEMA_VERSION,
+                    expires_text,
+                ),
+            )
+            self._insert_audit_event(db, export_event)
+        return {
+            "export_id": export_id,
+            "schema_version": AUDIT_SCHEMA_VERSION,
+            "tenant_id": tenant_id,
+            "requested_by": actor,
+            "created_at": created_at,
+            "expires_at": expires_text,
+            "event_count": len(events),
+            "checksum": checksum,
+            "next_cursor": next_cursor,
+            "events": events,
+        }
+
+    def set_audit_legal_hold(
+        self, tenant_id: str, *, actor: str, event_ids: Iterable[str], reason: str
+    ) -> int:
+        try:
+            tenant_id = validate_token("tenant_id", tenant_id)
+            actor = validate_token("actor_id", actor)
+            reason = validate_token("reason", reason)
+            ids = [validate_token("event_id", event_id) for event_id in event_ids]
+        except AuditValidationError as exc:
+            raise FolioError(str(exc)) from exc
+        if not ids or len(ids) > AUDIT_MAX_EVENTS_PER_EXPORT:
+            raise FolioError("audit legal hold event list is out of bounds")
+        placeholders = ",".join("?" for _ in ids)
+        hold_event = self._build_audit_event(
+            tenant_id=tenant_id,
+            actor_id=actor,
+            action="audit_legal_hold",
+            outcome="allowed",
+            request_id=None,
+            correlation_id=None,
+            resource_type="audit_event",
+            resource_id=None,
+            reason=reason,
+            policy_version=AUDIT_SCHEMA_VERSION,
+            source="audit",
+            details={"status_code": 200},
+            retention_class="security",
+        )
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._ensure_tenant(db, tenant_id)
+            rows = db.execute(
+                "SELECT id, occurred_at, tenant_id, actor_id, actor_type, request_id, "
+                "correlation_id, action, resource_type, resource_id, outcome, reason, "
+                "policy_version, source, details_json, retention_class, expires_at, "
+                "legal_hold, integrity_hash FROM audit_events WHERE tenant_id = ? "
+                f"AND id IN ({placeholders})",
+                (tenant_id, *ids),
+            ).fetchall()
+            for row in rows:
+                event = self._verified_audit_row(row)
+                event["legal_hold"] = True
+                event["integrity_hash"] = integrity_hash(
+                    {key: value for key, value in event.items() if key != "integrity_hash"}
+                )
+                db.execute(
+                    "UPDATE audit_events SET legal_hold = 1, integrity_hash = ? "
+                    "WHERE tenant_id = ? AND id = ?",
+                    (event["integrity_hash"], tenant_id, event["id"]),
+                )
+            count = len(rows)
+            self._insert_audit_event(db, hold_event)
+        return count
+
+    def purge_audit_events(self, *, now: str | None = None) -> dict[str, int]:
+        cutoff = now or utc_now()
+        if len(cutoff) > 64 or any(ord(c) < 0x20 for c in cutoff):
+            raise FolioError("audit purge time is invalid")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT tenant_id, COUNT(*) AS count FROM audit_events "
+                "WHERE expires_at <= ? AND legal_hold = 0 GROUP BY tenant_id",
+                (cutoff,),
+            ).fetchall()
+            db.execute(
+                "DELETE FROM audit_events WHERE expires_at <= ? AND legal_hold = 0", (cutoff,)
+            )
+            for tenant_id, count in rows:
+                purge_event = self._build_audit_event(
+                    tenant_id=tenant_id,
+                    actor_id="system",
+                    action="audit_retention_purge",
+                    outcome="allowed",
+                    request_id=None,
+                    correlation_id=None,
+                    resource_type="audit_event",
+                    resource_id=None,
+                    reason="retention_expired",
+                    policy_version=AUDIT_SCHEMA_VERSION,
+                    source="retention",
+                    details={"status_code": 200, "limit_name": str(count)},
+                    retention_class="security",
+                )
+                self._insert_audit_event(db, purge_event)
+        purged = {row["tenant_id"]: row["count"] for row in rows}
+        return purged
+
+    def audit_metrics(self) -> dict[str, int]:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END) AS denied, "
+                "SUM(CASE WHEN action = 'audit_export' THEN 1 ELSE 0 END) AS exports, "
+                "SUM(CASE WHEN action = 'audit_retention_purge' THEN 1 ELSE 0 END) AS purges "
+                "FROM audit_events"
+            ).fetchone()
+        return {
+            "audit_events_total": int(row["total"] or 0),
+            "audit_events_denied_total": int(row["denied"] or 0),
+            "audit_exports_total": int(row["exports"] or 0),
+            "audit_retention_purges_total": int(row["purges"] or 0),
+        }
+
     def readiness(self) -> dict[str, Any]:
         """Check durable dependencies without exposing tenant data."""
         database_ready = False
         migration_ready = False
         acl_ready = False
         external_mcp_ready = False
+        audit_ready = False
         try:
             with self.connect() as db:
                 objects = {
@@ -2108,6 +2662,13 @@ class FolioLattice:
                     "external_mcp_connections_tenant_idx",
                     "external_mcp_audit_lookup_idx",
                 } <= indexes
+                audit_ready = {
+                    "audit_events",
+                    "audit_exports",
+                } <= objects and {
+                    "audit_events_lookup_idx",
+                    "audit_exports_lookup_idx",
+                } <= indexes
         except (OSError, sqlite3.Error):
             pass
 
@@ -2129,7 +2690,12 @@ class FolioLattice:
         blob_access = os.R_OK | os.X_OK if self.read_only else os.R_OK | os.W_OK | os.X_OK
         blob_ready = self.blob_root.is_dir() and os.access(self.blob_root, blob_access)
         ready = (
-            database_ready and blob_ready and migration_ready and acl_ready and external_mcp_ready
+            database_ready
+            and blob_ready
+            and migration_ready
+            and acl_ready
+            and external_mcp_ready
+            and audit_ready
         )
         return {
             "status": "ok" if ready else "not_ready",
@@ -2140,6 +2706,7 @@ class FolioLattice:
                 "migration": {"ready": migration_ready},
                 "acl": {"ready": acl_ready},
                 "external_mcp": {"ready": external_mcp_ready},
+                "audit": {"ready": audit_ready},
             },
         }
 

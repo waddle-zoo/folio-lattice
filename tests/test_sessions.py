@@ -60,6 +60,18 @@ class _BearerAuthenticator:
         return True
 
 
+class _ReadyBackupOperations:
+    def status(self) -> dict[str, Any]:
+        return {
+            "ready": True,
+            "alerts": [],
+            "metrics": {"backup_ready": 1},
+        }
+
+    def metrics(self) -> dict[str, int]:
+        return {"backup_ready": 1}
+
+
 class _IdentityAdapter:
     def __init__(self, principal: Principal, redirect_uri: str) -> None:
         self.principal = principal
@@ -179,6 +191,7 @@ class HostedAuthHttpTests(unittest.TestCase):
             identity_adapter=self.adapter,
             auth_redirect_uri=self.redirect_uri,
             audit_logger=self.audit_logger,
+            backup_operations=_ReadyBackupOperations(),
         )
         try:
             self.http_server = _HttpServer(self.app)
@@ -400,6 +413,7 @@ class SessionHttpTests(unittest.IsolatedAsyncioTestCase):
             deployment_mode="hosted",
             authenticator=_BearerAuthenticator(),
             session_store=self.sessions,
+            backup_operations=_ReadyBackupOperations(),
         )
 
     async def asyncTearDown(self) -> None:

@@ -110,6 +110,10 @@ quarterly and after material storage/migration changes.
 
 ## Open blockers
 
+- A provider-neutral source seam now defines versioned external key custody,
+  immutable-store existence/integrity/WORM checks, and scheduler/RPO readiness
+  metrics. It is deliberately not hosted evidence: no vendor adapter,
+  deployment binding, or external restore witness is present.
 - Hosted storage/backup provider, failure domains, key manager, and retention
   schedule are not selected.
 - Business owners have not approved RPO/RTO targets beyond the baseline.

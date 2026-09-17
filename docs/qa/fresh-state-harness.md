@@ -13,10 +13,15 @@ must already exclude tokens, credentials, cookies, and sensitive content. A nonz
 fails the harness after all repetitions have been captured.
 
 Each run also receives a unique `COMPOSE_PROJECT_NAME` and
-`FOLIO_COMPOSE_PROJECT`. When Docker is available, the harness removes that
-exact project with volumes after the run and fails if labeled containers or
-volumes remain. Gate commands must honor these variables; hard-coded Compose
-project names are outside this harness contract.
+`FOLIO_COMPOSE_PROJECT`. Release/Compose mode requires Docker and Docker
+Compose readiness before the gate command, bind-checks the caller-supplied
+`FOLIO_FRESH_STATE_PORT_BASE`, and removes that exact project with volumes
+after each run; it fails if labeled containers or volumes remain. Gate
+commands must honor these variables; hard-coded Compose project names are
+outside this harness contract. A non-Docker command may opt into
+`FOLIO_FRESH_STATE_MODE=non-docker`; that mode is explicitly recorded and the
+command must not create Docker resources. `non-release` is the only mode in
+which the shared/default override is accepted, and it is not release evidence.
 
 Example, only after the release candidate and blocker manifest are approved:
 
@@ -25,6 +30,8 @@ FOLIO_RELEASE_CANDIDATE_SHA="$EXACT_SHA" \
 FOLIO_FRESH_STATE_BLOCKERS_PATH=evidence/fl-urj.28-blockers.json \
 FOLIO_FRESH_STATE_EVIDENCE=evidence/fl-urj.28.json \
 FOLIO_FRESH_STATE_RUNS=2 \
+FOLIO_FRESH_STATE_MODE=release \
+FOLIO_FRESH_STATE_PORT_BASE="$UNIQUE_PORT_BASE" \
 FOLIO_FRESH_STATE_COMMAND_LABEL="Docker public MCP/UI/renderer gate" \
 scripts/repeat-fresh-state.sh -- make docker-test
 ```
