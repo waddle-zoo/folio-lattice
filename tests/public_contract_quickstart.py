@@ -152,6 +152,13 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         html = next(item for item in children if item["artifact"]["name"].endswith(".html"))
         css = next(item for item in children if item["artifact"]["name"].endswith(".css"))
         javascript = next(item for item in children if item["artifact"]["name"].endswith(".js"))
+        body_ids = {
+            root_id,
+            outside_id,
+            html["artifact"]["id"],
+            css["artifact"]["id"],
+            javascript["artifact"]["id"],
+        }
         css_url = f"/content/{css['artifact']['id']}/{css['version']['id']}"
         javascript_url = f"/content/{javascript['artifact']['id']}/{javascript['version']['id']}"
         linked_html = f"""<!doctype html><html lang="en"><head>
@@ -344,7 +351,7 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         assert len(body_second_page) == 2
         assert len(body_third_page) == 1
         global_ids = {item["artifact_id"] for item in global_search}
-        assert global_ids == {root_id, outside_id, *child_ids}
+        assert global_ids == body_ids
         assert all("body" in item["match_kinds"] for item in global_search)
         assert all(item["version_id"] in version_ids for item in global_search)
 
