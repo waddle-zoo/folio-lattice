@@ -50,6 +50,7 @@ MAX_EXTERNAL_CONNECTION_NAME_LENGTH = 255
 MAX_EXTERNAL_LIST_ITEMS = 128
 MAX_EXTERNAL_ITEM_LENGTH = 2_048
 MAX_EXTERNAL_ARGUMENT_BYTES = 64 * 1024
+EXTERNAL_SQLITE_BUSY_TIMEOUT_SECONDS = 35.0
 _EXTERNAL_POLICY_KEYS = frozenset({"slack"})
 _EXTERNAL_POLICY_PUBLIC_KEYS = frozenset({"channels", "max_time_range_seconds"})
 _EXTERNAL_PUBLIC_FIELDS = (
@@ -238,9 +239,13 @@ class FolioLattice:
 
     def connect(self) -> sqlite3.Connection:
         if self.read_only:
-            connection = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            connection = sqlite3.connect(
+                f"{self.db_path.resolve().as_uri()}?mode=ro",
+                uri=True,
+                timeout=EXTERNAL_SQLITE_BUSY_TIMEOUT_SECONDS,
+            )
         else:
-            connection = sqlite3.connect(self.db_path)
+            connection = sqlite3.connect(self.db_path, timeout=EXTERNAL_SQLITE_BUSY_TIMEOUT_SECONDS)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         if not self.read_only:

@@ -18,6 +18,7 @@ from .service import FolioError, FolioLattice
 MAX_EXTERNAL_RESULT_BYTES = 1 * 1024 * 1024
 MAX_EXTERNAL_HTTP_RESPONSE_BYTES = MAX_EXTERNAL_RESULT_BYTES
 MAX_EXTERNAL_REQUEST_BYTES = 64 * 1024
+MAX_EXTERNAL_TIMEOUT_SECONDS = 30.0
 EXTERNAL_RATE_LIMIT = 600
 EXTERNAL_RATE_WINDOW_SECONDS = 60.0
 EXTERNAL_RATE_MAX_KEYS = 4096
@@ -177,8 +178,12 @@ class HttpExternalMcpTransport:
         dns_resolver: Any | None = None,
         http_transport: Any | None = None,
     ) -> None:
-        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
-            raise ValueError("external MCP transport timeout must be positive")
+        if (
+            not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or timeout_seconds > MAX_EXTERNAL_TIMEOUT_SECONDS
+        ):
+            raise ValueError("external MCP transport timeout is outside the allowed bound")
         if max_response_bytes < 1:
             raise ValueError("external MCP transport response bound must be positive")
         self.timeout_seconds = timeout_seconds

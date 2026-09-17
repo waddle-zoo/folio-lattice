@@ -595,6 +595,82 @@ class ExternalMcpServiceTests(unittest.TestCase):
         self.assertIsInstance(result[0], ExternalMcpError)
         self.assertIn("revoked", str(result[0]))
 
+    def test_revoke_waits_for_bounded_transport_fence(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        transport = FakeTransport()
+        transport_calls: list[str] = []
+
+        def blocking_call(*args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+            transport_calls.append("started")
+            started.set()
+            self.assertTrue(release.wait(10))
+            return {"ok": True}
+
+        transport.call_tool = blocking_call  # type: ignore[method-assign]
+        broker = ExternalMcpBroker(self.service, credentials=FakeCredentials(), transport=transport)
+        record = broker.register(
+            tenant_id="acme",
+            actor="admin",
+            name="slow-revoke",
+            endpoint=ENDPOINT,
+            approved_tools=[TOOL],
+            approved_resources=[],
+            allowed_origins=[ORIGIN],
+            credential_ref=SECRET_REF,
+            reason="approved",
+        )
+        call_result: list[Any] = []
+
+        def call() -> None:
+            try:
+                call_result.append(
+                    broker.call_tool(
+                        tenant_id="acme",
+                        actor="admin",
+                        connection_id=record["id"],
+                        tool_name=TOOL,
+                        arguments={},
+                    )
+                )
+            except BaseException as exc:  # pragma: no cover - assertion below
+                call_result.append(exc)
+
+        worker = threading.Thread(target=call)
+        worker.start()
+        self.assertTrue(started.wait(2))
+        revoke_result: list[Any] = []
+        revoke_done = threading.Event()
+
+        def revoke() -> None:
+            try:
+                revoke_result.append(
+                    broker.revoke(
+                        tenant_id="acme",
+                        actor="admin",
+                        connection_id=record["id"],
+                        reason="slow revoke",
+                    )
+                )
+            except BaseException as exc:  # pragma: no cover - assertion below
+                revoke_result.append(exc)
+            finally:
+                revoke_done.set()
+
+        revoker = threading.Thread(target=revoke)
+        revoker.start()
+        self.assertFalse(revoke_done.wait(5.5))
+        release.set()
+        worker.join(2)
+        revoker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(revoker.is_alive())
+        self.assertEqual(call_result, [{"ok": True}])
+        self.assertEqual(transport_calls, ["started"])
+        self.assertEqual(len(revoke_result), 1)
+        self.assertEqual(revoke_result[0]["status"], "revoked")
+
     def test_broker_rejects_credential_echo_from_upstream(self) -> None:
         credentials = FakeCredentials()
         transport = FakeTransport()
@@ -750,6 +826,10 @@ class ExternalMcpHttpTransportTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_transport_timeout_has_an_upper_bound(self) -> None:
+        with self.assertRaisesRegex(ValueError, "outside the allowed bound"):
+            HttpExternalMcpTransport(timeout_seconds=30.1)
 
     @staticmethod
     def public_dns(host: str, port: int, **kwargs: Any) -> list[Any]:
