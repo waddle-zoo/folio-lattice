@@ -34,6 +34,7 @@ from .auth import (
     OidcAuthenticator,
     OidcVerifier,
     Principal,
+    get_request_principal,
     reset_request_principal,
     set_request_principal,
 )
@@ -607,6 +608,8 @@ class FolioHttpApp:
         public_mcp_timeout_seconds: float = PUBLIC_MCP_TIMEOUT_SECONDS,
         hsts_max_age: int = 0,
         config_ready: bool = True,
+        local_tenant_id: str | None = None,
+        local_actor_id: str | None = None,
     ):
         if max_request_bytes < 1:
             raise ValueError("max_request_bytes must be positive")
@@ -632,6 +635,8 @@ class FolioHttpApp:
         self.control_origin = control_origin
         self.hsts_max_age = hsts_max_age
         self.config_ready = config_ready
+        self.local_tenant_id = local_tenant_id
+        self.local_actor_id = local_actor_id
         self.audit_logger = audit_logger or logging.getLogger("folio_lattice.audit")
         self.audit_logger.setLevel(logging.INFO)
         self._auth_rate_limiters = {
@@ -723,6 +728,12 @@ class FolioHttpApp:
         if scope["method"] == "GET" and scope["path"] in {"/readyz", "/ready"}:
             readiness = self._readiness()
             await JSONResponse(readiness, status_code=200 if readiness["ready"] else 503)(
+                scope, receive, secure_send
+            )
+            return
+        if scope["method"] == "GET" and scope["path"] == "/metrics":
+            metrics = self.service.audit_metrics()
+            await JSONResponse(metrics, headers={"Cache-Control": "no-store"})(
                 scope, receive, secure_send
             )
             return
@@ -1325,8 +1336,24 @@ class FolioHttpApp:
         status: int,
         request_id: str,
     ) -> None:
+        principal = get_request_principal()
+        headers = dict(scope.get("headers", []))
+        correlation_id = headers.get(b"x-correlation-id", b"").decode("ascii", "ignore")
+        if (
+            not correlation_id
+            or len(correlation_id) > 255
+            or any(ord(character) < 0x21 or ord(character) == 0x7F for character in correlation_id)
+        ):
+            correlation_id = request_id
+        tenant_id = principal.tenant_id if principal is not None else self.local_tenant_id
+        actor_id = principal.actor_id if principal is not None else self.local_actor_id
+        tenant_id = tenant_id or "unknown"
+        actor_id = actor_id or "unknown"
         record = {
             "event": event,
+            "tenant_id": tenant_id,
+            "actor_id": actor_id,
+            "correlation_id": correlation_id,
             "method": scope.get("method", ""),
             "outcome": outcome,
             "path": scope.get("path", ""),
@@ -1337,6 +1364,22 @@ class FolioHttpApp:
             "auth_audit %s",
             json.dumps(record, sort_keys=True, separators=(",", ":")),
         )
+        try:
+            self.service.record_audit_event(
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                request_id=request_id,
+                correlation_id=correlation_id,
+                action=event,
+                outcome=outcome,
+                resource_type="http_route",
+                resource_id=scope.get("path", "") or None,
+                reason=event,
+                source="http",
+                details={"status_code": status},
+            )
+        except Exception:
+            self.audit_logger.exception("audit_persist_failed")
 
     @staticmethod
     async def _error(
@@ -1670,6 +1713,8 @@ def run_http(host: str, port: int) -> None:
             public_mcp_timeout_seconds=settings.public_mcp_timeout_seconds,
             hsts_max_age=settings.hsts_max_age,
             config_ready=True,
+            local_tenant_id=settings.tenant_id if settings.deployment_mode == "local" else None,
+            local_actor_id=settings.actor if settings.deployment_mode == "local" else None,
         ),
         host=host,
         port=port,

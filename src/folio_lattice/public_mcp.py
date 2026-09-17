@@ -33,6 +33,7 @@ ADMIN_TOOLS = frozenset(
         "external_mcp_connection_status",
         "external_mcp_connection_revoke",
         "external_mcp_audit",
+        "audit_export",
     }
 )
 
