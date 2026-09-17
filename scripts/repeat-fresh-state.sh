@@ -29,6 +29,12 @@ jq -e 'type == "array" and length > 0 and all(.[]; .status == "closed")' \
 runs="${FOLIO_FRESH_STATE_RUNS:-2}"
 [[ "$runs" =~ ^[2-9][0-9]*$ ]] || fail "FOLIO_FRESH_STATE_RUNS must be an integer >= 2"
 
+allow_shared_defaults="${FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS:-false}"
+[[ "$allow_shared_defaults" == true || "$allow_shared_defaults" == false ]] \
+  || fail "FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS must be true or false"
+port_base="${FOLIO_FRESH_STATE_PORT_BASE:-18000}"
+[[ "$port_base" =~ ^[1-9][0-9]*$ ]] || fail "FOLIO_FRESH_STATE_PORT_BASE must be a positive integer"
+
 evidence="${FOLIO_FRESH_STATE_EVIDENCE:-/tmp/folio-lattice-fl-urj.28.json}"
 mkdir -p "$(dirname "$evidence")"
 [[ "${1:-}" == "--" ]] || fail "usage: $0 [options] -- command [args...]"
@@ -52,6 +58,22 @@ for run in $(seq 1 "$runs"); do
   root="$(mktemp -d "${fresh_prefix}XXXXXX")"
   roots+=("$root")
   compose_project="folio-fresh-${candidate_sha:0:12}-${run}-$(basename "$root" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | tail -c 9)"
+  tenant_id="fresh-${candidate_sha:0:12}-${run}"
+  actor_id="fresh-runner-${candidate_sha:0:12}-${run}"
+  control_port=$((port_base + run))
+  renderer_port=$((port_base + 100 + run))
+  if [[ "$allow_shared_defaults" == true ]]; then
+    tenant_id="${FOLIO_TENANT_ID:-$tenant_id}"
+    actor_id="${FOLIO_ACTOR:-$actor_id}"
+    control_port="${FOLIO_HOST_PORT:-$control_port}"
+    renderer_port="${FOLIO_RENDER_HOST_PORT:-$renderer_port}"
+  fi
+  [[ "$tenant_id" != hyperset-v0 && "$tenant_id" != dev ]] \
+    || [[ "$allow_shared_defaults" == true ]] \
+    || fail "refusing shared/default tenant; set FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS=true only with approval"
+  [[ "$control_port" != 8000 && "$renderer_port" != 8001 ]] \
+    || [[ "$allow_shared_defaults" == true ]] \
+    || fail "refusing default ports; set FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS=true only with approval"
   run_evidence="${evidence%.json}.run-${run}"
   mkdir -p "$run_evidence"
 
@@ -63,6 +85,10 @@ for run in $(seq 1 "$runs"); do
     export FOLIO_FRESH_STATE_RUN="$run"
     export FOLIO_COMPOSE_PROJECT="$compose_project"
     export COMPOSE_PROJECT_NAME="$compose_project"
+    export FOLIO_TENANT_ID="$tenant_id"
+    export FOLIO_ACTOR="$actor_id"
+    export FOLIO_HOST_PORT="$control_port"
+    export FOLIO_RENDER_HOST_PORT="$renderer_port"
     "$@"
   ) >"$run_evidence/stdout.log" 2>"$run_evidence/stderr.log"
   exit_code=$?
@@ -93,10 +119,20 @@ for run in $(seq 1 "$runs"); do
     --arg stderr_sha "$stderr_sha" \
     --arg evidence "$run_evidence" \
     --arg compose_project "$compose_project" \
+    --arg tenant_id "$tenant_id" \
+    --arg actor_id "$actor_id" \
+    --arg control_port "$control_port" \
+    --arg renderer_port "$renderer_port" \
+    --arg db_path "$root/folio.db" \
+    --arg blob_root "$root/blobs" \
+    --arg candidate_sha "$candidate_sha" \
     --arg compose_cleanup "$cleanup_status" \
     '{run:$run, exit_code:$exit_code, stdout_sha256:$stdout_sha,
       stderr_sha256:$stderr_sha, evidence_dir:$evidence,
-      compose_project:$compose_project, compose_cleanup:$compose_cleanup}')")
+      compose_project:$compose_project, volume_scope:"project-scoped",
+      tenant_id:$tenant_id, actor_id:$actor_id, control_port:$control_port,
+      renderer_port:$renderer_port, db_path:$db_path, blob_root:$blob_root,
+      candidate_sha:$candidate_sha, compose_cleanup:$compose_cleanup}')")
   if [[ "$exit_code" -ne 0 ]]; then
     overall_status=fail
   fi
@@ -106,9 +142,11 @@ jq -n \
   --arg status "$overall_status" \
   --arg candidate_sha "$candidate_sha" \
   --arg command "$command_label" \
+  --arg project_policy "unique project/volume/ports/tenant/actor per run" \
   --argjson runs "[$(IFS=,; echo "${run_results[*]}")]" \
   '{status:$status, candidate_sha:$candidate_sha, command:$command, runs:$runs,
-    fresh_state:"isolated db/blob root per run", logs_redacted:false,
+    fresh_state:"isolated db/blob root per run", project_policy:$project_policy,
+    logs_redacted:false,
     log_policy:"gate command must not emit secrets; logs are hashed but not transformed"}' \
   > "$evidence"
 
