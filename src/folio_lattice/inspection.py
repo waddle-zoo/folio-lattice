@@ -2555,7 +2555,7 @@ function metadataMatch(artifact, matchKind) {
     artifact_id: artifact.id,
     artifact_name: artifact.name,
     media_type: artifact.media_type,
-    version_id: artifact.version_id || '',
+    version_id: artifact.current_version_id || artifact.version_id || '',
     match_kind: matchKind,
     snippet: matchKind === 'name'
       ? `Filename match: ${artifact.name}`

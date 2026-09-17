@@ -1055,6 +1055,17 @@ document.querySelector('#search').requestSubmit();
                     set(duplicate_ids),
                     {duplicate_one["artifact"]["id"], duplicate_two["artifact"]["id"]},
                 )
+                duplicate_versions = chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')]"
+                    ".map((button) => button.dataset.versionId)"
+                )
+                self.assertEqual(
+                    set(duplicate_versions),
+                    {
+                        duplicate_one["artifact"]["current_version_id"],
+                        duplicate_two["artifact"]["current_version_id"],
+                    },
+                )
                 result_text = chrome.evaluate("document.querySelector('#results').innerText")
                 self.assertTrue(all(artifact_id in result_text for artifact_id in duplicate_ids))
                 chrome.evaluate("""
@@ -1072,6 +1083,10 @@ document.querySelector('#search').requestSubmit();
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#results button').dataset.mediaType"),
                     "text/html",
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#results button').dataset.versionId"),
+                    typed_html["artifact"]["current_version_id"],
                 )
                 self.assertIn(
                     "media_type",
