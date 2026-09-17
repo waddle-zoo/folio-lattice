@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
 from folio_lattice.external_mcp import (
     ExternalMcpBroker,
     ExternalMcpError,
@@ -74,6 +76,18 @@ async def invoke(
 
 def gateway_request(arguments: dict[str, Any]) -> bytes:
     return json.dumps({"tool": "artifact_read", "arguments": arguments}).encode()
+
+
+def bridge_request(arguments: dict[str, Any] | None = None) -> bytes:
+    return json.dumps(
+        {
+            "request_id": "resource-boundary",
+            "artifact_id": "artifact-id",
+            "attachment": "folio-lattice",
+            "tool": "artifact_search",
+            "arguments": arguments or {"query": "marker"},
+        }
+    ).encode()
 
 
 class CountingCaller:
@@ -208,6 +222,79 @@ class HumanGatewayResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertEqual(json.loads(response)["code"], "response_too_large")
 
+    async def test_bridge_path_rejects_oversize_and_recovers_after_timeout(self) -> None:
+        caller = CountingCaller([{"artifact_id": "artifact-id"}], delay=0.03)
+        app = self.make_app(
+            caller,
+            timeout_seconds=0.005,
+            rate_limits={"tenant": 100, "actor": 100, "ip": 100},
+            concurrency_limit=1,
+            concurrency_per_key=1,
+        )
+        oversized = bridge_request({"query": "x" * 70_000})
+        status, headers, response = await invoke(app, "/api/bridge", body=oversized)
+        self.assertEqual(status, 413)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(json.loads(response)["code"], "request_too_large")
+        self.assertEqual(caller.calls, 0)
+
+        status, headers, response = await invoke(app, "/api/bridge", body=bridge_request())
+        self.assertEqual(status, 504)
+        self.assertEqual(headers["retry-after"], "1")
+        self.assertEqual(json.loads(response)["code"], "resource_timeout")
+        self.assertEqual(app._concurrency_limiter._total, 0)
+
+        caller.delay = 0
+        status, _, response = await invoke(app, "/api/bridge", body=bridge_request())
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(response)["result"], [{"artifact_id": "artifact-id"}])
+
+    async def test_actor_and_ip_buckets_are_fair_and_isolated(self) -> None:
+        body = gateway_request({"artifact_id": "a"})
+        actor_app = self.make_app(
+            CountingCaller({"ok": True}),
+            rate_limits={"tenant": 100, "actor": 1, "ip": 100},
+        )
+        principal_a = set_request_principal(Principal("tenant-a", "actor-a", "issuer", "subject-a"))
+        try:
+            self.assertEqual((await invoke(actor_app, "/api/mcp", body=body))[0], 200)
+            self.assertEqual(
+                (
+                    await invoke(
+                        actor_app,
+                        "/api/mcp",
+                        body=body,
+                        client=("127.0.0.2", 1),
+                    )
+                )[0],
+                429,
+            )
+        finally:
+            reset_request_principal(principal_a)
+        principal_b = set_request_principal(Principal("tenant-a", "actor-b", "issuer", "subject-b"))
+        try:
+            self.assertEqual((await invoke(actor_app, "/api/mcp", body=body))[0], 200)
+        finally:
+            reset_request_principal(principal_b)
+
+        ip_app = self.make_app(
+            CountingCaller({"ok": True}),
+            rate_limits={"tenant": 100, "actor": 100, "ip": 1},
+        )
+        self.assertEqual((await invoke(ip_app, "/api/mcp", body=body))[0], 200)
+        self.assertEqual((await invoke(ip_app, "/api/mcp", body=body))[0], 429)
+        self.assertEqual(
+            (
+                await invoke(
+                    ip_app,
+                    "/api/mcp",
+                    body=body,
+                    client=("127.0.0.2", 1),
+                )
+            )[0],
+            200,
+        )
+
 
 class RendererResourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_timeout_recovery_and_ip_isolation(self) -> None:
@@ -304,6 +391,144 @@ class ExternalResourceTests(unittest.TestCase):
                 broker.list_connections(tenant_id="a", actor="actor")
             self.assertEqual(broker.list_connections(tenant_id="b", actor="actor"), [])
             self.assertEqual(broker._concurrency_limiter._total, 0)
+
+    def test_registration_size_is_rejected_before_transport_and_recovers(self) -> None:
+        class Transport:
+            def __init__(self) -> None:
+                self.validation_calls = 0
+
+            def validate_registration(self, endpoint: str) -> None:
+                del endpoint
+                self.validation_calls += 1
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            service = FolioLattice(root / "folio.db", root / "blobs")
+            transport = Transport()
+            broker = ExternalMcpBroker(
+                service,
+                transport=transport,
+                rate_limits={"tenant": 100, "actor": 100, "connection": 100},
+            )
+            with self.assertRaisesRegex(ExternalMcpError, "item is too large"):
+                broker.register(
+                    tenant_id="tenant-a",
+                    actor="admin",
+                    name="oversized",
+                    endpoint="https://example.com/mcp",
+                    approved_tools=["x" * 2_049],
+                    approved_resources=[],
+                    allowed_origins=["https://example.com"],
+                    credential_ref=None,
+                    reason="test",
+                )
+            self.assertEqual(transport.validation_calls, 0)
+            record = broker.register(
+                tenant_id="tenant-a",
+                actor="admin",
+                name="approved",
+                endpoint="https://example.com/mcp",
+                approved_tools=["calendar.list"],
+                approved_resources=[],
+                allowed_origins=["https://example.com"],
+                credential_ref=None,
+                reason="test",
+            )
+            self.assertEqual(record["name"], "approved")
+            self.assertEqual(broker._concurrency_limiter._total, 0)
+
+    def test_approved_call_concurrency_rejects_noisy_neighbor_and_recovers(self) -> None:
+        class BlockingTransport:
+            def __init__(self) -> None:
+                self.entered = threading.Event()
+                self.release = threading.Event()
+                self.blocking = True
+
+            def validate_registration(self, endpoint: str) -> None:
+                del endpoint
+
+            def call_tool(
+                self,
+                endpoint: str,
+                tool_name: str,
+                arguments: dict[str, Any],
+                *,
+                credential: str | None,
+            ) -> Any:
+                del endpoint, tool_name, arguments, credential
+                if self.blocking:
+                    self.entered.set()
+                    self.release.wait(timeout=2)
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            service = FolioLattice(root / "folio.db", root / "blobs")
+            transport = BlockingTransport()
+            broker = ExternalMcpBroker(
+                service,
+                transport=transport,
+                rate_limits={"tenant": 100, "actor": 100, "connection": 100},
+                concurrency_limit=1,
+                concurrency_per_key=1,
+            )
+            record = broker.register(
+                tenant_id="tenant-a",
+                actor="admin",
+                name="approved",
+                endpoint="https://example.com/mcp",
+                approved_tools=["calendar.list"],
+                approved_resources=[],
+                allowed_origins=["https://example.com"],
+                credential_ref=None,
+                reason="test",
+            )
+            connection_id = record["id"]
+            result: list[Any] = []
+            errors: list[BaseException] = []
+
+            def first_call() -> None:
+                try:
+                    result.append(
+                        broker.call_tool(
+                            tenant_id="tenant-a",
+                            actor="admin",
+                            connection_id=connection_id,
+                            tool_name="calendar.list",
+                            arguments={},
+                        )
+                    )
+                except BaseException as exc:  # pragma: no cover - assertion below
+                    errors.append(exc)
+
+            thread = threading.Thread(target=first_call)
+            thread.start()
+            self.assertTrue(transport.entered.wait(timeout=2))
+            with self.assertRaisesRegex(ExternalMcpError, "concurrency limit"):
+                broker.call_tool(
+                    tenant_id="tenant-a",
+                    actor="admin",
+                    connection_id=connection_id,
+                    tool_name="calendar.list",
+                    arguments={},
+                )
+            transport.release.set()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(result, [{"ok": True}])
+            self.assertEqual(broker._concurrency_limiter._total, 0)
+            transport.blocking = False
+            self.assertEqual(
+                broker.call_tool(
+                    tenant_id="tenant-a",
+                    actor="admin",
+                    connection_id=connection_id,
+                    tool_name="calendar.list",
+                    arguments={},
+                ),
+                {"ok": True},
+            )
 
     def test_settings_expose_configurable_resource_bounds(self) -> None:
         with patch.dict(
