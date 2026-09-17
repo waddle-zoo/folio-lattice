@@ -1068,6 +1068,14 @@ document.querySelector('#search').requestSubmit();
                 )
                 result_text = chrome.evaluate("document.querySelector('#results').innerText")
                 self.assertTrue(all(artifact_id in result_text for artifact_id in duplicate_ids))
+                chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')]"
+                    f".find((button) => button.dataset.artifactId === {json.dumps(duplicate_two['artifact']['id'])}).click()"
+                )
+                chrome.wait(f"location.pathname === '/artifacts/{duplicate_two['artifact']['id']}'")
+                chrome.command("Page.navigate", {"url": control_origin})
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.evaluate("document.querySelector('#find').open = true")
                 chrome.evaluate("""
 window.__folioSearchCalls = [];
 document.querySelector('#search-query').value = 'text/html';
@@ -1094,9 +1102,9 @@ document.querySelector('#search').requestSubmit();
                 )
                 chrome.evaluate(
                     "[...document.querySelectorAll('#results button[data-artifact-id]')]"
-                    f".find((button) => button.dataset.artifactId === {json.dumps(duplicate_two['artifact']['id'])}).click()"
+                    f".find((button) => button.dataset.artifactId === {json.dumps(typed_html['artifact']['id'])}).click()"
                 )
-                chrome.wait(f"location.pathname === '/artifacts/{duplicate_two['artifact']['id']}'")
+                chrome.wait(f"location.pathname === '/artifacts/{typed_html['artifact']['id']}'")
                 chrome.command("Page.navigate", {"url": control_origin})
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.evaluate("document.querySelector('a[href=\"/#find\"]').click()")
