@@ -41,6 +41,11 @@ class ReadyCaller:
         return True
 
 
+class ReadyAuthenticator:
+    def ready(self) -> bool:
+        return True
+
+
 async def call(app, path: str, *, scheme: str = "http") -> tuple[int, dict[str, str], bytes]:
     sent = []
 
@@ -220,6 +225,39 @@ class DeploymentTests(unittest.TestCase):
             service.blob_root.mkdir()
             service.db_path.unlink()
             self.assertFalse(service.readiness()["dependencies"]["database"]["ready"])
+
+    def test_hosted_backup_operations_are_required_for_readiness_and_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = FolioLattice(root / "folio.db", root / "blobs")
+            app = FolioHttpApp(
+                unused_app,
+                service,
+                unused_app,
+                deployment_mode="hosted",
+                authenticator=ReadyAuthenticator(),
+            )
+
+            status, _, body = asyncio.run(call(app, "/readyz"))
+            self.assertEqual(status, 503)
+            readiness = json.loads(body)
+            self.assertFalse(readiness["ready"])
+            self.assertEqual(
+                readiness["dependencies"]["backup_operations"],
+                {
+                    "ready": False,
+                    "required": True,
+                    "reason": "hosted backup operations monitor is not configured",
+                },
+            )
+
+            status, _, body = asyncio.run(call(app, "/metrics"))
+            self.assertEqual(status, 200)
+            metrics = json.loads(body)
+            self.assertEqual(metrics["backup_ready"], 0)
+            self.assertEqual(metrics["backup_age_seconds"], -1)
+            self.assertEqual(metrics["backup_store_ready"], 0)
+            self.assertEqual(metrics["backup_key_custody_ready"], 0)
 
     def test_upgrade_is_repeatable_and_rollback_copy_preserves_blob(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

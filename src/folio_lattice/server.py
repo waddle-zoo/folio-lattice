@@ -736,6 +736,15 @@ class FolioHttpApp:
             return
         if scope["method"] == "GET" and scope["path"] == "/metrics":
             metrics: dict[str, Any] = dict(self.service.audit_metrics())
+            if self.deployment_mode == "hosted":
+                metrics.update(
+                    {
+                        "backup_ready": 0,
+                        "backup_age_seconds": -1,
+                        "backup_store_ready": 0,
+                        "backup_key_custody_ready": 0,
+                    }
+                )
             if self.backup_operations is not None:
                 try:
                     metrics.update(self.backup_operations.metrics())
@@ -962,21 +971,28 @@ class FolioHttpApp:
             identity_ready = self._identity_ready()
         dependencies["provider"] = {"ready": provider_ready, "required": provider_required}
         dependencies["identity"] = {"ready": identity_ready, "required": identity_required}
-        if self.deployment_mode == "hosted" and self.backup_operations is not None:
-            try:
-                backup_status = self.backup_operations.status()
-                dependencies["backup_operations"] = {
-                    "ready": backup_status["ready"],
-                    "required": True,
-                    "alerts": backup_status["alerts"],
-                    "metrics": backup_status["metrics"],
-                }
-            except Exception:
+        if self.deployment_mode == "hosted":
+            if self.backup_operations is None:
                 dependencies["backup_operations"] = {
                     "ready": False,
                     "required": True,
-                    "reason": "hosted backup operations check failed",
+                    "reason": "hosted backup operations monitor is not configured",
                 }
+            else:
+                try:
+                    backup_status = self.backup_operations.status()
+                    dependencies["backup_operations"] = {
+                        "ready": backup_status["ready"],
+                        "required": True,
+                        "alerts": backup_status["alerts"],
+                        "metrics": backup_status["metrics"],
+                    }
+                except Exception:
+                    dependencies["backup_operations"] = {
+                        "ready": False,
+                        "required": True,
+                        "reason": "hosted backup operations check failed",
+                    }
         readiness["dependencies"] = dependencies
         readiness["ready"] = all(
             isinstance(dependency, dict) and dependency.get("ready") is True

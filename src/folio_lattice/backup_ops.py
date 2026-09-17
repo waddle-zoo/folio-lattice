@@ -420,9 +420,31 @@ class BackupOperationsMonitor:
         alerts: list[str] = []
         key_status = self._key_status(alerts)
         store_status = self._store_status(alerts)
+        key_ready = (
+            key_status.provider == self.config.key_adapter_id
+            and key_status.ready
+            and (key_status.hosted or not self.config.require_hosted)
+            and all(
+                key_status.active_versions.get(purpose) is not None
+                and key_status.active_versions.get(purpose)
+                in key_status.accepted_versions.get(purpose, ())
+                for purpose in ("backup", "recovery")
+            )
+            and (
+                self.config.expected_backup_key_version is None
+                or key_status.active_versions.get("backup")
+                == self.config.expected_backup_key_version
+            )
+            and (
+                self.config.expected_recovery_key_version is None
+                or key_status.active_versions.get("recovery")
+                == self.config.expected_recovery_key_version
+            )
+        )
 
         latest: StoredBackup | None = None
-        if store_status.ready and store_status.hosted:
+        store_check_failed = False
+        if store_status.ready and (store_status.hosted or not self.config.require_hosted):
             try:
                 candidate = self.store.latest()
                 if candidate is None:
@@ -435,6 +457,7 @@ class BackupOperationsMonitor:
                         )
                     latest = _valid_record(inspected)
             except Exception as exc:
+                store_check_failed = True
                 if "backup_missing" not in alerts:
                     alerts.append("backup_store_check_failed")
                 if isinstance(exc, BackupOperationsError) and str(exc):
@@ -462,6 +485,19 @@ class BackupOperationsMonitor:
         # Preserve order while preventing repeated alerts from adapter failures.
         alerts = list(dict.fromkeys(alerts))
         ready = not alerts
+        store_ready = (
+            store_status.provider == self.config.store_adapter_id
+            and store_status.ready
+            and (store_status.hosted or not self.config.require_hosted)
+            and store_status.immutable
+            and store_status.overwrite_protected
+            and store_status.delete_protected
+            and not store_check_failed
+        )
+        key_public = key_status.public()
+        key_public["ready"] = key_ready
+        store_public = store_status.public()
+        store_public["ready"] = store_ready
         metrics: dict[str, int | float] = {
             "backup_ready": int(ready),
             "backup_age_seconds": age_seconds if age_seconds is not None else -1,
@@ -470,8 +506,8 @@ class BackupOperationsMonitor:
             "backup_schedule_interval_seconds": self.config.schedule_interval_seconds,
             "backup_stale": int("backup_stale" in alerts),
             "backup_rpo_exceeded": int("backup_rpo_exceeded" in alerts),
-            "backup_store_ready": int(store_status.ready and store_status.hosted),
-            "backup_key_custody_ready": int(key_status.ready and key_status.hosted),
+            "backup_store_ready": int(store_ready),
+            "backup_key_custody_ready": int(key_ready),
         }
         return {
             "status": "ok" if ready else "not_ready",
@@ -479,8 +515,8 @@ class BackupOperationsMonitor:
             "checked_at": checked_at.isoformat(),
             "alerts": alerts,
             "dependencies": {
-                "key_custody": key_status.public(),
-                "backup_store": store_status.public(),
+                "key_custody": key_public,
+                "backup_store": store_public,
                 "scheduler": {
                     "ready": True,
                     "interval_seconds": self.config.schedule_interval_seconds,

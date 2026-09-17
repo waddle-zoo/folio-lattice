@@ -139,6 +139,8 @@ class BackupOperationsTests(unittest.TestCase):
         self.assertFalse(status["ready"])
         self.assertIn("backup_store_overwrite_allowed", status["alerts"])
         self.assertIn("backup_store_delete_allowed", status["alerts"])
+        self.assertEqual(status["metrics"]["backup_store_ready"], 0)
+        self.assertFalse(status["dependencies"]["backup_store"]["ready"])
 
     def test_store_missing_or_tampered_metadata_fails_integrity_checks(self) -> None:
         missing = self.record()
@@ -151,6 +153,7 @@ class BackupOperationsTests(unittest.TestCase):
         )
         self.assertFalse(status["ready"])
         self.assertIn("backup_integrity_failed", status["alerts"])
+        self.assertEqual(status["metrics"]["backup_store_ready"], 0)
 
         tampered = self.record()
         tampered = StoredBackup(
@@ -204,6 +207,24 @@ class BackupOperationsTests(unittest.TestCase):
         ).status(self.checked_at)
         self.assertFalse(status["ready"])
         self.assertIn("key_custody_unavailable", status["alerts"])
+
+    def test_rotation_state_mismatch_clears_key_custody_readiness_metric(self) -> None:
+        key = ExternalKeyCustody(
+            KeyCustodyStatus(
+                provider="external-kms",
+                ready=True,
+                hosted=True,
+                active_versions={"backup": "v3", "recovery": "v2"},
+                accepted_versions={"backup": ("v2",), "recovery": ("v2",)},
+            )
+        )
+        status = BackupOperationsMonitor(
+            self.config(), key, ExternalWormStore(self.record())
+        ).status(self.checked_at)
+        self.assertFalse(status["ready"])
+        self.assertIn("backup_key_rotation_state_invalid", status["alerts"])
+        self.assertEqual(status["metrics"]["backup_key_custody_ready"], 0)
+        self.assertFalse(status["dependencies"]["key_custody"]["ready"])
 
     def test_config_requires_external_adapters_and_explicit_schedule(self) -> None:
         values = {
