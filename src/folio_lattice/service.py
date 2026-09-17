@@ -983,6 +983,83 @@ class FolioLattice:
                     break
         return ordered
 
+    @staticmethod
+    def _search_path(name: str, source_context: object) -> str:
+        try:
+            context = (
+                json.loads(source_context) if isinstance(source_context, str) else source_context
+            )
+        except (TypeError, json.JSONDecodeError):
+            context = {}
+        if isinstance(context, dict):
+            return str(
+                context.get("path") or context.get("file_path") or context.get("filename") or name
+            )
+        return name
+
+    def _readable_graph_paths(
+        self,
+        db: sqlite3.Connection,
+        tenant_id: str,
+        root_artifact_id: str,
+        *,
+        actor: str | None,
+    ) -> dict[str, list[dict[str, str]]]:
+        """Return root-to-node paths without exposing hidden graph topology."""
+
+        self._authorize(db, tenant_id, root_artifact_id, actor, "read")
+        access_sql, access_params = self._access_clause(actor, "read")
+        root = db.execute(
+            """
+            SELECT a.id, a.name, v.source_context
+            FROM artifacts a
+            JOIN versions v
+              ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
+            WHERE a.tenant_id = ? AND a.id = ? AND """
+            + access_sql,
+            (tenant_id, root_artifact_id, *access_params),
+        ).fetchone()
+        if root is None:
+            raise FolioError("artifact not found")
+
+        def node(row: sqlite3.Row) -> dict[str, str]:
+            return {
+                "artifact_id": row["id"],
+                "name": row["name"],
+                "path": self._search_path(row["name"], row["source_context"]),
+            }
+
+        paths: dict[str, list[dict[str, str]]] = {root["id"]: [node(root)]}
+        queue = deque([root["id"]])
+        while queue and len(paths) < MAX_GRAPH_COMPONENT_NODES:
+            current = queue.popleft()
+            rows = db.execute(
+                """
+                SELECT a.id, a.name, v.source_context, e.created_at, e.id AS edge_id
+                FROM edges e
+                JOIN artifacts a
+                  ON a.tenant_id = e.tenant_id
+                 AND a.id <> ?
+                 AND (a.id = e.source_artifact_id OR a.id = e.target_artifact_id)
+                JOIN versions v
+                  ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
+                WHERE e.tenant_id = ?
+                  AND (e.source_artifact_id = ? OR e.target_artifact_id = ?)
+                  AND """
+                + access_sql
+                + " ORDER BY e.created_at, e.id",
+                (current, tenant_id, current, current, *access_params),
+            ).fetchall()
+            for row in rows:
+                artifact_id = row["id"]
+                if artifact_id in paths:
+                    continue
+                paths[artifact_id] = [*paths[current], node(row)]
+                queue.append(artifact_id)
+                if len(paths) >= MAX_GRAPH_COMPONENT_NODES:
+                    break
+        return paths
+
     def graph_component(
         self,
         tenant_id: str,
@@ -1046,17 +1123,18 @@ class FolioLattice:
 
         with self.connect() as db:
             component_ids: list[str] | None = None
+            graph_paths: dict[str, list[dict[str, str]]] = {}
             if graph_root_artifact_id is not None:
                 # Resolving the component first intentionally authorizes the root and
                 # only follows readable, same-tenant edges.  A hidden root therefore
                 # fails closed instead of silently returning a global search.
-                component_ids = self._component_ids(
+                graph_paths = self._readable_graph_paths(
                     db,
                     tenant_id,
                     graph_root_artifact_id,
-                    MAX_GRAPH_COMPONENT_NODES,
                     actor=actor,
                 )
+                component_ids = list(graph_paths)
             access_sql, access_params = self._access_clause(actor, "read")
             component_sql = ""
             component_params: tuple[str, ...] = ()
@@ -1144,17 +1222,7 @@ class FolioLattice:
                 ), readable AS (
                     SELECT rb.tenant_id, rb.artifact_id, rb.artifact_name, rb.media_type,
                            rb.created_at, rb.version_id, rb.updated_at,
-                           rb.source_context,
-                           (SELECT COUNT(*) FROM edges e
-                            JOIN visible_base other
-                              ON other.artifact_id = CASE
-                                  WHEN e.source_artifact_id = rb.artifact_id
-                                  THEN e.target_artifact_id
-                                  ELSE e.source_artifact_id
-                              END
-                            WHERE e.tenant_id = rb.tenant_id
-                              AND (e.source_artifact_id = rb.artifact_id
-                                   OR e.target_artifact_id = rb.artifact_id)) AS graph_edges
+                           rb.source_context
                     FROM readable_base rb
                 ), metadata_matches AS (
                     SELECT r.*, NULL AS chunk_id, NULL AS content,
@@ -1248,6 +1316,7 @@ class FolioLattice:
                     "artifact_id": artifact_id,
                     "version_id": row["version_id"],
                     "artifact_name": name,
+                    "name": name,
                     "media_type": media_type,
                     "match_kinds": [],
                     "match_kind": "",
@@ -1258,9 +1327,8 @@ class FolioLattice:
                     "graph_context": {
                         "root_artifact_id": graph_root_artifact_id,
                         "scoped": graph_root_artifact_id is not None,
-                        "edge_count": row["graph_edges"],
                     },
-                    "graph_edges": row["graph_edges"],
+                    "graph_path": graph_paths.get(artifact_id, []),
                     "graph_root_artifact_id": graph_root_artifact_id,
                     "updated_at": row["updated_at"] or row["created_at"],
                 }

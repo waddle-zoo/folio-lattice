@@ -212,7 +212,8 @@ def build_mcp_server(
         description=(
             "Discover readable artifacts with one case-insensitive substring search across "
             "artifact name, media type, and current body. Results are deduplicated by stable "
-            "artifact_id and include match_kinds, snippet, path, and graph context. Body "
+            "artifact_id and include stable name/version/type, match_kinds, snippet, path, "
+            "score, and readable graph path/context without topology counts. Body "
             "discovery uses bounded FTS5/BM25 candidates, with a bounded fallback for "
             "short punctuation-only queries. "
             "Use graph_root_artifact_id to search only its readable connected component; "

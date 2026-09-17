@@ -952,6 +952,13 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')].map((button) => button.textContent)"
                 )
                 self.assertEqual(set(visible_names), {"notes/decision.md", "site/index.html"})
+                graph_paths = chrome.evaluate(
+                    "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')].map((button) => button.dataset.graphPath)"
+                )
+                self.assertEqual(
+                    set(graph_paths),
+                    {"notes/decision.md", "notes/decision.md / site/index.html"},
+                )
                 self.assertNotIn(
                     "No search run yet.",
                     chrome.evaluate(
@@ -972,10 +979,22 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     site["artifact"]["id"],
                 )
                 self.assertIn(
-                    "In this graph",
+                    "Graph path: notes/decision.md / site/index.html",
                     chrome.evaluate(
                         "document.querySelector('#workspace-search-results').innerText"
                     ),
+                )
+                self.assertNotIn(
+                    "links",
+                    chrome.evaluate(
+                        "document.querySelector('#workspace-search-results').innerText"
+                    ),
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#workspace-search-results-list button').dataset.graphPath"
+                    ),
+                    "notes/decision.md / site/index.html",
                 )
                 chrome.evaluate(
                     "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')]"
@@ -1178,6 +1197,15 @@ document.querySelector('#search').requestSubmit();
                 chrome.wait(
                     "document.querySelectorAll('#results button[data-artifact-id]').length === 2"
                 )
+                self.assertNotIn(
+                    "links", chrome.evaluate("document.querySelector('#results').innerText")
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.graphPath)"
+                    ),
+                    ["", ""],
+                )
                 self.assertEqual(
                     chrome.evaluate("window.__folioSearchCalls[0].tool"), "artifact_search"
                 )
@@ -1261,6 +1289,9 @@ document.querySelector('#search').requestSubmit();
                 self.assertEqual(
                     chrome.evaluate("document.querySelector('#results button').dataset.versionId"),
                     typed_html["artifact"]["current_version_id"],
+                )
+                self.assertNotIn(
+                    "links", chrome.evaluate("document.querySelector('#results').innerText")
                 )
                 self.assertIn(
                     "media_type",

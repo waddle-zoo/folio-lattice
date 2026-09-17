@@ -97,6 +97,15 @@ class ServiceTests(unittest.TestCase):
             {incoming["artifact"]["id"], outgoing["artifact"]["id"]},
         )
         self.assertNotIn(disconnected["artifact"]["id"], {item["artifact_id"] for item in scoped})
+        outgoing_result = next(
+            item for item in scoped if item["artifact_id"] == outgoing["artifact"]["id"]
+        )
+        self.assertEqual(
+            [node["artifact_id"] for node in outgoing_result["graph_path"]],
+            [root["artifact"]["id"], outgoing["artifact"]["id"]],
+        )
+        self.assertNotIn("graph_edges", outgoing_result)
+        self.assertNotIn("edge_count", outgoing_result["graph_context"])
 
     def test_search_unifies_name_type_body_with_context_and_dedupes(self):
         root = self.service.create_artifact(
@@ -141,7 +150,8 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(linked_result["match_kinds"], ["name"])
         self.assertIn("[docker-render.html]", linked_result["snippet"])
         self.assertEqual(linked_result["path"], "assets/docker-render.html")
-        self.assertEqual(linked_result["graph_context"]["edge_count"], 1)
+        self.assertNotIn("graph_edges", linked_result)
+        self.assertNotIn("edge_count", linked_result["graph_context"])
 
         by_type = self.service.search("acme", "TEXT/HTML", actor="reader")
         self.assertEqual([item["artifact_id"] for item in by_type], [linked["artifact"]["id"]])
@@ -266,7 +276,7 @@ class ServiceTests(unittest.TestCase):
             foreign["artifact"]["id"],
         )
 
-    def test_search_graph_context_counts_only_readable_neighbors(self):
+    def test_search_graph_path_is_readable_and_fail_closed_after_revoke(self):
         root = self.service.create_artifact(
             tenant_id="acme", name="reader-root.md", data=b"root marker", actor="reader"
         )
@@ -282,16 +292,69 @@ class ServiceTests(unittest.TestCase):
 
         reader_root = self.service.search("acme", "reader-root", actor="reader")
         self.assertEqual(len(reader_root), 1)
-        self.assertEqual(reader_root[0]["graph_edges"], 0)
-        self.assertEqual(reader_root[0]["graph_context"]["edge_count"], 0)
+        self.assertEqual(
+            [node["artifact_id"] for node in reader_root[0]["graph_path"]],
+            [],
+        )
+        self.assertNotIn("graph_edges", reader_root[0])
+        self.assertNotIn("edge_count", reader_root[0]["graph_context"])
+        self.assertNotIn(private["artifact"]["id"], str(reader_root[0]))
         self.assertEqual(self.service.search("acme", "private marker", actor="reader"), [])
 
         owner_root = self.service.search("acme", "reader-root", actor="owner")
         self.assertEqual(len(owner_root), 1)
-        self.assertEqual(owner_root[0]["graph_edges"], 1)
-        owner_private = self.service.search("acme", "private marker", actor="owner")
-        self.assertEqual(len(owner_private), 1)
-        self.assertEqual(owner_private[0]["graph_context"]["edge_count"], 1)
+        self.assertNotIn("graph_edges", owner_root[0])
+        owner_private = self.service.search(
+            "acme",
+            "private marker",
+            actor="owner",
+            graph_root_artifact_id=root["artifact"]["id"],
+        )
+        self.assertEqual(
+            [node["artifact_id"] for node in owner_private[0]["graph_path"]],
+            [root["artifact"]["id"], private["artifact"]["id"]],
+        )
+
+        private_grant = self.service.share_artifact(
+            "acme", private["artifact"]["id"], actor="owner", subject_actor_id="reader"
+        )
+        visible_private = self.service.search(
+            "acme",
+            "private marker",
+            actor="reader",
+            graph_root_artifact_id=root["artifact"]["id"],
+        )
+        self.assertEqual(len(visible_private), 1)
+        self.assertEqual(
+            [node["artifact_id"] for node in visible_private[0]["graph_path"]],
+            [root["artifact"]["id"], private["artifact"]["id"]],
+        )
+
+        self.service.revoke_share(
+            "acme",
+            private["artifact"]["id"],
+            actor="owner",
+            grant_id=private_grant["id"],
+        )
+        self.assertEqual(self.service.search("acme", "private marker", actor="reader"), [])
+        self.assertEqual(
+            self.service.search(
+                "acme",
+                "private marker",
+                actor="reader",
+                graph_root_artifact_id=root["artifact"]["id"],
+            ),
+            [],
+        )
+
+        foreign = self.service.create_artifact(
+            tenant_id="other", name="private-neighbor.md", data=b"private marker", actor="owner"
+        )
+        self.assertEqual(self.service.search("acme", "private marker", actor="reader"), [])
+        self.assertEqual(
+            [item["artifact_id"] for item in self.service.search("other", "private marker")],
+            [foreign["artifact"]["id"]],
+        )
 
     def test_parent_mismatch_does_not_create_version(self):
         first = self.service.create_artifact(
@@ -450,6 +513,15 @@ class ServiceTests(unittest.TestCase):
                 )
             ],
             [source["artifact"]["id"]],
+        )
+        self.assertEqual(
+            self.service.search(
+                "tenant-a",
+                "secret",
+                actor="same-actor",
+                graph_root_artifact_id=source["artifact"]["id"],
+            ),
+            [],
         )
 
     def test_graph_component_stops_at_unreadable_bridge(self):

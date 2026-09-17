@@ -2576,14 +2576,22 @@ async function exactMetadataResults(query) {
       .map((artifact) => metadataMatch(artifact, 'media_type')),
   ];
 }
+function graphPathLabel(value) {
+  if (!Array.isArray(value)) return value ? String(value) : '';
+  return value.map((node) => {
+    if (typeof node === 'string') return node;
+    return node?.path || node?.name || node?.artifact_id || '';
+  }).filter(Boolean).join(' / ');
+}
 function searchResultShape(result) {
   const graph = result.graph_context || result.graph || result.graph_root || '';
+  const graphPath = graphPathLabel(result.graph_path);
   const graphName = typeof graph === 'string' ? graph
     : graph?.name || graph?.artifact_name || graph?.id
       || (graph?.root_artifact_id
-        ? `Graph ${graph.root_artifact_id}${graph.edge_count == null ? '' : ` · ${graph.edge_count} links`}`
+        ? `Graph ${graph.root_artifact_id}`
         : '');
-  const path = result.path || result.graph_path || result.artifact_path || (typeof graph === 'object' ? graph.path || '' : '');
+  const path = result.path || result.artifact_path || (typeof graph === 'object' ? graph.path || '' : '');
   const kinds = Array.isArray(result.match_kinds)
     ? result.match_kinds
     : result.match_kind ? [result.match_kind] : [];
@@ -2596,7 +2604,8 @@ function searchResultShape(result) {
     match_kinds: kinds.filter(Boolean).map((kind) => String(kind)),
     snippet: result.snippet || result.content || '',
     path: String(path || result.artifact_name || result.name || ''),
-    graph_context: String(graphName || (workspaceMode ? 'In this graph' : '')),
+    graph_path: graphPath,
+    graph_context: String(graphPath ? `Graph path: ${graphPath}` : (graphName || (workspaceMode ? 'In this graph' : ''))),
   };
 }
 function mergeSearchResults(results) {
@@ -2635,6 +2644,7 @@ function renderResults(target, results, names) {
     resultButton.dataset.mediaType = result.media_type;
     resultButton.dataset.matchKind = result.match_kinds.join(',');
     resultButton.dataset.path = result.path;
+    resultButton.dataset.graphPath = result.graph_path;
     resultButton.dataset.graphContext = result.graph_context;
     heading.append(resultButton);
     const meta = document.createElement('div'); meta.className = 'result-meta';
