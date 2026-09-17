@@ -627,6 +627,19 @@ async def _flow(
         approved_tools.extend(["calendar.events.slow", "calendar.events.oversize"])
     external_registration_rejected = None
     if approved_upstream:
+        external_origin_rejected = await call(
+            "external_mcp_connection_register",
+            {
+                "name": "conformance-origin-denied",
+                "endpoint": "https://approved-upstream.test/mcp",
+                "approved_tools": ["calendar.events.list"],
+                "approved_resources": [],
+                "allowed_origins": ["https://unapproved-origin.test"],
+                "credential_ref": "secret://conformance/upstream",
+                "reason": "conformance origin denial",
+            },
+            expect_error=True,
+        )
         connection = await call(
             "external_mcp_connection_register",
             {
@@ -645,6 +658,7 @@ async def _flow(
             "external_mcp_connection_status", {"connection_id": connection_id}
         )
     else:
+        external_origin_rejected = None
         connection_id = "conformance-blocked-registration"
         external_registration_rejected = await call(
             "external_mcp_connection_register",
@@ -755,6 +769,7 @@ async def _flow(
         unknown,
         unauthorized,
         *(item for item in (external_registration_rejected, connection_revoked) if item),
+        *(item for item in (external_origin_rejected,) if item),
         external_tool_denied,
         external_resource_denied,
         *(item for item in (external_timeout, external_oversized, external_post_revoke) if item),
@@ -840,6 +855,7 @@ async def _flow(
             or not any(item["outcome"] == "denied" for item in external_audit)
             or not any(item["outcome"] == "allowed" for item in external_audit)
             or external_post_revoke is None
+            or external_origin_rejected is None
         ):
             raise ConformanceError("external MCP registry/revoke/audit mismatch")
     elif (
@@ -858,6 +874,7 @@ async def _flow(
         [
             "external_tool_not_approved",
             "external_resource_not_approved",
+            "external_origin_not_allowed",
         ]
         if approved_upstream
         else [
