@@ -27,6 +27,7 @@ class FreshStateIsolationTests(unittest.TestCase):
                 "FOLIO_FRESH_STATE_EVIDENCE": str(evidence),
                 "FOLIO_FRESH_STATE_RUNS": "2",
                 "FOLIO_FRESH_STATE_PORT_BASE": "19000",
+                "FOLIO_FRESH_STATE_MODE": "non-docker",
             }
             result = subprocess.run(
                 [str(script), "--", "sh", "-c", 'test "$FOLIO_TENANT_ID" != hyperset-v0'],
@@ -39,6 +40,7 @@ class FreshStateIsolationTests(unittest.TestCase):
             record = json.loads(evidence.read_text(encoding="utf-8"))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(record["status"], "pass")
+        self.assertEqual(record["mode"], "non-docker")
         self.assertEqual(
             record["project_policy"], "unique project/volume/ports/tenant/actor per run"
         )
@@ -49,7 +51,36 @@ class FreshStateIsolationTests(unittest.TestCase):
             self.assertNotIn(run["control_port"], {"8000", 8000})
             self.assertNotIn(run["renderer_port"], {"8001", 8001})
             self.assertNotIn(run["tenant_id"], {"dev", "hyperset-v0"})
-            self.assertIn(run["compose_cleanup"], {"pass", "not_available"})
+            self.assertEqual(run["compose_cleanup"], "not_applicable")
+            self.assertEqual(run["port_preflight"], "pass")
+
+    def test_shared_defaults_cannot_bypass_release_mode(self) -> None:
+        root = Path(__file__).parents[1]
+        candidate = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        script = root / "scripts" / "repeat-fresh-state.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            blockers = temp / "blockers.json"
+            blockers.write_text('[{"status":"closed"}]', encoding="utf-8")
+            environment = {
+                **os.environ,
+                "FOLIO_RELEASE_CANDIDATE_SHA": candidate,
+                "FOLIO_FRESH_STATE_BLOCKERS_PATH": str(blockers),
+                "FOLIO_FRESH_STATE_PORT_BASE": "19020",
+                "FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS": "true",
+            }
+            result = subprocess.run(
+                [str(script), "--", "true"],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("non-release", result.stderr)
 
 
 if __name__ == "__main__":

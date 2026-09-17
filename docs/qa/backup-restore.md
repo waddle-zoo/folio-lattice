@@ -73,11 +73,15 @@ release ledger.
 
 Every release/demo/evidence run must use `scripts/repeat-fresh-state.sh` (or
 an equivalent runner) with a unique Compose project, project-scoped volume,
-control/renderer ports, `FOLIO_TENANT_ID`, and `FOLIO_ACTOR`. The runner records
-those identifiers, source SHA, database/blob roots, and cleanup status in the
+caller-assigned control/renderer ports, `FOLIO_TENANT_ID`, and `FOLIO_ACTOR`.
+Release/Compose mode requires Docker readiness before the gate command and
+bind-checks the caller-supplied port base. The runner records those
+identifiers, source SHA, database/blob roots, and cleanup status in the
 evidence JSON, then removes only resources bearing that run's project label.
 It refuses the default `8000`/`8001` ports and shared `dev`/`hyperset-v0`
-tenant unless `FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS=true` is set by an
-explicitly approved operator. Never point a release fixture at the default
-volume or tenant; intentional quickstart/Hyperset data is not disposable
-evidence state and must not be deleted or mutated.
+tenant in release and non-Docker modes. The
+`FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS=true` override is accepted only with
+an explicit `FOLIO_FRESH_STATE_MODE=non-release`, which is not release
+evidence. Never point a release fixture at the default volume or tenant;
+intentional quickstart/Hyperset data is not disposable evidence state and must
+not be deleted or mutated.

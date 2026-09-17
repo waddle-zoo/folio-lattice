@@ -29,11 +29,42 @@ jq -e 'type == "array" and length > 0 and all(.[]; .status == "closed")' \
 runs="${FOLIO_FRESH_STATE_RUNS:-2}"
 [[ "$runs" =~ ^[2-9][0-9]*$ ]] || fail "FOLIO_FRESH_STATE_RUNS must be an integer >= 2"
 
+mode="${FOLIO_FRESH_STATE_MODE:-release}"
+[[ "$mode" == release || "$mode" == non-release || "$mode" == non-docker ]] \
+  || fail "FOLIO_FRESH_STATE_MODE must be release, non-release, or non-docker"
+
 allow_shared_defaults="${FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS:-false}"
 [[ "$allow_shared_defaults" == true || "$allow_shared_defaults" == false ]] \
   || fail "FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS must be true or false"
-port_base="${FOLIO_FRESH_STATE_PORT_BASE:-18000}"
+[[ "$allow_shared_defaults" != true || "$mode" == non-release ]] \
+  || fail "shared/default overrides require FOLIO_FRESH_STATE_MODE=non-release"
+[[ -n "${FOLIO_FRESH_STATE_PORT_BASE:-}" ]] \
+  || fail "FOLIO_FRESH_STATE_PORT_BASE is required and must be unique to this invocation"
+port_base="$FOLIO_FRESH_STATE_PORT_BASE"
 [[ "$port_base" =~ ^[1-9][0-9]*$ ]] || fail "FOLIO_FRESH_STATE_PORT_BASE must be a positive integer"
+(( port_base + 100 + runs <= 65535 )) || fail "fresh-state port range exceeds 65535"
+
+port_is_free() {
+  command -v python3 >/dev/null 2>&1 || fail "python3 is required for port preflight"
+  python3 - "$1" <<'PY'
+import socket
+import sys
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    sock.bind(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+}
+
+if [[ "$mode" != non-docker ]]; then
+  command -v docker >/dev/null 2>&1 || fail "Docker is required for this execution mode"
+  docker info >/dev/null 2>&1 || fail "Docker daemon is not ready for this execution mode"
+  docker compose version >/dev/null 2>&1 || fail "Docker Compose is not available for this execution mode"
+fi
 
 evidence="${FOLIO_FRESH_STATE_EVIDENCE:-/tmp/folio-lattice-fl-urj.28.json}"
 mkdir -p "$(dirname "$evidence")"
@@ -69,11 +100,15 @@ for run in $(seq 1 "$runs"); do
     renderer_port="${FOLIO_RENDER_HOST_PORT:-$renderer_port}"
   fi
   [[ "$tenant_id" != hyperset-v0 && "$tenant_id" != dev ]] \
-    || [[ "$allow_shared_defaults" == true ]] \
-    || fail "refusing shared/default tenant; set FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS=true only with approval"
+    || [[ "$allow_shared_defaults" == true && "$mode" == non-release ]] \
+    || fail "refusing shared/default tenant; use explicit non-release mode only for non-release data"
   [[ "$control_port" != 8000 && "$renderer_port" != 8001 ]] \
-    || [[ "$allow_shared_defaults" == true ]] \
-    || fail "refusing default ports; set FOLIO_FRESH_STATE_ALLOW_SHARED_DEFAULTS=true only with approval"
+    || [[ "$allow_shared_defaults" == true && "$mode" == non-release ]] \
+    || fail "refusing default ports; use explicit non-release mode only for non-release data"
+  port_is_free "$control_port" \
+    || fail "control port $control_port is not free; choose a unique FOLIO_FRESH_STATE_PORT_BASE"
+  port_is_free "$renderer_port" \
+    || fail "renderer port $renderer_port is not free; choose a unique FOLIO_FRESH_STATE_PORT_BASE"
   run_evidence="${evidence%.json}.run-${run}"
   mkdir -p "$run_evidence"
 
@@ -94,8 +129,8 @@ for run in $(seq 1 "$runs"); do
   exit_code=$?
   set -e
 
-  cleanup_status="not_available"
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  cleanup_status="not_applicable"
+  if [[ "$mode" != non-docker ]]; then
     cleanup_status="pass"
     if ! docker compose -p "$compose_project" down -v --remove-orphans \
       >"$run_evidence/compose-cleanup.log" 2>&1; then
@@ -127,12 +162,14 @@ for run in $(seq 1 "$runs"); do
     --arg blob_root "$root/blobs" \
     --arg candidate_sha "$candidate_sha" \
     --arg compose_cleanup "$cleanup_status" \
+    --arg mode "$mode" \
     '{run:$run, exit_code:$exit_code, stdout_sha256:$stdout_sha,
       stderr_sha256:$stderr_sha, evidence_dir:$evidence,
       compose_project:$compose_project, volume_scope:"project-scoped",
       tenant_id:$tenant_id, actor_id:$actor_id, control_port:$control_port,
       renderer_port:$renderer_port, db_path:$db_path, blob_root:$blob_root,
-      candidate_sha:$candidate_sha, compose_cleanup:$compose_cleanup}')")
+      candidate_sha:$candidate_sha, compose_cleanup:$compose_cleanup, mode:$mode,
+      port_preflight:"pass"}')")
   if [[ "$exit_code" -ne 0 ]]; then
     overall_status=fail
   fi
@@ -142,9 +179,10 @@ jq -n \
   --arg status "$overall_status" \
   --arg candidate_sha "$candidate_sha" \
   --arg command "$command_label" \
+  --arg mode "$mode" \
   --arg project_policy "unique project/volume/ports/tenant/actor per run" \
   --argjson runs "[$(IFS=,; echo "${run_results[*]}")]" \
-  '{status:$status, candidate_sha:$candidate_sha, command:$command, runs:$runs,
+  '{status:$status, candidate_sha:$candidate_sha, command:$command, mode:$mode, runs:$runs,
     fresh_state:"isolated db/blob root per run", project_policy:$project_policy,
     logs_redacted:false,
     log_policy:"gate command must not emit secrets; logs are hashed but not transformed"}' \
