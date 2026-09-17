@@ -1,0 +1,147 @@
+{
+  "schema": "fl-urj.27",
+  "run_id": "2026-09-17T-current-canonical-60c7099",
+  "target": {
+    "ref": "origin/main",
+    "sha": "60c7099e5507d9e62e23270a91a36376ba7444d3",
+    "branch": "fl-urj-27-ux_usability-60c7099",
+    "subject": "test(qa): isolate Hyperset Docker markers"
+  },
+  "result": "in_progress_gate_open",
+  "product_ux_changes_by_worker": false,
+  "matrix_disposition": {
+    "failed": 6,
+    "passed": 2,
+    "skipped": 16,
+    "total": 24,
+    "note": "Skipped and blocked cases are not passes; live browser, mobile, keyboard, and screen-reader results remain unverified where stated."
+  },
+  "environment": {
+    "os": "macOS 15.7.3 build 24G419 arm64",
+    "browser": "Google Chrome 153.0.8010.47 present; live fixture blocked before assertions",
+    "python": "3.12.10 cached dependency path",
+    "docker": "20.10.17 client / Compose v2.10.2; daemon socket denied",
+    "assistive_technology": "unavailable",
+    "viewports_css_px": [320, 375, 768, 1280],
+    "input_methods": ["keyboard-only", "screen-reader semantic inspection"],
+    "network": "offline or restricted for uncached dependencies and loopback sockets"
+  },
+  "commands": [
+    {"command": "python -m compileall -q src tests", "disposition": "pass", "exit_code": 0},
+    {"command": "pytest -q focused hosted/auth/UI/service tests", "disposition": "pass_with_skips", "summary": "82 passed, 4 skipped, 33 subtests passed"},
+    {"command": "pytest -q", "disposition": "environment_failures_and_skips", "summary": "99 passed, 11 failed, 20 skipped, 49 subtests passed; loopback bind and missing cached uvicorn before product assertions"},
+    {"command": "FOLIO_BROWSER=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome pytest -q tests/test_browser_e2e.py", "disposition": "blocked_before_product_assertions", "summary": "5 failed; PermissionError binding 127.0.0.1 in free_port()"},
+    {"command": "make check", "disposition": "blocked", "summary": "offline uv resolution could not download mcp-types==2.1.1"},
+    {"command": "docker compose build", "disposition": "blocked", "summary": "Docker daemon socket operation not permitted"},
+    {"command": "ruff check src tests && ruff format --check src tests && python -m compileall -q src tests", "disposition": "pass", "summary": "All checks passed; 39 files already formatted"}
+  ],
+  "passed_cases": [
+    {"id": "PASS-01", "title": "Human route landmarks and isolated preview semantics", "disposition": "static_contract_pass"},
+    {"id": "PASS-02", "title": "Recoverable error semantics", "disposition": "source_contract_pass"}
+  ],
+  "failed_cases": [
+    {
+      "id": "UX-27-R1",
+      "severity": "P1",
+      "route_task": "/ and /artifacts/<id>; skip repeated navigation",
+      "viewport_input": "320/375/768/1280 CSS px; keyboard-only and screen-reader semantic inspection",
+      "control": ".skip-link[href=\"#main\"] -> main#main",
+      "expected": "Enter moves focus to the primary content landmark",
+      "actual": "main#main has no tabindex=-1 or equivalent focus target; focus does not reliably land on main",
+      "reproduction": "Render route; Tab to Skip to content; press Enter; inspect document.activeElement and main#main attributes",
+      "remediation": "fl-urj.7.7",
+      "status": "open"
+    },
+    {
+      "id": "UX-27-R2",
+      "severity": "P1",
+      "route_task": "Library -> graph -> left file tree -> graph target; choose one of two same-named artifacts",
+      "viewport_input": "320/375/768/1280 CSS px; keyboard-only and screen-reader accessible-name inspection",
+      "control": "#artifact-tree .tree-file; .library-item > button; .graph-card-action; graph relationship buttons",
+      "expected": "Same-name artifacts have readable path/metadata and unique visible and accessible names across the task flow",
+      "actual": "Tree, library, and graph controls expose basename/name only; search adds opaque artifact_id only in some duplicate result sets",
+      "reproduction": "Create two artifacts with identical names; open graph workspace; Tab through library/tree/graph controls; compare visible labels and accessible names",
+      "remediation": "fl-urj.7.7; coordinate duplicate-ID contract with fl-urj.6.2/.7.6 as applicable",
+      "status": "open"
+    },
+    {
+      "id": "UX-27-R3",
+      "severity": "P1",
+      "route_task": "Web artifact Open site -> /standalone/<id>",
+      "viewport_input": "320/375/768/1280 CSS px; keyboard-only",
+      "control": "a.library-action[target=\"_blank\"]; #standalone-link; standalone shell",
+      "expected": "Standalone reader/preview retains reliable Library/back/close navigation",
+      "actual": "Standalone renders only viewer/main with no Library/back control; new-tab browser Back is not dependable in-product return",
+      "reproduction": "Activate Open site; inspect new tab for Library/back/close; attempt to continue the originating task",
+      "remediation": "fl-urj.7.7",
+      "status": "open"
+    },
+    {
+      "id": "UX-27-R4",
+      "severity": "P2",
+      "route_task": "Workspace Edit -> Cancel/Back to reading; Share -> Remove access -> Keep access",
+      "viewport_input": "320/375/768/1280 CSS px; keyboard-only and screen-reader focus inspection",
+      "control": "#edit-entry -> #close-edit/#human-cancel; dialog#revoke-access -> #revoke-cancel",
+      "expected": "Cancel closes surface and restores focus to invoking control",
+      "actual": "Edit hides after focusing human-content and does not refocus edit-entry; revoke stores no invoking trigger and has no focus restoration",
+      "reproduction": "Activate Edit and cancel; inspect document.activeElement; repeat Share -> Remove access -> Keep access",
+      "remediation": "fl-urj.7.7",
+      "status": "open"
+    },
+    {
+      "id": "UX-27-R5",
+      "severity": "P2",
+      "route_task": "Workspace Share; identify recipient before granting access",
+      "viewport_input": "320/375/768/1280 CSS px; keyboard-only and screen-reader label inspection",
+      "control": "label[for=\"share-recipient\"] / #share-recipient; placeholder=member-id",
+      "expected": "Nontechnical user can select or identify recipient by display name/member context with organization scope",
+      "actual": "Only opaque Approved person identifier text field; no member lookup, display-name/group affordance, or discovery path for the ID",
+      "reproduction": "Open Share; Tab to recipient field; attempt recipient selection without a pre-known raw ID",
+      "remediation": "fl-urj.7.7",
+      "status": "open"
+    },
+    {
+      "id": "UX-27-R6",
+      "severity": "P1",
+      "route_task": "Tenant/library primary navigation; find admin, approved connections, policy/revoke, audit export",
+      "viewport_input": "320/375/768/1280 CSS px; keyboard-only and screen-reader navigation inspection",
+      "control": "nav[aria-label=\"Primary\"]; /admin; /connections; /audit/export",
+      "expected": "Authorized admin can discover tenant/member controls, connection management, and audit export from human-first UI",
+      "actual": "Primary nav exposes Library, Graphs, Search, Shared with me only; no human admin/connection/audit entry or route; connection card is debug/Inspector-only",
+      "reproduction": "Start at /; inspect primary links/sections; try /admin, /connections, /audit/export; search human UI for admin/connection/audit controls",
+      "remediation": "fl-urj.7.6 for product surfaces; fl-urj.7.7 for human-first navigation entry points",
+      "status": "open"
+    }
+  ],
+  "skipped_cases": [
+    {"id": "SKIP-01", "title": "Sign-in/OIDC start, callback, logout", "reason": "live browser fixture/hosted IdP unavailable"},
+    {"id": "SKIP-02", "title": "Tenant identity and library scoping", "reason": "live authenticated session unavailable"},
+    {"id": "SKIP-03", "title": "Library -> graph picker click flow", "reason": "loopback browser fixture blocked"},
+    {"id": "SKIP-04", "title": "Left-tree keyboard traversal and focus order", "reason": "live key events unavailable"},
+    {"id": "SKIP-05", "title": "Markdown reader rendering", "reason": "live browser fixture blocked"},
+    {"id": "SKIP-06", "title": "HTML content preview/iframe loading", "reason": "live browser fixture and Docker host unavailable"},
+    {"id": "SKIP-07", "title": "Create artifact", "reason": "live browser fixture blocked"},
+    {"id": "SKIP-08", "title": "Upload artifact", "reason": "live browser fixture blocked"},
+    {"id": "SKIP-09", "title": "Edit/save immutable version write", "reason": "live browser fixture blocked"},
+    {"id": "SKIP-10", "title": "Search and grep interaction", "reason": "live browser fixture blocked"},
+    {"id": "SKIP-11", "title": "Version history end-to-end", "reason": "live browser fixture blocked; no live human history control"},
+    {"id": "SKIP-12", "title": "Share/revoke HTTP flow", "reason": "live authenticated browser fixture blocked"},
+    {"id": "SKIP-13", "title": "Approved connection HTTP flow", "reason": "no human connection surface; live service host unavailable"},
+    {"id": "SKIP-14", "title": "Audit export", "reason": "no human audit-export surface; live service host unavailable"},
+    {"id": "SKIP-15", "title": "Responsive overflow/reflow at requested widths", "reason": "no rendered browser metrics"},
+    {"id": "SKIP-16", "title": "Manual screen-reader output", "reason": "assistive-technology surface unavailable"}
+  ],
+  "handoff": {
+    "target": "folio_lattice/crew/ux",
+    "method": "gt nudge",
+    "attempts": [
+      {"mode": "immediate", "result": "blocked", "error": "no tmux server running"},
+      {"mode": "queue", "result": "blocked", "error": "session fl-crew-ux not found"}
+    ],
+    "durable_report": "docs/research/evidence/fl-urj.27/fl-urj.27-retest-2026-09-17.md",
+    "bead_comment": "not written; shared Dolt server unreachable at 127.0.0.1:3311",
+    "push_attempt": "blocked; github.com DNS resolution unavailable"
+  },
+  "dependencies": ["fl-urj.6.2", "fl-urj.7.6", "fl-urj.7.7", "host browser/AT execution", "Docker daemon"],
+  "closure": "Keep fl-urj.27 in_progress; rerun the same 24 cases against the exact canonical remediation SHA and preserve before/after evidence."
+}
