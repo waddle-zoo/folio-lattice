@@ -158,6 +158,21 @@ Result: Ruff passed; 59 files formatted; mypy passed for 22 source files;
 process status `0`. The eight skips are the explicitly optional hosted-auth
 negative seam tests, which require `FOLIO_HOSTED_AUTH_TEST_TARGET`.
 
+## Independent QA review
+
+A fresh detached QA worktree was created at
+`/tmp/folio-g4-hosted-qa.dT8H4a` from published commit
+`88d334b9e406854665adab6c45b6d7c94e63f1d8` (tree
+`518f1fc766c518d7b55e92fb73f465d79b876cfa`). It was clean before testing;
+the evidence document hash matched the committed `.sha256` manifest. QA ran:
+
+```text
+PATH=/Users/brandonsovran/.local/bin:$PATH FOLIO_BROWSER='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' make check
+```
+
+Independent result: Ruff, format, and mypy passed; `233 passed, 8 skipped in
+85.87s`; coverage `80.61%`; process status `0`.
+
 No changes were made to the persistent Security checkout. Independent QA
-review of this exact branch tip, worktree, evidence document, and candidate
-image is requested before integration or any .24 promotion.
+review is recorded for the source/image/evidence object above; integration
+and any .24 promotion remain pending mayor acknowledgement.
