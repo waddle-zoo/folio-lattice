@@ -333,11 +333,22 @@ class HttpE2ETests(unittest.TestCase):
                 reader_relay.revoke(replay_token)
                 self.assertIsNone(reader_relay.resolve_capability(replay_token))
 
+                expiry_artifact = service.create_artifact(
+                    tenant_id="capability-tenant",
+                    name="reader-owned.css",
+                    data=b"READER_AUTHORIZED_MARKER",
+                    media_type="text/css",
+                    actor="reader-actor",
+                )
+                expiry_arguments = {
+                    "artifact_id": expiry_artifact["artifact"]["id"],
+                    "version_id": expiry_artifact["version"]["id"],
+                }
                 expired_relay = SignedPrincipalRelay(
                     f"{control_origin}/mcp", RENDERER_CAPABILITY_SECRET
                 )
                 expired_token = expired_relay.issue(
-                    reader_principal, tool="artifact_read", arguments=read_arguments
+                    reader_principal, tool="artifact_read", arguments=expiry_arguments
                 )
                 expired_encoded, separator, expired_signature = expired_token.partition(".")
                 assert separator
@@ -358,9 +369,11 @@ class HttpE2ETests(unittest.TestCase):
                     principal_relay=expired_relay,
                     principal=reader_principal,
                 )
+                fresh_read = asyncio.run(expired_reader.call("artifact_read", expiry_arguments))
+                self.assertEqual(fresh_read["version"]["id"], expiry_artifact["version"]["id"])
                 with patch.object(expired_relay, "issue", return_value=expired_token):
                     with self.assertRaises(PublicMcpError):
-                        asyncio.run(expired_reader.call("artifact_read", read_arguments))
+                        asyncio.run(expired_reader.call("artifact_read", expiry_arguments))
             finally:
                 if renderer is not None:
                     stop_server(renderer)
