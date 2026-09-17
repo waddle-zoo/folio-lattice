@@ -278,6 +278,58 @@ class HttpE2ETests(unittest.TestCase):
                         await forged.call("artifact_read", {"artifact_id": owner["artifact"]["id"]})
 
                 asyncio.run(forged_call())
+
+                shared = service.share_artifact(
+                    tenant_id="capability-tenant",
+                    artifact_id=owner["artifact"]["id"],
+                    actor="owner-actor",
+                    subject_actor_id="reader-actor",
+                    reason="capability ACL regression",
+                )
+                reader_principal = Principal(
+                    tenant_id="capability-tenant",
+                    actor_id="reader-actor",
+                    issuer="test-reader",
+                    subject="test-reader",
+                    scopes=frozenset({"artifact:read"}),
+                )
+                reader_relay = SignedPrincipalRelay(
+                    f"{control_origin}/mcp", RENDERER_CAPABILITY_SECRET
+                )
+                reader = HttpMcpClient(
+                    f"{control_origin}/mcp",
+                    principal_relay=reader_relay,
+                    principal=reader_principal,
+                )
+                read_arguments = {
+                    "artifact_id": owner["artifact"]["id"],
+                    "version_id": owner["version"]["id"],
+                }
+                replay_token = reader_relay.issue(
+                    reader_principal, tool="artifact_read", arguments=read_arguments
+                )
+
+                async def replay_read() -> Any:
+                    result = await reader._session_call(
+                        replay_token,
+                        lambda session: session.call_tool("artifact_read", read_arguments),
+                    )
+                    return reader._decode_result(result)
+
+                self.assertEqual(
+                    asyncio.run(replay_read())["version"]["id"], owner["version"]["id"]
+                )
+                service.revoke_share(
+                    tenant_id="capability-tenant",
+                    artifact_id=owner["artifact"]["id"],
+                    actor="owner-actor",
+                    grant_id=shared["id"],
+                    reason="capability ACL regression revoke",
+                )
+                with self.assertRaises(PublicMcpError):
+                    asyncio.run(replay_read())
+                reader_relay.revoke(replay_token)
+                self.assertIsNone(reader_relay.resolve_capability(replay_token))
             finally:
                 if renderer is not None:
                     stop_server(renderer)

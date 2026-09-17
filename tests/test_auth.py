@@ -24,6 +24,7 @@ from folio_lattice.auth import (
     bearer_token,
     get_request_principal,
 )
+from folio_lattice.public_mcp import SignedPrincipalRelay
 from folio_lattice.server import FolioHttpApp
 
 
@@ -299,6 +300,56 @@ class OidcTests(unittest.TestCase):
 
 
 class HttpAuthBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_internal_capability_rechecks_membership_status_and_scopes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            memberships = MembershipStore(Path(directory) / "folio.db")
+            memberships.add(
+                issuer="https://issuer.example",
+                subject="subject-reader",
+                tenant_id="tenant-a",
+                actor_id="actor-a",
+                scopes={"artifact:read"},
+            )
+            relay = SignedPrincipalRelay(
+                "http://folio.internal:8000/mcp",
+                "renderer-capability-secret-012345678901234567890123456789",
+            )
+            principal = Principal(
+                "tenant-a",
+                "actor-a",
+                "https://issuer.example",
+                "subject-reader",
+                frozenset({"artifact:read"}),
+            )
+            app = FolioHttpApp(
+                JSONResponse({"ok": True}),
+                SimpleNamespace(health=lambda: {"ready": True, "status": "ok"}),
+                JSONResponse({"ok": True}),
+                deployment_mode="hosted",
+                authenticator=object(),
+                session_store=SimpleNamespace(membership_store=memberships),
+                principal_relay=relay,
+            )
+            token = relay.issue(
+                principal,
+                tool="artifact_read",
+                arguments={"artifact_id": "art_1", "version_id": "ver_1"},
+            )
+            scope = {
+                "type": "http",
+                "path": "/mcp",
+                "headers": [(b"x-folio-internal-principal", token.encode())],
+            }
+            resolved, _ = app._authenticate_context(scope, allow_session=False)
+            self.assertEqual(resolved.actor_id, "actor-a")
+            memberships.set_scopes("https://issuer.example", "subject-reader", set())
+            with self.assertRaises(AuthenticationError):
+                app._authenticate_context(scope, allow_session=False)
+            memberships.set_scopes("https://issuer.example", "subject-reader", {"artifact:read"})
+            memberships.set_status("https://issuer.example", "subject-reader", "revoked")
+            with self.assertRaises(AuthenticationError):
+                app._authenticate_context(scope, allow_session=False)
+
     async def test_health_is_secret_free_and_mcp_is_request_scoped(self) -> None:
         principal = Principal("tenant-a", "actor-a", "https://issuer", "subject")
 

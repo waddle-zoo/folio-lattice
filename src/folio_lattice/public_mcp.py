@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import threading
 import time
@@ -58,6 +59,11 @@ class PublicMcpError(Exception):
 
 
 INTERNAL_PRINCIPAL_HEADER = "x-folio-internal-principal"
+CAPABILITY_PROTOCOL = "folio-renderer-capability/v1"
+CAPABILITY_KEY_LABEL = CAPABILITY_PROTOCOL.encode("ascii")
+IDENTITY_RELAY_TOOL = "__identity__"
+IDENTITY_RELAY_DIGEST = hashlib.sha256(IDENTITY_RELAY_TOOL.encode("ascii")).hexdigest()
+_BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +82,15 @@ class TrustedPrincipalRelay:
 
     def __init__(self, endpoint: str, *, ttl_seconds: float = 15.0) -> None:
         parsed = urlsplit(endpoint)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path != "/mcp":
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path != "/mcp"
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
             raise ValueError("trusted principal relay endpoint must be an HTTP /mcp URL")
         if ttl_seconds <= 0 or ttl_seconds > 60:
             raise ValueError("trusted principal relay TTL is outside the allowed bound")
@@ -89,12 +103,20 @@ class TrustedPrincipalRelay:
         self,
         principal: Principal,
         *,
-        tool: str = "__ready__",
+        tool: str = IDENTITY_RELAY_TOOL,
         arguments: Mapping[str, Any] | None = None,
     ) -> str:
         if not isinstance(principal, Principal):
             raise ValueError("a verified principal is required")
-        binding = CapabilityBinding(tool, capability_arguments_digest(arguments or {}))
+        if tool == IDENTITY_RELAY_TOOL:
+            if arguments:
+                raise ValueError("identity relay cannot carry arguments")
+            digest = IDENTITY_RELAY_DIGEST
+        elif tool == "artifact_read":
+            digest = capability_arguments_digest(arguments or {})
+        else:
+            raise ValueError("renderer capability only supports artifact_read")
+        binding = CapabilityBinding(tool, digest)
         token = secrets.token_urlsafe(32)
         with self._lock:
             self._purge_locked()
@@ -104,6 +126,9 @@ class TrustedPrincipalRelay:
                 binding,
             )
         return token
+
+    def issue_identity(self, principal: Principal) -> str:
+        return self.issue(principal, tool=IDENTITY_RELAY_TOOL)
 
     def resolve(self, token: str) -> Principal | None:
         capability = self.resolve_capability(token)
@@ -137,60 +162,96 @@ class TrustedPrincipalRelay:
 
 
 class SignedPrincipalRelay:
-    """Verify short-lived renderer capabilities across process boundaries."""
+    """Verify short-lived renderer capabilities across process boundaries.
+
+    Signed capabilities are a local renderer handoff, not a hosted session
+    replacement.  The renderer keeps a local revocation denylist and the MCP
+    server re-checks tenant/actor ACLs on every read, so ACL revocation is
+    immediate even while a captured token remains inside its short TTL.
+    """
 
     def __init__(self, endpoint: str, secret: str, *, ttl_seconds: float = 15.0) -> None:
         parsed = urlsplit(endpoint)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path != "/mcp":
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path != "/mcp"
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
             raise ValueError("signed principal relay endpoint must be an HTTP /mcp URL")
         if not isinstance(secret, str) or len(secret) < 32:
             raise ValueError("signed principal relay secret must be at least 32 characters")
         if ttl_seconds <= 0 or ttl_seconds > 60:
             raise ValueError("signed principal relay TTL is outside the allowed bound")
         self.endpoint = endpoint
-        self.secret = secret.encode("utf-8")
+        self._signing_key = hmac.new(
+            secret.encode("utf-8"), CAPABILITY_KEY_LABEL, hashlib.sha256
+        ).digest()
         self.ttl_seconds = ttl_seconds
+        self._revoked: dict[str, float] = {}
+        self._lock = threading.Lock()
 
     def issue(
         self,
         principal: Principal,
         *,
-        tool: str = "__ready__",
+        tool: str = IDENTITY_RELAY_TOOL,
         arguments: Mapping[str, Any] | None = None,
     ) -> str:
         if not isinstance(principal, Principal):
             raise ValueError("a verified principal is required")
+        if tool == IDENTITY_RELAY_TOOL:
+            if arguments:
+                raise ValueError("identity relay cannot carry arguments")
+            digest = IDENTITY_RELAY_DIGEST
+        elif tool == "artifact_read":
+            digest = capability_arguments_digest(arguments or {})
+        else:
+            raise ValueError("renderer capability only supports artifact_read")
         now = int(time.time())
         payload = {
+            "protocol": CAPABILITY_PROTOCOL,
             "v": 1,
             "aud": self.endpoint,
             "iat": now,
             "exp": now + int(self.ttl_seconds),
+            "jti": secrets.token_urlsafe(16),
             "tenant_id": principal.tenant_id,
             "actor_id": principal.actor_id,
             "issuer": principal.issuer,
             "subject": principal.subject,
             "scopes": sorted(principal.scopes),
             "tool": tool,
-            "arguments_digest": capability_arguments_digest(arguments or {}),
+            "arguments_digest": digest,
         }
         encoded = self._encode(payload)
-        signature = hmac.new(self.secret, encoded, hashlib.sha256).digest()
+        signature = hmac.new(self._signing_key, encoded, hashlib.sha256).digest()
         return f"{encoded.decode('ascii')}.{self._b64(signature)}"
+
+    def issue_identity(self, principal: Principal) -> str:
+        return self.issue(principal, tool=IDENTITY_RELAY_TOOL)
 
     def resolve(self, token: str) -> Principal | None:
         capability = self.resolve_capability(token)
         return capability.principal if capability is not None else None
 
     def resolve_capability(self, token: str) -> PrincipalCapability | None:
-        if not isinstance(token, str) or len(token) > 4096:
+        if not isinstance(token, str) or len(token) > 4096 or token.count(".") != 1:
             return None
+        token_digest = hashlib.sha256(token.encode("ascii", "ignore")).hexdigest()
+        with self._lock:
+            self._purge_revoked_locked()
+            if token_digest in self._revoked:
+                return None
         encoded, separator, signature = token.partition(".")
         if not separator or not encoded or not signature:
             return None
         try:
             signed = self._decode(signature)
-            expected = hmac.new(self.secret, encoded.encode("ascii"), hashlib.sha256).digest()
+            expected = hmac.new(self._signing_key, encoded.encode("ascii"), hashlib.sha256).digest()
             if not hmac.compare_digest(signed, expected):
                 return None
             payload = json.loads(self._decode(encoded))
@@ -200,7 +261,8 @@ class SignedPrincipalRelay:
             return None
         now = int(time.time())
         if (
-            payload.get("v") != 1
+            payload.get("protocol") != CAPABILITY_PROTOCOL
+            or payload.get("v") != 1
             or payload.get("aud") != self.endpoint
             or not isinstance(payload.get("iat"), int)
             or not isinstance(payload.get("exp"), int)
@@ -209,8 +271,23 @@ class SignedPrincipalRelay:
             or payload["exp"] - payload["iat"] > 60
         ):
             return None
-        fields = ("tenant_id", "actor_id", "issuer", "subject", "tool", "arguments_digest")
+        fields = (
+            "tenant_id",
+            "actor_id",
+            "issuer",
+            "subject",
+            "tool",
+            "arguments_digest",
+            "jti",
+        )
         if any(not isinstance(payload.get(field), str) or not payload[field] for field in fields):
+            return None
+        if payload["tool"] not in {"artifact_read", IDENTITY_RELAY_TOOL}:
+            return None
+        if (
+            payload["tool"] == IDENTITY_RELAY_TOOL
+            and payload["arguments_digest"] != IDENTITY_RELAY_DIGEST
+        ):
             return None
         scopes = payload.get("scopes")
         if not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes):
@@ -228,9 +305,20 @@ class SignedPrincipalRelay:
         )
 
     def revoke(self, token: str) -> None:
-        # Signed capabilities expire quickly; there is no mutable revocation
-        # state to share across the renderer and control processes.
-        del token
+        """Prevent local reuse; remote replay remains bounded by TTL and ACL."""
+
+        if not isinstance(token, str) or not token or len(token) > 4096:
+            return
+        digest = hashlib.sha256(token.encode("ascii", "ignore")).hexdigest()
+        with self._lock:
+            self._purge_revoked_locked()
+            self._revoked[digest] = time.time() + 60
+
+    def _purge_revoked_locked(self) -> None:
+        now = time.time()
+        for digest, expires_at in tuple(self._revoked.items()):
+            if expires_at <= now:
+                self._revoked.pop(digest, None)
 
     @staticmethod
     def _b64(value: bytes) -> str:
@@ -245,7 +333,13 @@ class SignedPrincipalRelay:
     def _decode(value: str) -> bytes:
         if not value or len(value) > 4096:
             raise ValueError("capability segment is too large")
-        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        if not _BASE64URL_RE.fullmatch(value) or len(value) % 4 == 1:
+            raise ValueError("capability segment is not canonical base64url")
+        padded = value + "=" * (-len(value) % 4)
+        decoded = base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+        if SignedPrincipalRelay._b64(decoded) != value:
+            raise ValueError("capability segment is not canonical base64url")
+        return decoded
 
 
 class ToolCaller(Protocol):
@@ -340,7 +434,10 @@ class HttpMcpClient:
         self, tool: str, arguments: Mapping[str, Any], principal: Principal
     ) -> Any:
         assert self.principal_relay is not None
-        token = self.principal_relay.issue(principal, tool=tool, arguments=arguments)
+        if tool == "artifact_read":
+            token = self.principal_relay.issue(principal, tool=tool, arguments=arguments)
+        else:
+            token = self.principal_relay.issue_identity(principal)
         try:
             result = await self._session_call(
                 token,
@@ -358,7 +455,7 @@ class HttpMcpClient:
 
     async def _ready_with_relay(self, principal: Principal) -> None:
         assert self.principal_relay is not None
-        token = self.principal_relay.issue(principal)
+        token = self.principal_relay.issue_identity(principal)
         try:
             result = await self._session_call(token, lambda session: session.list_tools())
             if "artifact_read" not in {tool.name for tool in result.tools}:

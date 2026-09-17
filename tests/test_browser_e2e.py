@@ -76,11 +76,12 @@ def wait_ready(origin: str, process: subprocess.Popen[bytes]) -> None:
 
 
 def start_server(environment: dict[str, str], transport: str, port: int) -> subprocess.Popen[bytes]:
+    command = [sys.executable, "-m", "folio_lattice.server"]
+    if environment.get("FOLIO_TEST_EXTERNAL_MCP_VALIDATOR") == "deterministic":
+        command = [sys.executable, "tests/browser_server.py"]
     return subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "folio_lattice.server",
+        command
+        + [
             "--transport",
             transport,
             "--host",
@@ -603,6 +604,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 "FOLIO_ACTOR": "browser-admin",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": control_origin,
+                "FOLIO_TEST_EXTERNAL_MCP_VALIDATOR": "deterministic",
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
             }
             control = start_server(environment, "http", control_port)
@@ -728,11 +730,13 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 chrome.wait(
                     "document.querySelector('#connections-status').dataset.state === 'error'"
                 )
-                self.assertIn(
-                    "endpoint resolves to a blocked address",
-                    chrome.evaluate(
-                        "document.querySelector('#connections-status').textContent"
-                    ).lower(),
+                error_copy = chrome.evaluate(
+                    "document.querySelector('#connections-status').textContent"
+                ).lower()
+                self.assertTrue(
+                    "endpoint host is not public" in error_copy
+                    or "endpoint resolves to a blocked address" in error_copy,
+                    error_copy,
                 )
                 self.assertFalse(
                     chrome.evaluate("document.querySelector('#connection-submit').disabled")

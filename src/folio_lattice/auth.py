@@ -55,10 +55,24 @@ class CapabilityBinding:
 
 
 def capability_arguments_digest(arguments: Mapping[str, Any]) -> str:
-    """Digest the exact tool arguments covered by a renderer capability."""
+    """Digest the canonical artifact_read arguments covered by a capability."""
 
-    normalized = {key: value for key, value in arguments.items() if value is not None}
-    encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    if set(arguments) - {"artifact_id", "version_id"}:
+        raise ValueError("renderer capability arguments contain unsupported fields")
+    artifact_id = arguments.get("artifact_id")
+    if not isinstance(artifact_id, str) or not artifact_id:
+        raise ValueError("renderer capability requires artifact_id")
+    if "version_id" in arguments:
+        version_id = arguments["version_id"]
+        if not isinstance(version_id, str) or not version_id:
+            raise ValueError("renderer capability version_id must be a non-empty string")
+    encoded = json.dumps(
+        dict(arguments),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 

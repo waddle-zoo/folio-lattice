@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import io
 import json
 import logging
@@ -16,7 +17,13 @@ from unittest.mock import patch
 
 from mcp import Client
 
-from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
+from folio_lattice.auth import (
+    Principal,
+    reset_request_capability,
+    reset_request_principal,
+    set_request_capability,
+    set_request_principal,
+)
 from folio_lattice.bridge import AttachedMcpBridge, BridgeRequestError, validate_bridge_request
 from folio_lattice.inspection import InspectionApp, ui_html
 from folio_lattice.mcp_protocol import build_mcp_server
@@ -1067,10 +1074,100 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             capability.binding.arguments_digest,
             relay.issue(principal, tool="artifact_read", arguments={"artifact_id": "other"}),
         )
+        encoded, separator, signature = token.partition(".")
+        self.assertTrue(separator)
+        self.assertEqual(relay._b64(relay._decode(encoded)), encoded)
+        self.assertEqual(relay._b64(relay._decode(signature)), signature)
+        for malformed in (
+            f"{encoded}=.{signature}",
+            f"{encoded}. {signature}",
+            f"{encoded}.{signature}/",
+            f"{encoded}\n.{signature}",
+            f"{encoded}.{signature}=",
+        ):
+            self.assertIsNone(relay.resolve_capability(malformed))
         forged = f"{token[:-1]}{'A' if token[-1] != 'A' else 'B'}"
         self.assertIsNone(relay.resolve_capability(forged))
-        await asyncio.sleep(2.05)
+        other_audience = SignedPrincipalRelay(
+            "http://other.internal:8000/mcp",
+            "renderer-capability-secret-012345678901234567890123456789",
+        )
+        self.assertIsNone(relay.resolve_capability(other_audience.issue_identity(principal)))
+        wrong_key = SignedPrincipalRelay(
+            "http://folio.internal:8000/mcp",
+            "different-renderer-secret-012345678901234567890123456789",
+        )
+        self.assertIsNone(relay.resolve_capability(wrong_key.issue_identity(principal)))
+        payload = json.loads(relay._decode(encoded))
+        payload["v"] = 2
+        wrong_version_encoded = relay._encode(payload)
+        wrong_version_signature = relay._b64(
+            hmac.new(relay._signing_key, wrong_version_encoded, "sha256").digest()
+        )
+        self.assertIsNone(
+            relay.resolve_capability(
+                f"{wrong_version_encoded.decode('ascii')}.{wrong_version_signature}"
+            )
+        )
+        for invalid_endpoint in (
+            "http://folio.internal:8000/mcp?token=secret",
+            "http://user:password@folio.internal:8000/mcp",
+            "http://folio.internal:8000/mcp#fragment",
+        ):
+            with self.assertRaises(ValueError):
+                SignedPrincipalRelay(
+                    invalid_endpoint,
+                    "renderer-capability-secret-012345678901234567890123456789",
+                )
+        relay.revoke(token)
         self.assertIsNone(relay.resolve_capability(token))
+        fresh = relay.issue(principal, tool="artifact_read", arguments=arguments)
+        capability = relay.resolve_capability(fresh)
+        self.assertIsNotNone(capability)
+        await asyncio.sleep(2.05)
+        self.assertIsNone(relay.resolve_capability(fresh))
+
+    async def test_renderer_capability_allows_only_exact_artifact_read(self) -> None:
+        readable = self.service.create_artifact(
+            tenant_id="web",
+            name="capability.css",
+            data=b"body{color:purple}",
+            media_type="text/css",
+            actor="web-user",
+        )
+        artifact_id = readable["artifact"]["id"]
+        version_id = readable["version"]["id"]
+        arguments = {"artifact_id": artifact_id, "version_id": version_id}
+        relay = SignedPrincipalRelay(
+            CONTROL_ORIGIN + "/mcp",
+            "renderer-capability-secret-012345678901234567890123456789",
+        )
+        principal = Principal(
+            tenant_id="web",
+            actor_id="web-user",
+            issuer="folio-local-renderer",
+            subject="web-user",
+            scopes=frozenset({"artifact:read", "artifact:search"}),
+        )
+        capability = relay.resolve_capability(
+            relay.issue(principal, tool="artifact_read", arguments=arguments)
+        )
+        assert capability is not None
+        principal_token = set_request_principal(principal)
+        capability_token = set_request_capability(capability.binding)
+        try:
+            caller = LocalMcpCaller(
+                build_mcp_server(self.service, tenant_id="web", actor="web-user")
+            )
+            read = await caller.call("artifact_read", arguments)
+            self.assertEqual(read["version"]["id"], version_id)
+            with self.assertRaises(PublicMcpError):
+                await caller.call("artifact_search", {"query": "body"})
+            with self.assertRaises(PublicMcpError):
+                await caller.call("artifact_read", {"artifact_id": artifact_id})
+        finally:
+            reset_request_capability(capability_token)
+            reset_request_principal(principal_token)
 
     async def test_renderer_denies_top_level_render_navigation_but_allows_iframe(self) -> None:
         html_id = self.html["artifact"]["id"]

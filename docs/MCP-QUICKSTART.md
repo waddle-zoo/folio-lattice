@@ -10,8 +10,11 @@ The two-process local stack requires one shared
 control and renderer processes. The renderer signs a short-lived capability
 for each MCP read; the control server verifies its tenant, actor, read scope,
 artifact ID, and version ID before the read. Do not put a tenant, actor, or
-capability token in an asset URL. Hosted mode without a configured renderer
-identity/capability fails closed.
+capability token in an asset URL. This handoff is local-only: the renderer
+keeps a bounded local revocation denylist, while every control-side read
+re-checks current tenant/actor ACLs. Hosted renderer mode is intentionally
+unsupported and fails closed because this process-local revocation contract is
+not a hosted session-revocation mechanism.
 
 ## Root and component semantics
 

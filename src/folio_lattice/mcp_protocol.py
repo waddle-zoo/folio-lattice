@@ -272,7 +272,10 @@ def build_mcp_server(
 
     fixed_local_identity = tenant_id is not None and actor is not None
 
-    def identity(*required_scopes: str) -> tuple[str, str]:
+    def identity(*required_scopes: str, tool: str) -> tuple[str, str]:
+        capability = get_request_capability()
+        if capability is not None and capability.tool != tool:
+            raise ToolError("operation not permitted")
         principal = get_request_principal()
         if principal is not None:
             if any(scope not in principal.scopes for scope in required_scopes):
@@ -314,7 +317,9 @@ def build_mcp_server(
         reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "initial artifact",
         source_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_create"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["artifact_create"], tool="artifact_create"
+        )
         return _tool_errors(
             lambda: service.create_artifact(
                 tenant_id=request_tenant,
@@ -337,7 +342,9 @@ def build_mcp_server(
         source_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         def operation() -> dict[str, Any]:
-            request_tenant, request_actor = identity(TOOL_SCOPES["artifact_write"])
+            request_tenant, request_actor = identity(
+                TOOL_SCOPES["artifact_write"], tool="artifact_write"
+            )
             artifact = service.get_artifact(
                 request_tenant,
                 artifact_id,
@@ -372,7 +379,7 @@ def build_mcp_server(
         media_type: Annotated[str | None, Field(min_length=1, max_length=255)] = None,
         cursor: Annotated[str | None, Field(max_length=512)] = None,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_list"])
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_list"], tool="artifact_list")
         return _tool_errors(
             lambda: service.list_artifacts(
                 request_tenant,
@@ -399,7 +406,7 @@ def build_mcp_server(
                 or capability.arguments_digest != capability_arguments_digest(arguments)
             ):
                 raise ToolError("operation not permitted")
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_read"])
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_read"], tool="artifact_read")
         return _tool_errors(
             lambda: service.read_artifact(
                 request_tenant,
@@ -413,7 +420,9 @@ def build_mcp_server(
     def artifact_read_chunk(
         chunk_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_read_chunk"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["artifact_read_chunk"], tool="artifact_read_chunk"
+        )
         return _tool_errors(
             lambda: service.read_chunk(request_tenant, chunk_id, actor=policy_actor(request_actor))
         )
@@ -441,7 +450,7 @@ def build_mcp_server(
         required_scopes = [TOOL_SCOPES["artifact_search"]]
         if graph_root_artifact_id is not None:
             required_scopes.append(TOOL_SCOPES["graph_component"])
-        request_tenant, request_actor = identity(*required_scopes)
+        request_tenant, request_actor = identity(*required_scopes, tool="artifact_search")
         return _tool_errors(
             lambda: service.search(
                 request_tenant,
@@ -458,7 +467,7 @@ def build_mcp_server(
         pattern: Annotated[str, Field(min_length=1, max_length=500)],
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_grep"])
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_grep"], tool="artifact_grep")
         return _tool_errors(
             lambda: service.grep(request_tenant, pattern, limit, actor=policy_actor(request_actor))
         )
@@ -470,7 +479,7 @@ def build_mcp_server(
         edge_type: Annotated[str, Field(min_length=1, max_length=100)],
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["graph_link"])
+        request_tenant, request_actor = identity(TOOL_SCOPES["graph_link"], tool="graph_link")
         return _tool_errors(
             lambda: service.link(
                 request_tenant,
@@ -488,7 +497,9 @@ def build_mcp_server(
         max_depth: Annotated[int, Field(ge=0, le=10)] = 2,
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["graph_traverse"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["graph_traverse"], tool="graph_traverse"
+        )
         return _tool_errors(
             lambda: service.traverse(
                 request_tenant,
@@ -504,7 +515,9 @@ def build_mcp_server(
         start_artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["graph_component"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["graph_component"], tool="graph_component"
+        )
         return _tool_errors(
             lambda: service.graph_component(
                 request_tenant,
@@ -519,7 +532,9 @@ def build_mcp_server(
         artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_versions"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["artifact_versions"], tool="artifact_versions"
+        )
         return _tool_errors(
             lambda: service.versions(
                 request_tenant, artifact_id, limit, actor=policy_actor(request_actor)
@@ -533,7 +548,9 @@ def build_mcp_server(
         action: Annotated[str, Field(pattern="^(read|write|share)$")] = "read",
         reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "shared artifact",
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_share"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["artifact_share"], tool="artifact_share"
+        )
         return _tool_errors(
             lambda: service.share_artifact(
                 request_tenant,
@@ -552,7 +569,9 @@ def build_mcp_server(
         grant_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "revoked share",
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_revoke"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["artifact_revoke"], tool="artifact_revoke"
+        )
         return _tool_errors(
             lambda: service.revoke_share(
                 request_tenant,
@@ -568,7 +587,7 @@ def build_mcp_server(
     def artifact_acl(
         artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_acl"])
+        request_tenant, request_actor = identity(TOOL_SCOPES["artifact_acl"], tool="artifact_acl")
         return _tool_errors(
             lambda: service.artifact_acl(
                 request_tenant,
@@ -591,7 +610,10 @@ def build_mcp_server(
             "approved external MCP connection"
         ),
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_connection_register"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["external_mcp_connection_register"],
+            tool="external_mcp_connection_register",
+        )
         return _tool_errors(
             lambda: broker.register(
                 tenant_id=request_tenant,
@@ -611,7 +633,10 @@ def build_mcp_server(
     def external_mcp_connection_list(
         limit: Annotated[int, Field(ge=1, le=MAX_EXTERNAL_LIST_ITEMS)] = 128,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_connection_list"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["external_mcp_connection_list"],
+            tool="external_mcp_connection_list",
+        )
         return _tool_errors(
             lambda: broker.list_connections(
                 tenant_id=request_tenant, actor=request_actor, limit=limit
@@ -623,7 +648,10 @@ def build_mcp_server(
         connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         probe: bool = False,
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_connection_status"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["external_mcp_connection_status"],
+            tool="external_mcp_connection_status",
+        )
         return _tool_errors(
             lambda: broker.health(
                 tenant_id=request_tenant,
@@ -638,7 +666,10 @@ def build_mcp_server(
         connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "revoked connection",
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_connection_revoke"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["external_mcp_connection_revoke"],
+            tool="external_mcp_connection_revoke",
+        )
         return _tool_errors(
             lambda: broker.revoke(
                 tenant_id=request_tenant,
@@ -653,7 +684,9 @@ def build_mcp_server(
         connection_id: Annotated[str | None, Field(max_length=MAX_ID_LENGTH)] = None,
         limit: Annotated[int, Field(ge=1, le=MAX_EXTERNAL_LIST_ITEMS)] = 128,
     ) -> list[dict[str, Any]]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_audit"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["external_mcp_audit"], tool="external_mcp_audit"
+        )
         return _tool_errors(
             lambda: broker.audit(
                 tenant_id=request_tenant,
@@ -676,7 +709,7 @@ def build_mcp_server(
         limit: Annotated[int, Field(ge=1, le=10_000)] = 10_000,
         cursor: Annotated[str | None, Field(max_length=512)] = None,
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["audit_export"])
+        request_tenant, request_actor = identity(TOOL_SCOPES["audit_export"], tool="audit_export")
         return _tool_errors(
             lambda: service.export_audit_events(
                 request_tenant,
@@ -694,7 +727,9 @@ def build_mcp_server(
         tool_name: Annotated[str, Field(min_length=1, max_length=2_048)],
         arguments: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_tool_call"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["external_mcp_tool_call"], tool="external_mcp_tool_call"
+        )
         return _tool_errors(
             lambda: {
                 "result": broker.call_tool(
@@ -712,7 +747,10 @@ def build_mcp_server(
         connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         resource_uri: Annotated[str, Field(min_length=1, max_length=2_048)],
     ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_resource_read"])
+        request_tenant, request_actor = identity(
+            TOOL_SCOPES["external_mcp_resource_read"],
+            tool="external_mcp_resource_read",
+        )
         return _tool_errors(
             lambda: {
                 "result": broker.read_resource(

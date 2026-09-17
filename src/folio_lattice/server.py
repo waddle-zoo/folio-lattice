@@ -30,6 +30,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from .auth import (
     AuthenticationError,
     JwksClient,
+    MembershipError,
     MembershipStore,
     OidcAuthenticator,
     OidcVerifier,
@@ -55,6 +56,7 @@ from .identity import (
 from .inspection import InspectionApp
 from .mcp_protocol import build_mcp_server
 from .public_mcp import (
+    IDENTITY_RELAY_TOOL,
     INTERNAL_PRINCIPAL_HEADER,
     AdminMcpClient,
     HttpMcpClient,
@@ -978,15 +980,40 @@ class FolioHttpApp:
             capability = self.principal_relay.resolve_capability(internal_token)
             if capability is None or not isinstance(capability.principal, Principal):
                 raise AuthenticationError("internal principal is invalid")
-            return capability.principal, capability.binding
+            principal = capability.principal
+            if self.session_store is not None:
+                try:
+                    membership = self.session_store.membership_store.lookup(
+                        principal.issuer, principal.subject
+                    )
+                except MembershipError as exc:
+                    raise AuthenticationError("internal principal is not active") from exc
+                if (
+                    membership is None
+                    or membership.status != "active"
+                    or membership.tenant_id != principal.tenant_id
+                    or membership.actor_id != principal.actor_id
+                    or not principal.scopes.issubset(membership.scopes)
+                ):
+                    raise AuthenticationError("internal principal is not active")
+                principal = Principal(
+                    tenant_id=membership.tenant_id,
+                    actor_id=membership.actor_id,
+                    issuer=membership.issuer,
+                    subject=membership.subject,
+                    scopes=membership.scopes,
+                )
+            if capability.binding.tool == IDENTITY_RELAY_TOOL:
+                return principal, None
+            return principal, capability.binding
         session_id = _session_cookie(scope)
         if session_id is not None and allow_session:
             if self.session_store is None:
                 raise AuthenticationError("session authentication is unavailable")
-            principal = self.session_store.lookup(session_id)
-            if principal is None:
+            session_principal = self.session_store.lookup(session_id)
+            if session_principal is None:
                 raise AuthenticationError("session is invalid")
-            return principal, None
+            return session_principal, None
         if self.authenticator is not None:
             return self.authenticator.authenticate(scope), None
         raise AuthenticationError("authentication is required")
@@ -1836,6 +1863,7 @@ def run_http(host: str, port: int) -> None:
         ),
         host=host,
         port=port,
+        access_log=False,
         **_tls_options(settings),
     )
 
@@ -1871,7 +1899,7 @@ def run_renderer(host: str, port: int) -> None:
         concurrency_limit=settings.resource_concurrency_limit,
         concurrency_per_key=settings.resource_concurrency_per_key,
     )
-    uvicorn.run(app, host=host, port=port, **_tls_options(settings))
+    uvicorn.run(app, host=host, port=port, access_log=False, **_tls_options(settings))
 
 
 def _tls_options(settings: Settings) -> dict[str, Any]:
