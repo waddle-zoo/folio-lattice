@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hmac
 import json
 import os
 import socket
@@ -12,6 +13,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from mcp import Client, StdioServerParameters
 
@@ -330,6 +332,35 @@ class HttpE2ETests(unittest.TestCase):
                     asyncio.run(replay_read())
                 reader_relay.revoke(replay_token)
                 self.assertIsNone(reader_relay.resolve_capability(replay_token))
+
+                expired_relay = SignedPrincipalRelay(
+                    f"{control_origin}/mcp", RENDERER_CAPABILITY_SECRET
+                )
+                expired_token = expired_relay.issue(
+                    reader_principal, tool="artifact_read", arguments=read_arguments
+                )
+                expired_encoded, separator, expired_signature = expired_token.partition(".")
+                assert separator
+                expired_payload = json.loads(expired_relay._decode(expired_encoded))
+                expired_payload["iat"] = int(time.time()) - 120
+                expired_payload["exp"] = int(time.time()) - 60
+                expired_encoded = expired_relay._encode(expired_payload)
+                expired_signature = expired_relay._b64(
+                    hmac.new(
+                        expired_relay._signing_key,
+                        expired_encoded,
+                        "sha256",
+                    ).digest()
+                )
+                expired_token = f"{expired_encoded.decode('ascii')}.{expired_signature}"
+                expired_reader = HttpMcpClient(
+                    f"{control_origin}/mcp",
+                    principal_relay=expired_relay,
+                    principal=reader_principal,
+                )
+                with patch.object(expired_relay, "issue", return_value=expired_token):
+                    with self.assertRaises(PublicMcpError):
+                        asyncio.run(expired_reader.call("artifact_read", read_arguments))
             finally:
                 if renderer is not None:
                     stop_server(renderer)
