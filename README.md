@@ -95,3 +95,6 @@ create, link, discover, search/grep, read, and render flow. Artifact body search
 and metadata discovery are deliberately separate: use `artifact_search` or
 `artifact_grep` for indexed content, and bounded `artifact_list` filters for an
 exact filename or media type.
+
+For a version-pinned HTML/CSS/JavaScript graph bundle, see the
+[agent asset bundle quickstart](docs/AGENT-RECIPE.md).
