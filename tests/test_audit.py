@@ -6,11 +6,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from mcp import Client
 
+from folio_lattice.audit import integrity_hash
 from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
 from folio_lattice.mcp_protocol import build_mcp_server
+from folio_lattice.ops import main as ops_main
 from folio_lattice.server import FolioHttpApp
 from folio_lattice.service import FolioError, FolioLattice
 
@@ -61,8 +64,8 @@ async def call_http(app: FolioHttpApp, path: str) -> tuple[int, dict[str, str], 
 class AuditTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        root = Path(self.temp.name)
-        self.service = FolioLattice(root / "folio.db", root / "blobs")
+        self.root = Path(self.temp.name)
+        self.service = FolioLattice(self.root / "folio.db", self.root / "blobs")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -146,10 +149,19 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.service.readiness()["dependencies"]["audit"]["ready"])
 
         with self.service.connect() as db:
-            db.execute(
-                "UPDATE audit_events SET expires_at = '2000-01-01T00:00:00+00:00' "
-                "WHERE tenant_id = 'tenant-a'",
-            )
+            rows = db.execute(
+                "SELECT * FROM audit_events WHERE tenant_id IN ('tenant-a', 'tenant-b')"
+            ).fetchall()
+            for row in rows:
+                event = self.service._audit_row(row)
+                event["expires_at"] = "2000-01-01T00:00:00.000+00:00"
+                event["integrity_hash"] = integrity_hash(
+                    {key: value for key, value in event.items() if key != "integrity_hash"}
+                )
+                db.execute(
+                    "UPDATE audit_events SET expires_at = ?, integrity_hash = ? WHERE id = ?",
+                    (event["expires_at"], event["integrity_hash"], event["id"]),
+                )
         self.assertEqual(
             self.service.set_audit_legal_hold(
                 "tenant-a", actor="auditor", event_ids=[first["id"]], reason="investigation"
@@ -158,10 +170,144 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
         )
         purged = self.service.purge_audit_events(now="2026-01-01T00:00:00+00:00")
         self.assertEqual(purged.get("tenant-a"), 2)
+        self.assertEqual(purged.get("tenant-b"), 1)
         remaining_ids = {
             item["id"] for item in self.service.list_audit_events("tenant-a", actor="auditor")
         }
         self.assertIn(first["id"], remaining_ids)
+
+        with self.service.connect() as db:
+            tenant_b_remaining = db.execute(
+                "SELECT COUNT(*) FROM audit_events WHERE tenant_id = 'tenant-b'"
+            ).fetchone()[0]
+        self.assertEqual(tenant_b_remaining, 1)
+
+    def test_integrity_windows_pagination_size_and_atomicity(self) -> None:
+        first = self.service.record_audit_event(
+            tenant_id="tenant-a",
+            actor_id="auditor",
+            action="fixture",
+            outcome="allowed",
+            request_id="req-window",
+            details={"status_code": 200},
+        )
+        self.service.record_audit_event(
+            tenant_id="tenant-a", actor_id="auditor", action="second", outcome="allowed"
+        )
+        with self.assertRaisesRegex(FolioError, "timezone"):
+            self.service.list_audit_events(
+                "tenant-a", actor="auditor", from_time="2026-01-01T00:00:00"
+            )
+        with self.assertRaisesRegex(FolioError, "inverted"):
+            self.service.list_audit_events(
+                "tenant-a",
+                actor="auditor",
+                from_time="2026-01-02T00:00:00+00:00",
+                to_time="2026-01-01T00:00:00+00:00",
+            )
+
+        page = self.service.export_audit_events("tenant-a", actor="auditor", limit=1)
+        self.assertEqual(page["event_count"], 1)
+        self.assertIsNotNone(page["next_cursor"])
+        continuation = self.service.export_audit_events(
+            "tenant-a", actor="auditor", limit=1, cursor=page["next_cursor"]
+        )
+        self.assertGreaterEqual(continuation["event_count"], 1)
+
+        long_value = "x" * 255
+        for index in range(1_400):
+            self.service.record_audit_event(
+                tenant_id="tenant-a",
+                actor_id="auditor",
+                action=f"bulk_{index}",
+                outcome="allowed",
+                reason=long_value,
+                resource_type="artifact",
+                resource_id=long_value,
+                details={"reason_code": long_value},
+            )
+        bounded = self.service.export_audit_events("tenant-a", actor="auditor", limit=50_000)
+        ndjson = b"".join(
+            json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+            + b"\n"
+            for item in bounded["events"]
+        )
+        self.assertLessEqual(len(ndjson), 1 * 1024 * 1024)
+        self.assertIsNotNone(bounded["next_cursor"])
+        self.assertLessEqual(
+            self.service.export_audit_events("tenant-a", actor="auditor", limit=50_000)[
+                "event_count"
+            ],
+            10_000,
+        )
+
+        with self.service.connect() as db:
+            db.execute(
+                "UPDATE audit_events SET details_json = '{\"status_code\":500}' WHERE id = ?",
+                (first["id"],),
+            )
+        with self.assertRaisesRegex(FolioError, "integrity"):
+            self.service.list_audit_events("tenant-a", actor="auditor")
+        with self.assertRaisesRegex(FolioError, "integrity"):
+            self.service.export_audit_events("tenant-a", actor="auditor")
+
+        clean = FolioLattice(self.root / "clean.db", self.root / "clean-blobs")
+        clean.record_audit_event(
+            tenant_id="tenant-a", actor_id="auditor", action="atomic", outcome="allowed"
+        )
+
+        original_insert = FolioLattice._insert_audit_event
+
+        def fail_export(db: Any, event: dict[str, Any]) -> None:
+            if event["action"] == "audit_export":
+                raise FolioError("injected audit write failure")
+            original_insert(db, event)
+
+        with patch.object(FolioLattice, "_insert_audit_event", side_effect=fail_export):
+            with self.assertRaisesRegex(FolioError, "injected"):
+                clean.export_audit_events("tenant-a", actor="auditor")
+        with clean.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM audit_exports").fetchone()[0], 0)
+
+    def test_retention_hook_command_and_existing_schema_readiness(self) -> None:
+        event = self.service.record_audit_event(
+            tenant_id="tenant-a", actor_id="auditor", action="expired", outcome="allowed"
+        )
+        with self.service.connect() as db:
+            expired = dict(
+                db.execute("SELECT * FROM audit_events WHERE id = ?", (event["id"],)).fetchone()
+            )
+            expired["details"] = json.loads(expired.pop("details_json"))
+            expired["legal_hold"] = bool(expired["legal_hold"])
+            expired["expires_at"] = "2000-01-01T00:00:00.000+00:00"
+            expired["integrity_hash"] = integrity_hash(
+                {key: value for key, value in expired.items() if key != "integrity_hash"}
+            )
+            db.execute(
+                "UPDATE audit_events SET expires_at = ?, integrity_hash = ? WHERE id = ?",
+                (expired["expires_at"], expired["integrity_hash"], event["id"]),
+            )
+            db.execute("DROP TABLE audit_exports")
+        self.service.initialize()
+        self.assertTrue(self.service.readiness()["dependencies"]["audit"]["ready"])
+        self.assertEqual(
+            ops_main(
+                [
+                    "audit",
+                    "purge",
+                    "--before",
+                    "2026-01-01T00:00:00+00:00",
+                    "--db",
+                    str(self.root / "folio.db"),
+                    "--blobs",
+                    str(self.root / "blobs"),
+                ]
+            ),
+            0,
+        )
+        retained = self.service.list_audit_events("tenant-a", actor="auditor")
+        self.assertNotIn(event["id"], {item["id"] for item in retained})
+        self.assertTrue(any(item["action"] == "audit_retention_purge" for item in retained))
 
     async def test_mcp_export_requires_admin_scope_and_metrics_are_bounded(self) -> None:
         self.service.record_audit_event(

@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .backup import BackupError, create_backup, migration_check, restore_backup, verify_backup
+from .service import FolioLattice, utc_now
 
 
 def _path(value: str | None, env_name: str, default: str) -> Path:
@@ -41,6 +42,13 @@ def _parser() -> argparse.ArgumentParser:
     dr_restore.add_argument("--input", required=True)
     dr_restore.add_argument("--db")
     dr_restore.add_argument("--blobs")
+
+    audit = commands.add_parser("audit")
+    audit_subcommands = audit.add_subparsers(dest="audit_command", required=True)
+    purge = audit_subcommands.add_parser("purge", help="purge expired, non-held audit events")
+    purge.add_argument("--before")
+    purge.add_argument("--db")
+    purge.add_argument("--blobs")
     return parser
 
 
@@ -66,6 +74,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _path(args.db, "FOLIO_DB_PATH", ".data/recovered/folio.db"),
                 _path(args.blobs, "FOLIO_BLOB_ROOT", ".data/recovered/blobs"),
             )
+        elif args.command == "audit" and args.audit_command == "purge":
+            service = FolioLattice(
+                _path(args.db, "FOLIO_DB_PATH", ".data/folio.db"),
+                _path(args.blobs, "FOLIO_BLOB_ROOT", ".data/blobs"),
+            )
+            cutoff = args.before or utc_now()
+            result = {
+                "status": "purged",
+                "before": cutoff,
+                "tenants": service.purge_audit_events(now=cutoff),
+            }
         else:
             raise BackupError("unsupported operations command")
     except BackupError as exc:

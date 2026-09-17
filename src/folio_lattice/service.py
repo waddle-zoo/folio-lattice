@@ -2149,6 +2149,142 @@ class FolioLattice:
         item["legal_hold"] = bool(item["legal_hold"])
         return item
 
+    @staticmethod
+    def _audit_integrity_ok(event: Mapping[str, Any]) -> bool:
+        stored = event.get("integrity_hash")
+        payload = dict(event)
+        payload.pop("integrity_hash", None)
+        return isinstance(stored, str) and stored == integrity_hash(payload)
+
+    @classmethod
+    def _verified_audit_row(cls, row: sqlite3.Row) -> dict[str, Any]:
+        event = cls._audit_row(row)
+        if not cls._audit_integrity_ok(event):
+            raise FolioError("audit integrity verification failed")
+        return event
+
+    @staticmethod
+    def _build_audit_event(
+        *,
+        tenant_id: str,
+        actor_id: str,
+        action: str,
+        outcome: str,
+        request_id: str | None,
+        correlation_id: str | None,
+        resource_type: str,
+        resource_id: str | None,
+        reason: str,
+        policy_version: str,
+        source: str,
+        details: Mapping[str, Any] | None,
+        retention_class: str,
+    ) -> dict[str, Any]:
+        try:
+            tenant_id = validate_token("tenant_id", tenant_id)
+            actor_id = validate_token("actor_id", actor_id)
+            action = validate_token("action", action)
+            outcome = validate_token("outcome", outcome)
+            resource_type = validate_token("resource_type", resource_type)
+            policy_version = validate_token("policy_version", policy_version)
+            source = validate_token("source", source)
+            reason = validate_token("reason", reason)
+            if resource_id is not None:
+                resource_id = validate_token("resource_id", resource_id)
+            request_id = validate_token("request_id", request_id or new_id("req"))
+            correlation_id = validate_token("correlation_id", correlation_id or request_id)
+            safe = safe_details(details)
+            expires_at = expiry_for(retention_class)
+        except AuditValidationError as exc:
+            raise FolioError(str(exc)) from exc
+
+        event = {
+            "id": new_id("audit"),
+            "occurred_at": utc_now(),
+            "tenant_id": tenant_id,
+            "actor_id": actor_id,
+            "actor_type": "actor",
+            "request_id": request_id,
+            "correlation_id": correlation_id,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "outcome": outcome,
+            "reason": reason,
+            "policy_version": policy_version,
+            "source": source,
+            "details": safe,
+            "retention_class": retention_class,
+            "expires_at": expires_at,
+            "legal_hold": False,
+        }
+        event["integrity_hash"] = integrity_hash(event)
+        return event
+
+    @staticmethod
+    def _insert_audit_event(db: sqlite3.Connection, event: Mapping[str, Any]) -> None:
+        db.execute(
+            """
+            INSERT INTO audit_events(
+                id, occurred_at, tenant_id, actor_id, actor_type,
+                request_id, correlation_id, action, resource_type, resource_id,
+                outcome, reason, policy_version, source, details_json,
+                retention_class, expires_at, legal_hold, integrity_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event["id"],
+                event["occurred_at"],
+                event["tenant_id"],
+                event["actor_id"],
+                event["actor_type"],
+                event["request_id"],
+                event["correlation_id"],
+                event["action"],
+                event["resource_type"],
+                event["resource_id"],
+                event["outcome"],
+                event["reason"],
+                event["policy_version"],
+                event["source"],
+                json.dumps(event["details"], sort_keys=True, separators=(",", ":")),
+                event["retention_class"],
+                event["expires_at"],
+                int(bool(event["legal_hold"])),
+                event["integrity_hash"],
+            ),
+        )
+
+    @staticmethod
+    def _audit_window(from_time: str | None, to_time: str | None) -> tuple[str | None, str | None]:
+        parsed: dict[str, datetime] = {}
+        try:
+            for field, value in (("from_time", from_time), ("to_time", to_time)):
+                if value is None:
+                    continue
+                if len(value) > 64 or any(ord(char) < 0x20 for char in value):
+                    raise AuditValidationError(f"{field} is invalid")
+                candidate = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if candidate.tzinfo is None or candidate.utcoffset() is None:
+                    raise AuditValidationError(f"{field} must include a timezone")
+                parsed[field] = candidate.astimezone(UTC)
+        except (AuditValidationError, TypeError, ValueError) as exc:
+            if isinstance(exc, AuditValidationError):
+                raise FolioError(str(exc)) from exc
+            raise FolioError("audit time window is invalid") from exc
+        if (
+            "from_time" in parsed
+            and "to_time" in parsed
+            and parsed["from_time"] > parsed["to_time"]
+        ):
+            raise FolioError("audit time window is inverted")
+        return (
+            parsed["from_time"].isoformat(timespec="milliseconds")
+            if "from_time" in parsed
+            else None,
+            parsed["to_time"].isoformat(timespec="milliseconds") if "to_time" in parsed else None,
+        )
+
     def record_audit_event(
         self,
         *,
@@ -2173,80 +2309,25 @@ class FolioLattice:
         never enter the durable audit store.
         """
 
-        try:
-            tenant_id = validate_token("tenant_id", tenant_id)
-            actor_id = validate_token("actor_id", actor_id)
-            action = validate_token("action", action)
-            outcome = validate_token("outcome", outcome)
-            resource_type = validate_token("resource_type", resource_type)
-            policy_version = validate_token("policy_version", policy_version)
-            source = validate_token("source", source)
-            reason = validate_token("reason", reason)
-            if resource_id is not None:
-                resource_id = validate_token("resource_id", resource_id)
-            request_id = validate_token("request_id", request_id or new_id("req"))
-            correlation_id = validate_token("correlation_id", correlation_id or request_id)
-            safe = safe_details(details)
-            expires_at = expiry_for(retention_class)
-        except AuditValidationError as exc:
-            raise FolioError(str(exc)) from exc
-
-        occurred_at = utc_now()
-        event = {
-            "id": new_id("audit"),
-            "occurred_at": occurred_at,
-            "tenant_id": tenant_id,
-            "actor_id": actor_id,
-            "actor_type": "actor",
-            "request_id": request_id,
-            "correlation_id": correlation_id,
-            "action": action,
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "outcome": outcome,
-            "reason": reason,
-            "policy_version": policy_version,
-            "source": source,
-            "details": safe,
-            "retention_class": retention_class,
-            "expires_at": expires_at,
-            "legal_hold": False,
-        }
-        event["integrity_hash"] = integrity_hash(event)
-        details_json = json.dumps(safe, sort_keys=True, separators=(",", ":"))
+        event = self._build_audit_event(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=action,
+            outcome=outcome,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            reason=reason,
+            policy_version=policy_version,
+            source=source,
+            details=details,
+            retention_class=retention_class,
+        )
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            self._ensure_tenant(db, tenant_id)
-            db.execute(
-                """
-                INSERT INTO audit_events(
-                    id, occurred_at, tenant_id, actor_id, actor_type,
-                    request_id, correlation_id, action, resource_type, resource_id,
-                    outcome, reason, policy_version, source, details_json,
-                    retention_class, expires_at, legal_hold, integrity_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-                """,
-                (
-                    event["id"],
-                    occurred_at,
-                    tenant_id,
-                    actor_id,
-                    "actor",
-                    request_id,
-                    correlation_id,
-                    action,
-                    resource_type,
-                    resource_id,
-                    outcome,
-                    reason,
-                    policy_version,
-                    source,
-                    details_json,
-                    retention_class,
-                    expires_at,
-                    event["integrity_hash"],
-                ),
-            )
+            self._ensure_tenant(db, event["tenant_id"])
+            self._insert_audit_event(db, event)
         return event
 
     def list_audit_events(
@@ -2262,11 +2343,9 @@ class FolioLattice:
         try:
             tenant_id = validate_token("tenant_id", tenant_id)
             validate_token("actor_id", actor)
-            for field, value in (("from_time", from_time), ("to_time", to_time)):
-                if value is not None and (len(value) > 64 or any(ord(c) < 0x20 for c in value)):
-                    raise AuditValidationError(f"{field} is invalid")
         except AuditValidationError as exc:
             raise FolioError(str(exc)) from exc
+        from_time, to_time = self._audit_window(from_time, to_time)
         cursor_timestamp: str | None = None
         cursor_id: str | None = None
         if cursor is not None:
@@ -2296,7 +2375,7 @@ class FolioLattice:
                 + " ORDER BY occurred_at ASC, id ASC LIMIT ?",
                 params,
             ).fetchall()
-        return [self._audit_row(row) for row in rows]
+        return [self._verified_audit_row(row) for row in rows]
 
     def export_audit_events(
         self,
@@ -2308,28 +2387,94 @@ class FolioLattice:
         limit: int = AUDIT_MAX_EVENTS_PER_EXPORT,
         cursor: str | None = None,
     ) -> dict[str, Any]:
-        events = self.list_audit_events(
-            tenant_id,
-            actor=actor,
-            from_time=from_time,
-            to_time=to_time,
-            limit=limit,
-            cursor=cursor,
+        try:
+            tenant_id = validate_token("tenant_id", tenant_id)
+            actor = validate_token("actor_id", actor)
+        except AuditValidationError as exc:
+            raise FolioError(str(exc)) from exc
+        from_time, to_time = self._audit_window(from_time, to_time)
+        requested_limit = max(1, min(limit, AUDIT_MAX_EVENTS_PER_EXPORT))
+        cursor_timestamp: str | None = None
+        cursor_id: str | None = None
+        if cursor is not None:
+            try:
+                cursor_timestamp, cursor_id = _parse_artifact_list_cursor(cursor)
+            except FolioError as exc:
+                raise FolioError("invalid audit cursor") from exc
+        conditions = ["tenant_id = ?"]
+        params: list[Any] = [tenant_id]
+        if from_time is not None:
+            conditions.append("occurred_at >= ?")
+            params.append(from_time)
+        if to_time is not None:
+            conditions.append("occurred_at <= ?")
+            params.append(to_time)
+        if cursor_timestamp is not None and cursor_id is not None:
+            conditions.append("(occurred_at > ? OR (occurred_at = ? AND id > ?))")
+            params.extend((cursor_timestamp, cursor_timestamp, cursor_id))
+        params.append(requested_limit + 1)
+        select = (
+            "SELECT id, occurred_at, tenant_id, actor_id, actor_type, request_id, "
+            "correlation_id, action, resource_type, resource_id, outcome, reason, "
+            "policy_version, source, details_json, retention_class, expires_at, "
+            "legal_hold, integrity_hash FROM audit_events WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY occurred_at ASC, id ASC LIMIT ?"
         )
-        ndjson = b"".join(export_line(event) for event in events)
-        if len(ndjson) > AUDIT_MAX_EXPORT_BYTES:
-            raise FolioError("audit export exceeds the allowed size")
+        events: list[dict[str, Any]] = []
+        lines: list[bytes] = []
+        ndjson_bytes = 0
+        has_more = False
+        with self.connect() as db:
+            rows = db.execute(select, params)
+            while len(events) < requested_limit:
+                batch = rows.fetchmany(128)
+                if not batch:
+                    break
+                for position, row in enumerate(batch):
+                    event = self._verified_audit_row(row)
+                    line = export_line(event)
+                    if ndjson_bytes + len(line) > AUDIT_MAX_EXPORT_BYTES:
+                        if not events:
+                            raise FolioError("audit export exceeds the allowed size")
+                        has_more = True
+                        break
+                    events.append(event)
+                    lines.append(line)
+                    ndjson_bytes += len(line)
+                    if len(events) >= requested_limit:
+                        has_more = position + 1 < len(batch) or rows.fetchone() is not None
+                        break
+                if has_more or len(events) >= requested_limit:
+                    break
+        ndjson = b"".join(lines)
         created_at = utc_now()
         export_id = new_id("audit-export")
         expires_at = datetime.now(UTC).timestamp() + AUDIT_EXPORT_TTL_SECONDS
         expires_text = datetime.fromtimestamp(expires_at, UTC).isoformat(timespec="milliseconds")
         checksum = integrity_hash({"schema_version": AUDIT_SCHEMA_VERSION, "ndjson": ndjson.hex()})
         next_cursor = None
-        if events and len(events) >= max(1, min(limit, AUDIT_MAX_EVENTS_PER_EXPORT)):
+        if events and has_more:
             last = events[-1]
             next_cursor = f"{last['occurred_at']}|{last['id']}"
+        export_event = self._build_audit_event(
+            tenant_id=tenant_id,
+            actor_id=actor,
+            action="audit_export",
+            outcome="allowed",
+            request_id=export_id,
+            correlation_id=export_id,
+            resource_type="audit_export",
+            resource_id=export_id,
+            reason="export_created",
+            policy_version=AUDIT_SCHEMA_VERSION,
+            source="audit",
+            details={"status_code": 200, "transport": "mcp"},
+            retention_class="security",
+        )
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            self._ensure_tenant(db, tenant_id)
             db.execute(
                 """
                 INSERT INTO audit_exports(
@@ -2350,17 +2495,7 @@ class FolioLattice:
                     expires_text,
                 ),
             )
-        self.record_audit_event(
-            tenant_id=tenant_id,
-            actor_id=actor,
-            action="audit_export",
-            outcome="allowed",
-            resource_type="audit_export",
-            resource_id=export_id,
-            reason="export_created",
-            source="audit",
-            details={"status_code": 200, "transport": "mcp"},
-        )
+            self._insert_audit_event(db, export_event)
         return {
             "export_id": export_id,
             "schema_version": AUDIT_SCHEMA_VERSION,
@@ -2389,12 +2524,26 @@ class FolioLattice:
         placeholders = ",".join("?" for _ in ids)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            result = db.execute(
-                "UPDATE audit_events SET legal_hold = 1 WHERE tenant_id = ? "
+            rows = db.execute(
+                "SELECT id, occurred_at, tenant_id, actor_id, actor_type, request_id, "
+                "correlation_id, action, resource_type, resource_id, outcome, reason, "
+                "policy_version, source, details_json, retention_class, expires_at, "
+                "legal_hold, integrity_hash FROM audit_events WHERE tenant_id = ? "
                 f"AND id IN ({placeholders})",
                 (tenant_id, *ids),
-            )
-            count = result.rowcount
+            ).fetchall()
+            for row in rows:
+                event = self._verified_audit_row(row)
+                event["legal_hold"] = True
+                event["integrity_hash"] = integrity_hash(
+                    {key: value for key, value in event.items() if key != "integrity_hash"}
+                )
+                db.execute(
+                    "UPDATE audit_events SET legal_hold = 1, integrity_hash = ? "
+                    "WHERE tenant_id = ? AND id = ?",
+                    (event["integrity_hash"], tenant_id, event["id"]),
+                )
+            count = len(rows)
         self.record_audit_event(
             tenant_id=tenant_id,
             actor_id=actor,
