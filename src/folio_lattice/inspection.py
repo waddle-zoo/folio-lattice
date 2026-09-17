@@ -1613,6 +1613,7 @@ function hideProtectedView() {
   if (byId('chunk-content')) byId('chunk-content').textContent = '';
   if (byId('readable-content')) byId('readable-content').replaceChildren();
   byId('results')?.replaceChildren();
+  byId('workspace-search-results-list')?.replaceChildren();
   byId('recent-artifacts')?.replaceChildren();
   byId('artifact-tree')?.replaceChildren();
   byId('access-history')?.replaceChildren();
@@ -1755,8 +1756,9 @@ async function signOut(event) {
   }
 }
 byId('auth-logout-form')?.addEventListener('submit', signOut);
-function list(id, items, render, empty) {
-  const target = byId(id); if (!target) return;
+function list(idOrTarget, items, render, empty) {
+  const target = typeof idOrTarget === 'string' ? byId(idOrTarget) : idOrTarget;
+  if (!target) return;
   target.replaceChildren();
   if (!items.length) {
     const item = document.createElement('li'); item.className = 'muted';
@@ -1832,7 +1834,7 @@ function clearWorkspaceSearch({focus = false} = {}) {
   const input = byId('workspace-search-query');
   const panel = byId('workspace-search-results');
   if (input) input.value = '';
-  byId('results')?.replaceChildren();
+  byId('workspace-search-results-list')?.replaceChildren();
   if (byId('workspace-search-summary')) byId('workspace-search-summary').textContent = 'Search this graph.';
   panel?.setAttribute('hidden', '');
   if (byId('status')) byId('status').textContent = '';
@@ -2483,7 +2485,27 @@ byId('create')?.addEventListener('submit', async (event) => {
     location.assign(`${createdPath}?created=1`);
   } catch (error) { handleFailure(error); }
 });
-async function discover(tool, field, inputId) {
+function renderResults(target, results, names) {
+  list(target, results, (result) => {
+    const li = document.createElement('li'); li.className = 'result-item';
+    const excerpt = result.snippet || result.content || result.media_type || '';
+    const duplicateName = result.artifact_name && names.get(result.artifact_name) > 1;
+    const resultLabel = debugMode && result.artifact_name
+      ? `${result.artifact_id} — ${result.artifact_name}`
+      : duplicateName
+        ? `${result.artifact_name} — ${result.artifact_id}`
+        : result.artifact_name || 'Open artifact';
+    const resultButton = button(resultLabel, () => location.assign(
+      workspaceMode ? workspacePath(result.artifact_id) : artifactPath(result.artifact_id)
+    ));
+    resultButton.dataset.artifactId = result.artifact_id;
+    li.append(resultButton);
+    const span = document.createElement('span'); span.append(document.createTextNode(' — '));
+    appendInlineMarkdown(span, excerpt.slice(0, 240));
+    li.append(span); return li;
+  }, 'No results.');
+}
+async function discover(tool, field, inputId, resultsTarget) {
   try {
     const query = byId(inputId).value.trim();
     if (!query) {
@@ -2522,31 +2544,15 @@ async function discover(tool, field, inputId) {
           : 'No artifacts match that search.';
       }
     }
-    list('results', results, (result) => {
-      const li = document.createElement('li'); li.className = 'result-item';
-      const excerpt = result.snippet || result.content || result.media_type || '';
-      const duplicateName = result.artifact_name && names.get(result.artifact_name) > 1;
-      const resultLabel = debugMode && result.artifact_name
-        ? `${result.artifact_id} — ${result.artifact_name}`
-        : duplicateName
-          ? `${result.artifact_name} — ${result.artifact_id}`
-          : result.artifact_name || 'Open artifact';
-      const resultButton = button(resultLabel, () => location.assign(
-        workspaceMode ? workspacePath(result.artifact_id) : artifactPath(result.artifact_id)
-      ));
-      resultButton.dataset.artifactId = result.artifact_id;
-      li.append(resultButton);
-      const span = document.createElement('span'); span.append(document.createTextNode(' — '));
-      appendInlineMarkdown(span, excerpt.slice(0, 240));
-      li.append(span); return li;
-    }, 'No results.'); status(`${results.length} result${results.length === 1 ? '' : 's'}.`);
+    renderResults(resultsTarget, results, names);
+    status(`${results.length} result${results.length === 1 ? '' : 's'}.`);
   } catch (error) { handleFailure(error); }
 }
 byId('search')?.addEventListener('submit', (event) => {
-  event.preventDefault(); discover('artifact_search', 'query', 'search-query');
+  event.preventDefault(); discover('artifact_search', 'query', 'search-query', byId('results'));
 });
 byId('grep')?.addEventListener('submit', (event) => {
-  event.preventDefault(); discover('artifact_grep', 'pattern', 'grep-pattern');
+  event.preventDefault(); discover('artifact_grep', 'pattern', 'grep-pattern', byId('results'));
 });
 byId('new-entry')?.addEventListener('click', () => {
   const panel = byId('new');
@@ -2564,7 +2570,7 @@ document.querySelectorAll('a[href="/#find"]').forEach((link) => link.addEventLis
 }));
 byId('workspace-search')?.addEventListener('submit', (event) => {
   event.preventDefault();
-  discover('artifact_search', 'query', 'workspace-search-query');
+  discover('artifact_search', 'query', 'workspace-search-query', byId('workspace-search-results-list'));
 });
 byId('workspace-search-close')?.addEventListener('click', () => clearWorkspaceSearch({focus: true}));
 byId('workspace-search-query')?.addEventListener('input', (event) => {
@@ -3083,7 +3089,7 @@ def ui_html(
   </section>
   <article id="workspace" class="workspace{" has-tree" if workspace else ""}" hidden>
     <header class="workspace-heading"><div><div class="breadcrumb"><a href="/">Library</a><span aria-hidden="true">/</span><span>artifacts</span><span aria-hidden="true">/</span><span id="artifact-path">Artifact</span></div><div class="artifact-title-row"><span class="artifact-icon" aria-hidden="true">▤</span><div><p class="eyebrow">ARTIFACT</p><h1 id="title">Artifact</h1>{'<div class="title-metadata"><span id="artifact-media">Loading media type…</span><span class="dot" aria-hidden="true"></span><span>Current version</span></div>' if debug else ""}</div></div></div><nav class="workspace-nav" aria-label="Artifact sections">{workspace_nav}</nav></header>
-    {('<section id="workspace-search-results" class="workspace-search-results" role="region" aria-label="Graph search results" aria-live="polite" hidden><div class="search-popover-heading"><strong id="workspace-search-results-title">Search this graph</strong><button id="workspace-search-close" type="button" class="panel-close" aria-label="Close search results">×</button></div><p id="workspace-search-summary" class="search-popover-summary">Search this graph.</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></section>' if workspace else "")}
+    {('<section id="workspace-search-results" class="workspace-search-results" role="region" aria-label="Graph search results" aria-live="polite" hidden><div class="search-popover-heading"><strong id="workspace-search-results-title">Search this graph</strong><button id="workspace-search-close" type="button" class="panel-close" aria-label="Close search results">×</button></div><p id="workspace-search-summary" class="search-popover-summary">Search this graph.</p><ul id="workspace-search-results-list" class="results-list"><li class="muted">No search run yet.</li></ul></section>' if workspace else "")}
     <div class="workspace-layout">{workspace_tree}<div class="primary-column">
       <section id="reader" class="surface reader-card" aria-labelledby="reader-title"><div class="card-heading"><div><p class="eyebrow">READ</p><h2 id="reader-title">Readable document</h2></div><span id="reader-kind" class="state-pill">Text</span></div><p id="reader-note" class="field-help">Loading readable content…</p><div id="readable-content" class="document-slot">Loading content…</div></section>
       <section id="preview-card" class="surface preview-card" aria-labelledby="preview-title"><div class="card-heading"><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">Artifact preview</h2></div><div class="preview-actions">{preview_debug}</div></div><div class="preview-frame"><iframe id="preview" title="Sandboxed artifact preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>{preview_details}</section>

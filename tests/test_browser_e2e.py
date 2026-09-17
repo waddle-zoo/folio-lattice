@@ -714,16 +714,17 @@ class BrowserSandboxE2ETests(unittest.TestCase):
             chrome: DevTools | None = None
             try:
                 wait_ready(control_origin, control)
+                marker = "agent-asset-check-4d61b9da6b"
                 source = create(
                     control_origin,
                     "notes/decision.md",
-                    b"# Decision\n\n- Choose the graph workspace",
+                    f"# Decision\n\n- Choose the graph workspace\n\n{marker}".encode(),
                     "text/markdown",
                 )
                 site = create(
                     control_origin,
                     "site/index.html",
-                    b"<!doctype html><h1>Connected site</h1>",
+                    f"<!doctype html><h1>Connected site</h1><p>{marker}</p>".encode(),
                     "text/html",
                 )
                 mcp(
@@ -779,6 +780,66 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     "#update",
                 )
 
+                chrome.evaluate(
+                    f"document.querySelector('#workspace-search-query').value = {json.dumps(marker)}; "
+                    "document.querySelector('#workspace-search').requestSubmit()"
+                )
+                chrome.wait(
+                    "document.querySelector('#workspace-search-summary')?.textContent === '2 artifacts found.'"
+                )
+                self.assertTrue(
+                    chrome.evaluate("!document.querySelector('#workspace-search-results').hidden")
+                )
+                self.assertEqual(chrome.evaluate("document.querySelectorAll('#results').length"), 1)
+                visible_names = chrome.evaluate(
+                    "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')].map((button) => button.textContent)"
+                )
+                self.assertEqual(set(visible_names), {"notes/decision.md", "site/index.html"})
+                self.assertNotIn(
+                    "No search run yet.",
+                    chrome.evaluate(
+                        "document.querySelector('#workspace-search-results').innerText"
+                    ),
+                )
+                chrome.evaluate(
+                    "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')]"
+                    f".find((button) => button.dataset.artifactId === {json.dumps(site['artifact']['id'])}).click()"
+                )
+                chrome.wait(
+                    f"location.pathname === '/workspace/' + {json.dumps(site['artifact']['id'])}"
+                )
+                chrome.command(
+                    "Page.navigate",
+                    {"url": f"{control_origin}/workspace/{source['artifact']['id']}"},
+                )
+                chrome.wait(
+                    "location.pathname === '/workspace/' + " + json.dumps(source["artifact"]["id"])
+                )
+                chrome.wait("document.querySelector('#title')?.textContent === 'notes/decision.md'")
+                chrome.evaluate(
+                    f"document.querySelector('#workspace-search-query').value = {json.dumps(marker)}; "
+                    "document.querySelector('#workspace-search').requestSubmit()"
+                )
+                chrome.wait(
+                    "document.querySelector('#workspace-search-summary')?.textContent === '2 artifacts found.'"
+                )
+                chrome.evaluate(
+                    "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')]"
+                    f".find((button) => button.dataset.artifactId === {json.dumps(site['artifact']['id'])}).focus()"
+                )
+                chrome.key("Enter", "Enter", 13)
+                chrome.wait(
+                    f"location.pathname === '/workspace/' + {json.dumps(site['artifact']['id'])}"
+                )
+
+                chrome.command(
+                    "Page.navigate",
+                    {"url": f"{control_origin}/workspace/{source['artifact']['id']}"},
+                )
+                chrome.wait(
+                    "location.pathname === '/workspace/' + " + json.dumps(source["artifact"]["id"])
+                )
+                chrome.wait("document.querySelector('#title')?.textContent === 'notes/decision.md'")
                 chrome.evaluate("document.querySelector('#graph-mode').click()")
                 chrome.wait("new URL(location.href).searchParams.get('view') === 'graph'")
                 chrome.wait("!document.querySelector('#graph-context').hidden")
