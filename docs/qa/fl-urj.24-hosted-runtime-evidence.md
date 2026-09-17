@@ -173,6 +173,13 @@ PATH=/Users/brandonsovran/.local/bin:$PATH FOLIO_BROWSER='/Applications/Google C
 Independent result: Ruff, format, and mypy passed; `233 passed, 8 skipped in
 85.87s`; coverage `80.61%`; process status `0`.
 
+The final published tip was then checked from a second clean detached QA
+worktree at `/tmp/folio-g4-hosted-qa-final.1Rp1ai`, commit
+`2e7feb8156112aa07e3f2cafcbdd59ed8edae02d` (tree
+`00677d15327d2cbc696f2f65e5c081ae4b9b2615`). The exact same command completed
+with `233 passed, 8 skipped in 102.49s`, coverage `80.61%`, and process status
+`0`.
+
 No changes were made to the persistent Security checkout. Independent QA
 review is recorded for the source/image/evidence object above; integration
 and any .24 promotion remain pending mayor acknowledgement.
