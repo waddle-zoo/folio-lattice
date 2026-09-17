@@ -87,3 +87,11 @@ durable artifact and graph substrate.
 
 The executable fixture at `tests/hyperset_consumer.py` proves that seam using
 only the public MCP SDK and HTTP endpoint.
+
+## Agent quickstart
+
+See [the MCP artifact quickstart](docs/MCP-QUICKSTART.md) for the smallest
+create, link, discover, search/grep, read, and render flow. Artifact body search
+and metadata discovery are deliberately separate: use `artifact_search` or
+`artifact_grep` for indexed content, and bounded `artifact_list` filters for an
+exact filename or media type.

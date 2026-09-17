@@ -36,7 +36,10 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("artifact_search", names)
             self.assertIn("graph_component", names)
             list_tool = next(tool for tool in listed.tools if tool.name == "artifact_list")
-            self.assertEqual(set(list_tool.input_schema.get("properties", {})), {"limit"})
+            self.assertEqual(
+                set(list_tool.input_schema.get("properties", {})),
+                {"limit", "name", "media_type"},
+            )
             for tool in listed.tools:
                 properties = tool.input_schema.get("properties", {})
                 self.assertNotIn("tenant_id", properties)
@@ -60,6 +63,28 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
                 client, "artifact_read", {"artifact_id": created["artifact"]["id"]}
             )
             self.assertEqual(read["text"], "hello graph")
+
+            asset = await self.call(
+                client,
+                "artifact_create",
+                {
+                    "name": "agent-launch-board.html",
+                    "media_type": "text/html",
+                    "content_base64": base64.b64encode(b"launch controls").decode(),
+                },
+            )
+            self.assertEqual(
+                await self.call(client, "artifact_search", {"query": "agent-launch-board.html"}),
+                [],
+            )
+            self.assertEqual(
+                await self.call(client, "artifact_grep", {"pattern": "agent-launch-board.html"}),
+                [],
+            )
+            by_name = await self.call(client, "artifact_list", {"name": "agent-launch-board.html"})
+            by_type = await self.call(client, "artifact_list", {"media_type": "text/html"})
+            self.assertEqual([item["id"] for item in by_name], [asset["artifact"]["id"]])
+            self.assertEqual([item["id"] for item in by_type], [asset["artifact"]["id"]])
 
     async def test_write_search_graph_versions_and_fail_closed_tenant(self) -> None:
         async with Client(self.server, raise_exceptions=True) as client:

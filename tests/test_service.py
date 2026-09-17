@@ -160,6 +160,34 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertNotIn("tenant_id", listed[0])
 
+        asset = self.service.create_artifact(
+            tenant_id="acme",
+            name="agent-launch-board.html",
+            data=b"launch controls",
+            media_type="text/html",
+            actor="reader",
+        )
+        self.service.create_artifact(
+            tenant_id="acme",
+            name="agent-launch-board.html",
+            data=b"private controls",
+            media_type="text/html",
+            actor="other",
+        )
+        self.service.create_artifact(
+            tenant_id="other",
+            name="agent-launch-board.html",
+            data=b"foreign controls",
+            media_type="text/html",
+            actor="reader",
+        )
+        by_name = self.service.list_artifacts(
+            "acme", actor="reader", name="agent-launch-board.html"
+        )
+        by_type = self.service.list_artifacts("acme", actor="reader", media_type="text/html")
+        self.assertEqual([item["id"] for item in by_name], [asset["artifact"]["id"]])
+        self.assertEqual([item["id"] for item in by_type], [asset["artifact"]["id"]])
+
     def test_create_is_atomic_and_inputs_are_bounded(self):
         with patch.object(self.service, "_insert_version", side_effect=FolioError("failed")):
             with self.assertRaisesRegex(FolioError, "failed"):

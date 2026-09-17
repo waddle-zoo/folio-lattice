@@ -501,8 +501,18 @@ class FolioLattice:
         return result
 
     def list_artifacts(
-        self, tenant_id: str, limit: int = 20, *, actor: str | None = None
+        self,
+        tenant_id: str,
+        limit: int = 20,
+        *,
+        actor: str | None = None,
+        name: str | None = None,
+        media_type: str | None = None,
     ) -> list[dict[str, Any]]:
+        if name is not None:
+            self._validate_text("name", name, MAX_NAME_LENGTH)
+        if media_type is not None:
+            self._validate_text("media_type", media_type, MAX_MEDIA_TYPE_LENGTH)
         with self.connect() as db:
             access_sql, access_params = self._access_clause(actor, "read")
             rows = db.execute(
@@ -518,10 +528,20 @@ class FolioLattice:
                 WHERE a.tenant_id = ? AND """
                 + access_sql
                 + """
+                  AND (? IS NULL OR a.name = ?)
+                  AND (? IS NULL OR a.media_type = ?)
                 ORDER BY COALESCE(v.created_at, a.created_at) DESC, a.id DESC
                 LIMIT ?
                 """,
-                (tenant_id, *access_params, max(1, min(limit, 100))),
+                (
+                    tenant_id,
+                    *access_params,
+                    name,
+                    name,
+                    media_type,
+                    media_type,
+                    max(1, min(limit, 100)),
+                ),
             ).fetchall()
         return [dict(row) for row in rows]
 

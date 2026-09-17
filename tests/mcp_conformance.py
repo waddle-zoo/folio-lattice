@@ -543,6 +543,14 @@ async def _flow(
         "artifact_create",
         {"name": "target.md", "content_base64": target_content, "media_type": "text/markdown"},
     )
+    web_asset = await call(
+        "artifact_create",
+        {
+            "name": "agent-launch-board.html",
+            "content_base64": base64.b64encode(b"launch controls").decode(),
+            "media_type": "text/html",
+        },
+    )
     source_id = source["artifact"]["id"]
     target_id = target["artifact"]["id"]
     version_id = source["version"]["id"]
@@ -551,6 +559,10 @@ async def _flow(
     listed = await call("artifact_list", {})
     searched = await call("artifact_search", {"query": "conformance source"})
     grepped = await call("artifact_grep", {"pattern": "conformance source"})
+    filename_search = await call("artifact_search", {"query": "agent-launch-board.html"})
+    filename_grep = await call("artifact_grep", {"pattern": "agent-launch-board.html"})
+    named_assets = await call("artifact_list", {"name": "agent-launch-board.html", "limit": 1})
+    typed_assets = await call("artifact_list", {"media_type": "text/html", "limit": 1})
     edge = await call(
         "graph_link",
         {
@@ -727,8 +739,14 @@ async def _flow(
             for secret in ("secret://conformance/upstream", "upstream-conformance-secret")
         ):
             raise ConformanceError("approved upstream transcript leaked secret material")
-    if len(listed) != 2 or chunk["content"] != "conformance source marker":
+    if len(listed) != 3 or chunk["content"] != "conformance source marker":
         raise ConformanceError("artifact create/read/chunk/list mismatch")
+    if filename_search or filename_grep:
+        raise ConformanceError("body search unexpectedly indexed artifact metadata")
+    if [item["id"] for item in named_assets] != [web_asset["artifact"]["id"]] or [
+        item["id"] for item in typed_assets
+    ] != [web_asset["artifact"]["id"]]:
+        raise ConformanceError("artifact filename/media-type discovery mismatch")
     if not searched or not grepped or edge["target_artifact_id"] != target_id:
         raise ConformanceError("search/grep/link mismatch")
     if not traversed or {item["id"] for item in component} != {source_id, target_id}:
@@ -760,6 +778,8 @@ async def _flow(
         "artifact_count": len(listed),
         "search_count": len(searched),
         "grep_count": len(grepped),
+        "filename_discovery": True,
+        "media_type_discovery": True,
         "traverse_count": len(traversed),
         "component_count": len(component),
         "version_count": len(versions),
