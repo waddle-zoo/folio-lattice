@@ -1554,7 +1554,12 @@ def _public_mcp_key(scope: Scope, principal: Principal | None) -> str:
     client = _client_key(scope)
     if principal is None:
         return f"ip:{client}"
-    return f"identity:{principal.tenant_id}\x1f{principal.actor_id}\x1f{client}"
+    identity = json.dumps(
+        (principal.tenant_id, principal.actor_id),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return f"identity:{identity}"
 
 
 def _bind_mcp_actor(scope: Scope, principal: Principal) -> None:

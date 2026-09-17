@@ -113,6 +113,17 @@ def build_app(
     )
 
 
+def _collision_authenticator() -> _FixtureAuthenticator:
+    authenticator = _FixtureAuthenticator()
+    authenticator.principals.update(
+        {
+            "control-a": Principal("a", "b\x1fc", "issuer", "subject-control-a"),
+            "control-b": Principal("a\x1fb", "c", "issuer", "subject-control-b"),
+        }
+    )
+    return authenticator
+
+
 class PublicMcpBoundsTests(unittest.IsolatedAsyncioTestCase):
     async def test_oversized_body_is_rejected_before_auth_and_recovers(self) -> None:
         calls: list[bytes] = []
@@ -189,9 +200,9 @@ class PublicMcpBoundsTests(unittest.IsolatedAsyncioTestCase):
 
         app = build_app(downstream, rate_limit=1)
         app.audit_logger = audit_logger
-        status, _, _ = await invoke(app, principal="member-a")
+        status, _, _ = await invoke(app, principal="member-a", client=("127.0.0.1", 1))
         self.assertEqual(status, 200)
-        status, headers, body = await invoke(app, principal="member-a")
+        status, headers, body = await invoke(app, principal="member-a", client=("127.0.0.2", 1))
         error = json.loads(body)
         self.assertEqual(status, 429)
         self.assertEqual(headers["cache-control"], "no-store")
@@ -200,22 +211,37 @@ class PublicMcpBoundsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(error["retryable"])
         self.assertTrue(error["request_id"])
 
-        status, _, _ = await invoke(app, principal="member-b")
+        status, _, _ = await invoke(app, principal="member-b", client=("127.0.0.2", 1))
         self.assertEqual(status, 200)
         self.assertNotIn("tenant-a", audit_stream.getvalue())
         self.assertNotIn("actor-a", audit_stream.getvalue())
 
         clock = _Clock()
         app._public_mcp_rate_limiter = _BoundedRateLimiter(limit=1, clock=clock)
-        status, _, _ = await invoke(app, principal="member-a")
+        status, _, _ = await invoke(app, principal="member-a", client=("127.0.0.1", 1))
         self.assertEqual(status, 200)
-        status, _, _ = await invoke(app, principal="member-a")
+        status, _, _ = await invoke(app, principal="member-a", client=("127.0.0.2", 1))
         self.assertEqual(status, 429)
         clock.value += 60
-        status, _, _ = await invoke(app, principal="member-a")
+        status, _, _ = await invoke(app, principal="member-a", client=("127.0.0.2", 1))
         self.assertEqual(status, 200)
 
-    async def test_concurrency_is_per_identity_and_recovers_after_release(self) -> None:
+    async def test_rate_limit_identity_key_separates_control_character_tuples(self) -> None:
+        async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
+            await JSONResponse({"ok": True})(scope, receive, send)
+
+        app = build_app(
+            downstream,
+            rate_limit=1,
+            authenticator=_collision_authenticator(),
+        )
+        self.assertEqual((await invoke(app, principal="control-a"))[0], 200)
+        self.assertEqual((await invoke(app, principal="control-b"))[0], 200)
+        self.assertEqual((await invoke(app, principal="control-a"))[0], 429)
+
+    async def test_concurrency_is_per_identity_across_ips_and_recovers_after_release(
+        self,
+    ) -> None:
         started = asyncio.Event()
         release = asyncio.Event()
         blocked = False
@@ -240,8 +266,8 @@ class PublicMcpBoundsTests(unittest.IsolatedAsyncioTestCase):
         first = asyncio.create_task(invoke(app, principal="member-a"))
         await started.wait()
 
-        same_identity = await invoke(app, principal="member-a")
-        other_identity = await invoke(app, principal="member-b")
+        same_identity = await invoke(app, principal="member-a", client=("127.0.0.2", 1))
+        other_identity = await invoke(app, principal="member-b", client=("127.0.0.2", 1))
         self.assertEqual(same_identity[0], 429)
         self.assertEqual(json.loads(same_identity[2])["code"], "mcp_concurrency_limited")
         self.assertEqual(other_identity[0], 200)
@@ -253,6 +279,37 @@ class PublicMcpBoundsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await first)[0], 200)
         recovered = await invoke(app, principal="member-a")
         self.assertEqual(recovered[0], 200)
+
+    async def test_concurrency_key_separates_control_character_tuples(self) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
+            marker = next(
+                value for header, value in scope["headers"] if header == b"x-fixture-principal"
+            )
+            if marker == b"control-a":
+                started.set()
+                await release.wait()
+            await JSONResponse({"principal": marker.decode()})(scope, receive, send)
+
+        app = build_app(
+            downstream,
+            rate_limit=100,
+            concurrency_limit=2,
+            concurrency_per_key=1,
+            authenticator=_collision_authenticator(),
+        )
+        first = asyncio.create_task(invoke(app, principal="control-a"))
+        await started.wait()
+
+        second = await invoke(app, principal="control-b")
+        self.assertEqual(second[0], 200)
+        self.assertEqual(json.loads(second[2]), {"principal": "control-b"})
+
+        release.set()
+        self.assertEqual((await first)[0], 200)
+        self.assertEqual((await invoke(app, principal="control-a"))[0], 200)
 
     async def test_timeout_is_stable_and_releases_concurrency_slot(self) -> None:
         calls = 0
