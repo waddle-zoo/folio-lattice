@@ -150,6 +150,14 @@ class DevTools:
     def __init__(self, browser: str, url: str, profile: Path):
         self.profile = profile
         self.port: int | None = None
+        try:
+            self.startup_timeout = float(
+                os.environ.get("FOLIO_BROWSER_STARTUP_TIMEOUT_SECONDS", "30")
+            )
+        except ValueError as exc:
+            raise AssertionError("browser startup timeout must be numeric") from exc
+        if not 5 <= self.startup_timeout <= 120:
+            raise AssertionError("browser startup timeout must be between 5 and 120 seconds")
         self.process = subprocess.Popen(
             [
                 browser,
@@ -178,7 +186,8 @@ class DevTools:
 
     def _target(self) -> dict[str, Any]:
         active_port = self.profile / "DevToolsActivePort"
-        for _ in range(150):
+        deadline = time.monotonic() + self.startup_timeout
+        while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 break
             try:
@@ -194,7 +203,10 @@ class DevTools:
             except Exception:
                 time.sleep(0.05)
         details = self.close()
-        raise AssertionError(f"Chrome DevTools endpoint did not become ready: {details[-2000:]}")
+        raise AssertionError(
+            f"Chrome DevTools endpoint did not become ready within "
+            f"{self.startup_timeout:g}s: {details[-2000:]}"
+        )
 
     def command(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         self.identifier += 1
