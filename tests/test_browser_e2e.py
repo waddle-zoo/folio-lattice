@@ -1078,8 +1078,13 @@ document.querySelector('#share').requestSubmit();
                     "Can view",
                     chrome.evaluate("document.querySelector('#people-with-access').textContent"),
                 )
+                chrome.wait(
+                    "document.querySelector('#status').textContent.includes('Shared with browser-reader')"
+                )
                 chrome.evaluate(
-                    "document.querySelector('#share-role').value = 'write'; document.querySelector('#share').requestSubmit()"
+                    "document.querySelector('#share-recipient').value = 'browser-reader'; "
+                    "document.querySelector('#share-role').value = 'write'; "
+                    "document.querySelector('#share').requestSubmit()"
                 )
                 chrome.wait(
                     "document.querySelector('#people-with-access').textContent.includes('Can edit')"
