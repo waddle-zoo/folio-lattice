@@ -38,8 +38,9 @@ if [[ "$REQUIRE_SIGNATURE" == 1 ]]; then
 fi
 
 jq -e '
-  (.bomFormat == "CycloneDX" and (.components | length > 0)) or
-  (.spdxVersion | strings | startswith("SPDX-"))
+  (.bomFormat == "CycloneDX" and (.components | type == "array" and length > 0)) or
+  ((.spdxVersion | strings | startswith("SPDX-")) and
+    (.packages | type == "array" and length > 0))
 ' "$SBOM_PATH" >/dev/null || fail "SBOM is not populated CycloneDX or SPDX"
 jq -e '(.components | length > 0)' "$LICENSE_PATH" >/dev/null \
   || fail "license report is not populated"
@@ -53,10 +54,27 @@ jq -e '
     else false
     end;
   if (.matches? != null) then
-    ([.matches[]?.vulnerability.severity] | any(. == "Critical" or . == "High")) | not
+    if ((.matches | type) != "array" or
+        any(.matches[];
+          (.vulnerability | type) != "object" or
+          (((.vulnerability.severity | type) != "string") and
+           ((.vulnerability.severity | type) != "number")))) then
+      false
+    else
+      ([.matches[] .vulnerability.severity | high] | any) | not
+    end
   elif (.runs? != null) then
-    ([.runs[]?.tool.driver.rules[]?.properties?.["security-severity"] // empty | high]
-      | any) | not
+    if ((.runs | type) != "array" or (.runs | length) == 0 or
+        any(.runs[];
+          (.tool.driver | type) != "object" or
+          (.tool.driver.rules | type) != "array" or
+          (.results | type) != "array" or
+          any(.tool.driver.rules[]; type != "object"))) then
+      false
+    else
+      ([.runs[].tool.driver.rules[] .properties?.["security-severity"] // empty | high]
+        | any) | not
+    end
   else false
   end
 ' "$VULNERABILITY_PATH" >/dev/null || fail "Critical/High vulnerability found"
@@ -71,15 +89,17 @@ verify_cosign_binding() {
     --arg image "$image_name" \
     --arg digest "$digest" \
     '
-      type == "array" and length > 0 and
-      any(.[];
-        (.critical.image["docker-manifest-digest"] //
-          .critical.image["Docker-manifest-digest"]) == $digest and
-        (.critical.identity["docker-reference"] == $image or
-          .critical.identity["docker-reference"] == ($image | split("@")[0]) or
-          .critical.identity["docker-reference"] ==
+      (if type == "array" then . else [.] end) as $records |
+      if ($records | length) != 1 or ($records[0] | type) != "object" then
+        false
+      else
+        ($records[0].critical.image["docker-manifest-digest"] //
+          $records[0].critical.image["Docker-manifest-digest"]) == $digest and
+        ($records[0].critical.identity["docker-reference"] == $image or
+          $records[0].critical.identity["docker-reference"] == ($image | split("@")[0]) or
+          $records[0].critical.identity["docker-reference"] ==
             ($image | sub(":([^/:]+)$"; "")))
-      )
+      end
     ' "$path" >/dev/null \
     || fail "$label does not bind the signed object to the image digest"
 }
@@ -87,9 +107,29 @@ verify_cosign_binding() {
 if [[ "$REQUIRE_SIGNATURE" == 1 ]]; then
   verify_cosign_binding "$SIGNATURE_PATH" "signature verification"
   verify_cosign_binding "$ATTESTATION_PATH" "attestation verification"
-  jq -e 'type == "array" and any(.[].payload?; strings | length > 0)' \
+  jq -e '
+    (if type == "array" then . else [.] end) as $records |
+    ($records | length) == 1 and
+    ($records[0].payload? | strings | length > 0)
+  ' \
     "$ATTESTATION_PATH" >/dev/null \
     || fail "attestation verification does not contain a payload"
+  attestation_payload_file="$(mktemp)"
+  if ! jq -e -r '
+    (if type == "array" then . else [.] end) |
+    if length != 1 or (.[0].payload? | strings | length == 0) then
+      error("expected exactly one non-empty attestation payload")
+    else .[0].payload
+    end
+  ' "$ATTESTATION_PATH" | base64 --decode > "$attestation_payload_file"; then
+    rm -f "$attestation_payload_file"
+    fail "attestation payload is not valid base64"
+  fi
+  if ! cmp -s "$attestation_payload_file" "$PROVENANCE_PATH"; then
+    rm -f "$attestation_payload_file"
+    fail "attestation payload does not match provenance"
+  fi
+  rm -f "$attestation_payload_file"
 fi
 
 jq -e \

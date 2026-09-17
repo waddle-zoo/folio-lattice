@@ -245,8 +245,11 @@ jobs:
             map({critical: .critical, payload: .payload})' \
             "$RUNNER_TEMP/attestation-verification.json" \
             > evidence/attestation-verification.json
-          jq -s -e 'map(if type == "array" then .[] else . end) |
-            .[0].payload' "$RUNNER_TEMP/attestation-verification.json" \
+          jq -s -e -r 'map(if type == "array" then .[] else . end) |
+            if length != 1 or (.[0].payload? | strings | length == 0) then
+              error("expected exactly one non-empty attestation payload")
+            else .[0].payload
+            end' "$RUNNER_TEMP/attestation-verification.json" \
             | base64 --decode > evidence/provenance.statement.json
 
       - name: Verify signed release inputs

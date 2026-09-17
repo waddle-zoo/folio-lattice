@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -54,6 +55,8 @@ class SupplyChainPolicyTests(unittest.TestCase):
             "--output json",
             "overwrite: false",
             "image_revision",
+            "jq -s -e -r",
+            "expected exactly one non-empty attestation payload",
         ):
             self.assertIn(required, supply_chain)
 
@@ -90,7 +93,7 @@ class SupplyChainPolicyTests(unittest.TestCase):
                 json.dumps({"components": [{"name": "fixture"}]})
             )
             (evidence / "vulnerabilities.json").write_text(
-                json.dumps({"runs": [{"tool": {"driver": {"rules": []}}}]})
+                json.dumps({"runs": [{"tool": {"driver": {"rules": []}}, "results": []}]})
             )
             image = f"ghcr.io/example/folio-lattice:sha-{source_sha}@sha256:{'0' * 64}"
             provenance = self._provenance(source_sha, image.split("@", 1)[0])
@@ -119,6 +122,37 @@ class SupplyChainPolicyTests(unittest.TestCase):
             self.assertEqual(passed.returncode, 0, passed.stderr)
             self.assertEqual(json.loads(passed.stdout)["status"], "pass")
 
+            (evidence / "sbom.json").write_text(json.dumps({"spdxVersion": "SPDX-2.3"}))
+            rejected_empty_sbom = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(rejected_empty_sbom.returncode, 0)
+            self.assertIn("SBOM", rejected_empty_sbom.stderr)
+
+            (evidence / "sbom.json").write_text(
+                json.dumps({"bomFormat": "CycloneDX", "components": [{"name": "fixture"}]})
+            )
+            (evidence / "vulnerabilities.json").write_text(
+                json.dumps({"runs": [{"tool": {"driver": {"rules": [{}]}}}]})
+            )
+            rejected_malformed_scan = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(rejected_malformed_scan.returncode, 0)
+            self.assertIn("Critical/High", rejected_malformed_scan.stderr)
+
+            (evidence / "vulnerabilities.json").write_text(
+                json.dumps({"runs": [{"tool": {"driver": {"rules": []}}, "results": []}]})
+            )
+
             high_findings = json.loads((evidence / "vulnerabilities.json").read_text())
             high_findings["runs"][0]["tool"]["driver"]["rules"] = [
                 {"properties": {"security-severity": "7.0"}}
@@ -135,7 +169,7 @@ class SupplyChainPolicyTests(unittest.TestCase):
             self.assertIn("Critical/High", rejected_vulnerability.stderr)
 
             (evidence / "vulnerabilities.json").write_text(
-                json.dumps({"runs": [{"tool": {"driver": {"rules": []}}}]})
+                json.dumps({"runs": [{"tool": {"driver": {"rules": []}}, "results": []}]})
             )
             tampered = json.loads(provenance_path.read_text())
             tampered["predicate"]["buildDefinition"]["externalParameters"]["source"]["digest"][
@@ -178,7 +212,7 @@ class SupplyChainPolicyTests(unittest.TestCase):
                 json.dumps({"components": [{"name": "fixture"}]})
             )
             (evidence / "vulnerabilities.json").write_text(
-                json.dumps({"runs": [{"tool": {"driver": {"rules": []}}}]})
+                json.dumps({"runs": [{"tool": {"driver": {"rules": []}}, "results": []}]})
             )
             image_name = f"ghcr.io/example/folio-lattice:sha-{source_sha}"
             digest = "sha256:" + "0" * 64
@@ -188,20 +222,15 @@ class SupplyChainPolicyTests(unittest.TestCase):
             provenance_path.write_text(json.dumps(provenance))
             signature_path = evidence / "signature.json"
             attestation_path = evidence / "attestation.json"
-            signature_path.write_text(
-                json.dumps(
-                    [
-                        {
-                            "critical": {
-                                "identity": {"docker-reference": image_name},
-                                "image": {"docker-manifest-digest": digest},
-                            },
-                            "payload": "e30=",
-                        }
-                    ]
-                )
-            )
-            attestation_path.write_text(signature_path.read_text())
+            record = {
+                "critical": {
+                    "identity": {"docker-reference": image_name},
+                    "image": {"docker-manifest-digest": digest},
+                },
+                "payload": base64.b64encode(provenance_path.read_bytes()).decode(),
+            }
+            signature_path.write_text(json.dumps([record]))
+            attestation_path.write_text(json.dumps([record]))
             environment = {
                 **os.environ,
                 "SOURCE_SHA": source_sha,
@@ -227,6 +256,56 @@ class SupplyChainPolicyTests(unittest.TestCase):
             self.assertEqual(passed.returncode, 0, passed.stderr)
             self.assertEqual(json.loads(passed.stdout)["signature"], "verified")
 
+            signature_path.write_text(json.dumps(record))
+            attestation_path.write_text(json.dumps(record))
+            object_output = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(object_output.returncode, 0, object_output.stderr)
+
+            signature_path.write_text(json.dumps([record, record]))
+            attestation_path.write_text(json.dumps([record, record]))
+            multiple_output = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(multiple_output.returncode, 0)
+            self.assertIn("signature verification", multiple_output.stderr)
+
+            signature_path.write_text(json.dumps(record))
+            attestation_path.write_text(json.dumps({"critical": record["critical"]}))
+            missing_payload = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(missing_payload.returncode, 0)
+            self.assertIn("attestation verification", missing_payload.stderr)
+
+            mismatched_payload = dict(record)
+            mismatched_payload["payload"] = base64.b64encode(b"{}\n").decode()
+            signature_path.write_text(json.dumps(record))
+            attestation_path.write_text(json.dumps(mismatched_payload))
+            rejected_payload = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(rejected_payload.returncode, 0)
+            self.assertIn("attestation payload", rejected_payload.stderr)
+
+            signature_path.write_text(json.dumps([record]))
             attestation_path.write_text(
                 json.dumps(
                     [
