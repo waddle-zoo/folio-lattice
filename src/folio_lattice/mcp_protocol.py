@@ -208,13 +208,22 @@ def build_mcp_server(
             lambda: service.read_chunk(request_tenant, chunk_id, actor=policy_actor(request_actor))
         )
 
-    @server.tool(description="Search indexed text for a bounded natural-language phrase.")
+    @server.tool(
+        description=(
+            "Discover readable artifacts with one case-insensitive substring search across "
+            "artifact name, media type, and current body. Results are deduplicated by stable "
+            "artifact_id and include match_kinds, snippet, path, and graph context. "
+            "Use graph_root_artifact_id to search only its readable connected component; "
+            "continue a page with the returned updated_at|artifact_id cursor."
+        )
+    )
     def artifact_search(
         query: Annotated[str, Field(min_length=1, max_length=500)],
         limit: Annotated[int, Field(ge=1, le=100)] = 20,
         graph_root_artifact_id: Annotated[
             str | None, Field(min_length=1, max_length=MAX_ID_LENGTH)
         ] = None,
+        cursor: Annotated[str | None, Field(max_length=512)] = None,
     ) -> list[dict[str, Any]]:
         required_scopes = [TOOL_SCOPES["artifact_search"]]
         if graph_root_artifact_id is not None:
@@ -227,6 +236,7 @@ def build_mcp_server(
                 limit,
                 actor=policy_actor(request_actor),
                 graph_root_artifact_id=graph_root_artifact_id,
+                cursor=cursor,
             )
         )
 

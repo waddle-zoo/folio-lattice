@@ -6,6 +6,7 @@ import ipaddress
 import json
 import mimetypes
 import os
+import re
 import sqlite3
 import uuid
 from collections import deque
@@ -35,6 +36,10 @@ MAX_MEDIA_TYPE_LENGTH = 255
 MAX_REASON_LENGTH = 2_000
 MAX_CONTEXT_BYTES = 32 * 1024
 MAX_QUERY_LENGTH = 500
+# A search page is small, but the SQL candidate scan must also be bounded when
+# a tenant has many matching chunks. Cursor predicates are applied before this
+# cap so continuation remains complete for ordinary pages.
+MAX_SEARCH_CANDIDATES = 10_000
 ARTIFACT_LIST_CURSOR_SEPARATOR = "|"
 MAX_ARTIFACT_LIST_CURSOR_LENGTH = 512
 MAX_EDGE_TYPE_LENGTH = 100
@@ -128,6 +133,48 @@ def _parse_artifact_list_cursor(cursor: object) -> tuple[str, str]:
     if not artifact_id.strip() or len(artifact_id) > MAX_NAME_LENGTH:
         raise FolioError("invalid artifact_list cursor")
     return timestamp, artifact_id
+
+
+def _search_snippet(value: str, query: str, *, radius: int = 72) -> str:
+    """Return a short, case-preserving excerpt with the match marked."""
+
+    folded_value = value.casefold()
+    folded_query = query.casefold()
+    offset = folded_value.find(folded_query)
+    matched_text = query
+    if offset < 0:
+        # Keep the old FTS-friendly behavior for punctuation-separated phrases
+        # (for example, ``graph-target`` matching ``graph target``) while the
+        # primary contract remains a case-insensitive substring search.
+        normalized_query = re.sub(r"[\W_]+", " ", folded_query).strip()
+        normalized_value = re.sub(r"[\W_]+", " ", folded_value).strip()
+        normalized_offset = normalized_value.find(normalized_query)
+        if normalized_offset >= 0 and normalized_query:
+            first_word = normalized_query.split(" ", 1)[0]
+            offset = folded_value.find(first_word)
+            matched_text = value[offset : offset + len(first_word)]
+    if offset < 0:
+        return value[: radius * 2]
+    end = offset + len(matched_text)
+    start = max(0, offset - radius)
+    finish = min(len(value), end + radius)
+    prefix = "…" if start else ""
+    suffix = "…" if finish < len(value) else ""
+    return f"{prefix}{value[start:offset]}[{value[offset:end]}]{value[end:finish]}{suffix}"
+
+
+def _search_match_offset(value: str, query: str) -> int:
+    """Find a case-insensitive substring, retaining tokenized phrase compatibility."""
+
+    offset = value.casefold().find(query.casefold())
+    if offset >= 0:
+        return offset
+    normalized_query = re.sub(r"[\W_]+", " ", query.casefold()).strip()
+    normalized_value = re.sub(r"[\W_]+", " ", value.casefold()).strip()
+    if not normalized_query or normalized_query not in normalized_value:
+        return -1
+    first_word = normalized_query.split(" ", 1)[0]
+    return value.casefold().find(first_word)
 
 
 class FolioError(Exception):
@@ -954,6 +1001,7 @@ class FolioLattice:
         *,
         actor: str | None = None,
         graph_root_artifact_id: str | None = None,
+        cursor: str | None = None,
     ) -> list[dict[str, Any]]:
         query = query.strip()
         if not query:
@@ -963,55 +1011,220 @@ class FolioLattice:
             return []
         if len(query) > MAX_QUERY_LENGTH:
             raise FolioError(f"query exceeds {MAX_QUERY_LENGTH} characters")
-        match_query = '"' + query.replace('"', '""') + '"'
-        try:
-            with self.connect() as db:
-                component_ids: list[str] | None = None
-                if graph_root_artifact_id is not None:
-                    component_ids = self._component_ids(
-                        db,
-                        tenant_id,
-                        graph_root_artifact_id,
-                        MAX_GRAPH_COMPONENT_NODES,
-                        actor=actor,
-                    )
-                access_sql, access_params = self._access_clause(actor, "read")
-                component_sql = ""
-                component_params: tuple[str, ...] = ()
-                if component_ids is not None:
-                    placeholders = ",".join("?" for _ in component_ids)
-                    component_sql = f" AND a.id IN ({placeholders})"
-                    component_params = tuple(component_ids)
-                rows = db.execute(
-                    """
-                    SELECT chunk_fts.chunk_id, chunk_fts.artifact_id, chunk_fts.version_id,
-                           a.name AS artifact_name,
-                           snippet(chunk_fts, 4, '[', ']', '…', 18) AS snippet,
-                           bm25(chunk_fts) AS score
-                    FROM chunk_fts
-                    JOIN artifacts a ON a.id = chunk_fts.artifact_id
-                     AND a.tenant_id = chunk_fts.tenant_id
-                    WHERE chunk_fts.tenant_id = ? AND chunk_fts MATCH ?
-                      AND a.current_version_id = chunk_fts.version_id
-                    """
-                    + component_sql
-                    + " AND "
-                    + access_sql
-                    + """
-                    ORDER BY score
-                    LIMIT ?
-                    """,
-                    (
-                        tenant_id,
-                        match_query,
-                        *component_params,
-                        *access_params,
-                        max(1, min(limit, 100)),
-                    ),
-                ).fetchall()
-        except sqlite3.OperationalError as exc:
-            raise FolioError("invalid search query") from exc
-        return [dict(row) for row in rows]
+        cursor_timestamp: str | None = None
+        cursor_artifact_id: str | None = None
+        if cursor is not None:
+            try:
+                cursor_timestamp, cursor_artifact_id = _parse_artifact_list_cursor(cursor)
+            except FolioError as exc:
+                raise FolioError("invalid artifact_search cursor") from exc
+
+        with self.connect() as db:
+            component_ids: list[str] | None = None
+            if graph_root_artifact_id is not None:
+                # Resolving the component first intentionally authorizes the root and
+                # only follows readable, same-tenant edges.  A hidden root therefore
+                # fails closed instead of silently returning a global search.
+                component_ids = self._component_ids(
+                    db,
+                    tenant_id,
+                    graph_root_artifact_id,
+                    MAX_GRAPH_COMPONENT_NODES,
+                    actor=actor,
+                )
+            access_sql, access_params = self._access_clause(actor, "read")
+            component_sql = ""
+            component_params: tuple[str, ...] = ()
+            if component_ids is not None:
+                placeholders = ",".join("?" for _ in component_ids)
+                component_sql = f" AND a.id IN ({placeholders})"
+                component_params = tuple(component_ids)
+            cursor_sql = ""
+            cursor_params: tuple[str, ...] = ()
+            if cursor_timestamp is not None and cursor_artifact_id is not None:
+                cursor_sql = """
+                      AND (
+                          COALESCE(v.created_at, a.created_at) < ?
+                          OR (
+                              COALESCE(v.created_at, a.created_at) = ?
+                              AND a.id < ?
+                          )
+                      )
+                """
+                cursor_params = (cursor_timestamp, cursor_timestamp, cursor_artifact_id)
+            readable_sql = (
+                """
+                WITH readable AS (
+                    SELECT a.id AS artifact_id, a.name AS artifact_name,
+                           a.media_type, a.created_at,
+                           a.current_version_id AS version_id,
+                           v.created_at AS updated_at,
+                           v.source_context,
+                           (SELECT COUNT(*) FROM edges e
+                            WHERE e.tenant_id = a.tenant_id
+                              AND (e.source_artifact_id = a.id
+                                   OR e.target_artifact_id = a.id)) AS graph_edges
+                    FROM artifacts a
+                    JOIN versions v
+                      ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
+                    WHERE a.tenant_id = ?
+                """
+                + component_sql
+                + " AND "
+                + access_sql
+                + cursor_sql
+                + """
+                ), metadata_matches AS (
+                    SELECT r.*, NULL AS chunk_id, NULL AS content
+                    FROM readable r
+                    WHERE instr(lower(r.artifact_name), lower(?)) > 0
+                       OR instr(lower(r.media_type), lower(?)) > 0
+                ), body_matches AS (
+                    SELECT r.*, c.id AS chunk_id, c.content
+                    FROM readable r
+                    JOIN chunks c
+                      ON c.tenant_id = ?
+                     AND c.artifact_id = r.artifact_id
+                     AND c.version_id = r.version_id
+                    WHERE instr(lower(c.content), lower(?)) > 0
+                       OR c.id IN (
+                           SELECT chunk_id FROM chunk_fts
+                           WHERE chunk_fts MATCH ? AND tenant_id = ?
+                       )
+                )
+                SELECT * FROM metadata_matches
+                UNION ALL
+                SELECT * FROM body_matches
+                ORDER BY updated_at DESC, artifact_id DESC
+                LIMIT ?
+                """
+            )
+            match_query = '"' + query.replace('"', '""') + '"'
+            params = (
+                tenant_id,
+                *component_params,
+                *access_params,
+                *cursor_params,
+                query,
+                query,
+                tenant_id,
+                query,
+                match_query,
+                tenant_id,
+                MAX_SEARCH_CANDIDATES,
+            )
+            try:
+                rows = db.execute(readable_sql, params).fetchall()
+            except sqlite3.OperationalError as exc:
+                # FTS tokenization is an optimization for legacy phrase queries;
+                # arbitrary punctuation must still work as a body substring search.
+                if "fts" not in str(exc).lower() and "syntax" not in str(exc).lower():
+                    raise FolioError("invalid search query") from exc
+                fallback_sql = readable_sql.replace(
+                    "                       OR c.id IN (\n"
+                    "                           SELECT chunk_id FROM chunk_fts\n"
+                    "                           WHERE chunk_fts MATCH ? AND tenant_id = ?\n"
+                    "                       )\n",
+                    "",
+                )
+                fallback_params = (
+                    tenant_id,
+                    *component_params,
+                    *access_params,
+                    *cursor_params,
+                    query,
+                    query,
+                    tenant_id,
+                    query,
+                    MAX_SEARCH_CANDIDATES,
+                )
+                rows = db.execute(fallback_sql, fallback_params).fetchall()
+
+        by_artifact: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            artifact_id = row["artifact_id"]
+            name = row["artifact_name"]
+            media_type = row["media_type"]
+            body = row["content"] or ""
+            match_kinds: list[str] = []
+            if _search_match_offset(name, query) >= 0:
+                match_kinds.append("name")
+            if _search_match_offset(media_type, query) >= 0:
+                match_kinds.append("media_type")
+            body_offset = _search_match_offset(body, query) if body else -1
+            if body_offset >= 0:
+                match_kinds.append("body")
+            if not match_kinds:
+                continue
+
+            item = by_artifact.get(artifact_id)
+            if item is None:
+                try:
+                    source_context = json.loads(row["source_context"])
+                except (TypeError, json.JSONDecodeError):
+                    source_context = {}
+                path = (
+                    source_context.get("path")
+                    or source_context.get("file_path")
+                    or source_context.get("filename")
+                    or name
+                    if isinstance(source_context, dict)
+                    else name
+                )
+                item = {
+                    "artifact_id": artifact_id,
+                    "version_id": row["version_id"],
+                    "artifact_name": name,
+                    "media_type": media_type,
+                    "match_kinds": [],
+                    "match_kind": "",
+                    "snippet": "",
+                    "chunk_id": None,
+                    "score": None,
+                    "path": path,
+                    "graph_context": {
+                        "root_artifact_id": graph_root_artifact_id,
+                        "scoped": graph_root_artifact_id is not None,
+                        "edge_count": row["graph_edges"],
+                    },
+                    "graph_edges": row["graph_edges"],
+                    "graph_root_artifact_id": graph_root_artifact_id,
+                    "updated_at": row["updated_at"] or row["created_at"],
+                }
+                by_artifact[artifact_id] = item
+
+            had_body_match = "body" in item["match_kinds"]
+            for kind in match_kinds:
+                if kind not in item["match_kinds"]:
+                    item["match_kinds"].append(kind)
+            item["match_kind"] = (
+                item["match_kinds"][0] if len(item["match_kinds"]) == 1 else "multiple"
+            )
+            if body_offset >= 0 and not had_body_match:
+                item["snippet"] = _search_snippet(body, query)
+                item["chunk_id"] = row["chunk_id"]
+                item["score"] = 0.0
+            elif not item["snippet"]:
+                item["snippet"] = _search_snippet(
+                    name if "name" in match_kinds else media_type, query
+                )
+
+        ordered = sorted(
+            by_artifact.values(),
+            key=lambda item: (item["updated_at"], item["artifact_id"]),
+            reverse=True,
+        )
+        if cursor_timestamp is not None and cursor_artifact_id is not None:
+            ordered = [
+                item
+                for item in ordered
+                if item["updated_at"] < cursor_timestamp
+                or (
+                    item["updated_at"] == cursor_timestamp
+                    and item["artifact_id"] < cursor_artifact_id
+                )
+            ]
+        return ordered[: max(1, min(limit, 100))]
 
     def grep(
         self, tenant_id: str, pattern: str, limit: int = 100, *, actor: str | None = None

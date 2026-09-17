@@ -36,10 +36,15 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("artifact_search", names)
             self.assertIn("graph_component", names)
             list_tool = next(tool for tool in listed.tools if tool.name == "artifact_list")
+            search_tool = next(tool for tool in listed.tools if tool.name == "artifact_search")
             self.assertEqual(
                 set(list_tool.input_schema.get("properties", {})),
                 {"limit", "name", "media_type", "cursor"},
             )
+            self.assertIn(
+                "media type", search_tool.description.lower() if search_tool.description else ""
+            )
+            self.assertIn("cursor", search_tool.input_schema.get("properties", {}))
             for tool in listed.tools:
                 properties = tool.input_schema.get("properties", {})
                 self.assertNotIn("tenant_id", properties)
@@ -73,10 +78,14 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
                     "content_base64": base64.b64encode(b"launch controls").decode(),
                 },
             )
-            self.assertEqual(
-                await self.call(client, "artifact_search", {"query": "agent-launch-board.html"}),
-                [],
+            filename_search = await self.call(
+                client, "artifact_search", {"query": "agent-launch-board.html"}
             )
+            self.assertEqual(
+                [item["artifact_id"] for item in filename_search], [asset["artifact"]["id"]]
+            )
+            self.assertEqual(filename_search[0]["match_kind"], "name")
+            self.assertEqual(filename_search[0]["version_id"], asset["version"]["id"])
             self.assertEqual(
                 await self.call(client, "artifact_grep", {"pattern": "agent-launch-board.html"}),
                 [],

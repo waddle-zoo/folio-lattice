@@ -98,6 +98,119 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertNotIn(disconnected["artifact"]["id"], {item["artifact_id"] for item in scoped})
 
+    def test_search_unifies_name_type_body_with_context_and_dedupes(self):
+        root = self.service.create_artifact(
+            tenant_id="acme", name="root.md", data=b"root body", actor="reader"
+        )
+        linked = self.service.create_artifact(
+            tenant_id="acme",
+            name="docker-render.html",
+            data=b"docker body marker",
+            media_type="text/html",
+            actor="reader",
+            source_context={"path": "assets/docker-render.html"},
+        )
+        duplicate = self.service.create_artifact(
+            tenant_id="acme",
+            name="docker-render.html",
+            data=b"other body marker",
+            media_type="text/plain",
+            actor="reader",
+        )
+        private = self.service.create_artifact(
+            tenant_id="acme",
+            name="docker-private.html",
+            data=b"docker private marker",
+            media_type="text/html",
+            actor="owner",
+        )
+        self.service.link("acme", root["artifact"]["id"], linked["artifact"]["id"], "renders")
+
+        by_name = self.service.search("acme", "DOCKER-RENDER.HTML", actor="reader")
+        self.assertEqual(
+            {item["artifact_id"] for item in by_name},
+            {linked["artifact"]["id"], duplicate["artifact"]["id"]},
+        )
+        linked_result = next(
+            item for item in by_name if item["artifact_id"] == linked["artifact"]["id"]
+        )
+        self.assertEqual(linked_result["version_id"], linked["version"]["id"])
+        self.assertEqual(linked_result["artifact_name"], "docker-render.html")
+        self.assertEqual(linked_result["media_type"], "text/html")
+        self.assertEqual(linked_result["match_kind"], "name")
+        self.assertEqual(linked_result["match_kinds"], ["name"])
+        self.assertIn("[docker-render.html]", linked_result["snippet"])
+        self.assertEqual(linked_result["path"], "assets/docker-render.html")
+        self.assertEqual(linked_result["graph_context"]["edge_count"], 1)
+
+        by_type = self.service.search("acme", "TEXT/HTML", actor="reader")
+        self.assertEqual([item["artifact_id"] for item in by_type], [linked["artifact"]["id"]])
+        self.assertEqual(by_type[0]["match_kind"], "media_type")
+
+        combined = self.service.search("acme", "docker", actor="reader")
+        combined_linked = next(
+            item for item in combined if item["artifact_id"] == linked["artifact"]["id"]
+        )
+        self.assertEqual(combined_linked["match_kind"], "multiple")
+        self.assertEqual(combined_linked["match_kinds"], ["name", "body"])
+        self.assertIn("[docker]", combined_linked["snippet"])
+
+        by_body = self.service.search("acme", "BODY MARKER", actor="reader")
+        self.assertEqual(
+            {item["artifact_id"] for item in by_body},
+            {linked["artifact"]["id"], duplicate["artifact"]["id"]},
+        )
+        self.assertTrue(all("body" in item["match_kinds"] for item in by_body))
+        self.assertTrue(all(item["chunk_id"].startswith("chk_") for item in by_body))
+        self.assertNotIn(private["artifact"]["id"], {item["artifact_id"] for item in by_body})
+
+        scoped = self.service.search(
+            "acme",
+            "docker-render.html",
+            actor="reader",
+            graph_root_artifact_id=root["artifact"]["id"],
+        )
+        self.assertEqual([item["artifact_id"] for item in scoped], [linked["artifact"]["id"]])
+        self.assertEqual(scoped[0]["graph_context"]["root_artifact_id"], root["artifact"]["id"])
+
+    def test_search_paginates_stably_by_updated_at_and_artifact_id(self):
+        created = [
+            self.service.create_artifact(
+                tenant_id="acme", name=f"page-{index}.md", data=b"page marker", actor="reader"
+            )
+            for index in range(3)
+        ]
+        first = self.service.search("acme", "page", limit=2, actor="reader")
+        self.assertEqual(len(first), 2)
+        cursor = f"{first[-1]['updated_at']}|{first[-1]['artifact_id']}"
+        second = self.service.search("acme", "page", limit=2, actor="reader", cursor=cursor)
+        self.assertEqual(len(second), 1)
+        self.assertTrue(
+            {item["artifact_id"] for item in first}.isdisjoint(
+                item["artifact_id"] for item in second
+            )
+        )
+        self.assertEqual(
+            {item["artifact_id"] for item in [*first, *second]},
+            {item["artifact"]["id"] for item in created},
+        )
+        with self.assertRaisesRegex(FolioError, "invalid artifact_search cursor"):
+            self.service.search("acme", "page", cursor="bad", actor="reader")
+
+    def test_search_candidate_scan_is_bounded_before_python_deduplication(self):
+        for index in range(4):
+            self.service.create_artifact(
+                tenant_id="acme",
+                name=f"bounded-{index}.md",
+                data=b"marker",
+                actor="reader",
+            )
+        # Keep this small in the unit test to prove the SQL LIMIT is enforced;
+        # production uses the explicit MAX_SEARCH_CANDIDATES bound of 10,000.
+        with patch("folio_lattice.service.MAX_SEARCH_CANDIDATES", 2):
+            results = self.service.search("acme", "bounded", limit=100, actor="reader")
+        self.assertEqual(len(results), 2)
+
     def test_parent_mismatch_does_not_create_version(self):
         first = self.service.create_artifact(
             tenant_id="acme", name="one.txt", data=b"one", media_type="text/plain"
