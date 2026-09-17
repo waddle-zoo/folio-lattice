@@ -117,6 +117,60 @@ def create(base_url: str, name: str, content: bytes, media_type: str) -> dict[st
 
 
 class HttpE2ETests(unittest.TestCase):
+    def test_public_contract_quickstart_regression(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_port, render_port = free_port(), free_port()
+            control_origin = f"http://127.0.0.1:{control_port}"
+            render_origin = f"http://127.0.0.1:{render_port}"
+            environment = {
+                **os.environ,
+                "FOLIO_DB_PATH": str(root / "folio.db"),
+                "FOLIO_BLOB_ROOT": str(root / "blobs"),
+                "FOLIO_TENANT_ID": "fl-urj-13-1-60c7099",
+                "FOLIO_ACTOR": "public-contract-fixture",
+                "FOLIO_CONTROL_ORIGIN": control_origin,
+                "FOLIO_RENDER_ORIGIN": render_origin,
+                "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            }
+            control = start_server(environment, "http", control_port)
+            renderer: subprocess.Popen[bytes] | None = None
+            try:
+                wait_ready(control_origin, control)
+                renderer = start_server(
+                    {**environment, "FOLIO_MCP_URL": f"{control_origin}/mcp"},
+                    "renderer",
+                    render_port,
+                )
+                wait_ready(render_origin, renderer)
+                result = subprocess.run(
+                    [sys.executable, "tests/public_contract_quickstart.py"],
+                    cwd=Path(__file__).parents[1],
+                    env={
+                        **environment,
+                        "FOLIO_BASE_URL": control_origin,
+                        "FOLIO_RENDER_URL": render_origin,
+                    },
+                    text=True,
+                    capture_output=True,
+                    timeout=45,
+                    check=True,
+                )
+                evidence = json.loads(result.stdout)
+                self.assertEqual(evidence["status"], "ok")
+                self.assertEqual(evidence["artifact_count"], 12)
+                self.assertEqual(evidence["linked_count"], 4)
+                self.assertEqual(evidence["discovered_count"], 5)
+                self.assertEqual(evidence["component_count"], 5)
+                self.assertEqual(evidence["version_count"], 2)
+                self.assertGreaterEqual(evidence["elapsed_ms"], 0)
+            finally:
+                if renderer is not None:
+                    stop_server(renderer)
+                logs = stop_server(control)
+                self.assertIn('"decision":"allow"', logs)
+                self.assertIn('"decision":"deny"', logs)
+
     def test_http_and_black_box_hyperset_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

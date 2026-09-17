@@ -1,4 +1,4 @@
-# MCP artifact quickstart
+# Agent quickstart: MCP artifact contract
 
 Use the existing artifact and graph tools directly; there is no separate asset
 catalog. Tenant and actor identity come from the authenticated server context,
@@ -93,3 +93,14 @@ remains a list; an empty or short page ends enumeration.
    `/artifacts/<html-artifact-id>`. It embeds the separately hosted renderer for
    supported HTML, CSS, and JavaScript. The renderer route is iframe-only and
    is not a second artifact API.
+
+## Executable boundary proof
+
+`tests/public_contract_quickstart.py` runs this same flow against fresh local
+HTTP state using only MCP and renderer endpoints. It creates a unique Markdown
+root linked to HTML, CSS, JavaScript, and binary artifacts; verifies stable
+artifact/version IDs, exact metadata filters with bounded cursors, component
+and graph-root search scope, literal grep, chunk reads, renderer headers, and
+the attached-MCP allow path. It also verifies bridge rejection for an
+out-of-graph artifact ID and for a filename used as an ambiguous duplicate-name
+target.
