@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .audit import (
     AUDIT_EXPORT_TTL_SECONDS,
@@ -63,6 +63,7 @@ MAX_EXTERNAL_CONNECTION_NAME_LENGTH = 255
 MAX_EXTERNAL_LIST_ITEMS = 128
 MAX_EXTERNAL_ITEM_LENGTH = 2_048
 MAX_EXTERNAL_ARGUMENT_BYTES = 64 * 1024
+MAX_EXTERNAL_URI_DECODE_PASSES = 2
 EXTERNAL_SQLITE_BUSY_TIMEOUT_SECONDS = 35.0
 _EXTERNAL_POLICY_KEYS = frozenset({"slack"})
 _EXTERNAL_POLICY_PUBLIC_KEYS = frozenset({"channels", "max_time_range_seconds"})
@@ -142,7 +143,7 @@ REQUIRED_SCHEMA_COLUMNS = {
         }
     ),
     "external_mcp_audit": frozenset(
-        {"tenant_id", "connection_id", "actor_id", "action", "outcome"}
+        {"tenant_id", "connection_id", "actor_id", "action", "outcome", "reason"}
     ),
     "audit_events": frozenset(
         {
@@ -412,6 +413,7 @@ class FolioLattice:
                     actor_id TEXT NOT NULL,
                     action TEXT NOT NULL,
                     outcome TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT 'unspecified',
                     tool_name TEXT,
                     resource_uri TEXT,
                     created_at TEXT NOT NULL
@@ -481,6 +483,13 @@ class FolioLattice:
             if "policy_json" not in external_columns:
                 db.execute(
                     "ALTER TABLE external_mcp_connections ADD COLUMN policy_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            audit_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(external_mcp_audit)")
+            }
+            if "reason" not in audit_columns:
+                db.execute(
+                    "ALTER TABLE external_mcp_audit ADD COLUMN reason TEXT NOT NULL DEFAULT 'unspecified'"
                 )
             columns = {row["name"] for row in db.execute("PRAGMA table_info(artifacts)")}
             if "owner_actor_id" not in columns:
@@ -1863,8 +1872,8 @@ class FolioLattice:
             ).fetchall()
         return [self._grant_dict(row) for row in rows]
 
-    @staticmethod
-    def _external_origin(value: str, *, endpoint: bool = False) -> str:
+    @classmethod
+    def _external_origin(cls, value: str, *, endpoint: bool = False) -> str:
         if (
             not isinstance(value, str)
             or not value
@@ -1878,10 +1887,13 @@ class FolioLattice:
             parsed = urlsplit(value)
             port = parsed.port
             host = parsed.hostname
+            decoded = cls._uri_forms(value)
+            decoded_parts = [urlsplit(form) for form in decoded]
         except ValueError:
             parsed = None
             port = None
             host = None
+            decoded_parts = []
         if parsed is None:
             raise FolioError("external MCP origin is invalid")
         if (
@@ -1893,6 +1905,13 @@ class FolioLattice:
             or parsed.fragment
             or (endpoint and not parsed.path)
             or (not endpoint and parsed.path)
+            or any(
+                part.username is not None
+                or part.password is not None
+                or part.query
+                or part.fragment
+                for part in decoded_parts
+            )
         ):
             raise FolioError("external MCP origin is invalid")
         if host is None:
@@ -1931,6 +1950,38 @@ class FolioLattice:
         return sorted(normalized)
 
     @staticmethod
+    def _uri_forms(value: str) -> tuple[str, ...]:
+        """Return a small bounded set of decoded URI forms for secret checks."""
+
+        forms = [value]
+        current = value
+        for _ in range(MAX_EXTERNAL_URI_DECODE_PASSES):
+            decoded = unquote(current)
+            if decoded == current:
+                break
+            forms.append(decoded)
+            current = decoded
+        return tuple(forms)
+
+    @classmethod
+    def _resource_uri(cls, value: str) -> str:
+        """Reject resource identifiers that can carry credentials or secrets."""
+
+        for form in cls._uri_forms(value):
+            try:
+                parsed = urlsplit(form)
+            except ValueError:
+                raise FolioError("approved_resources must contain safe resource URIs") from None
+            if (
+                parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise FolioError("approved_resources must contain safe resource URIs")
+        return value
+
+    @staticmethod
     def _external_credential_ref(value: str | None) -> str | None:
         if value is None:
             return None
@@ -1943,17 +1994,20 @@ class FolioLattice:
         ):
             raise FolioError("credential_ref must be an opaque secret:// reference")
         try:
-            parsed = urlsplit(value)
+            parsed_forms = [urlsplit(form) for form in FolioLattice._uri_forms(value)]
         except ValueError:
-            parsed = None
+            parsed_forms = []
         if (
-            parsed is None
-            or parsed.scheme != "secret"
-            or not parsed.netloc
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
+            any(
+                parsed.scheme != "secret"
+                or not parsed.netloc
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+                for parsed in parsed_forms
+            )
+            or not parsed_forms
         ):
             raise FolioError("credential_ref must be an opaque secret:// reference")
         return value
@@ -2007,6 +2061,28 @@ class FolioLattice:
     @staticmethod
     def _external_public(row: dict[str, Any]) -> dict[str, Any]:
         public = {key: row[key] for key in _EXTERNAL_PUBLIC_FIELDS if key in row}
+        if isinstance(public.get("endpoint"), str) and FolioLattice._origin_is_unsafe(
+            public["endpoint"], endpoint=True
+        ):
+            public.pop("endpoint", None)
+        if isinstance(public.get("origin"), str) and FolioLattice._origin_is_unsafe(
+            public["origin"], endpoint=False
+        ):
+            public.pop("origin", None)
+        resources = public.get("approved_resources")
+        if isinstance(resources, list):
+            public["approved_resources"] = [
+                value
+                for value in resources
+                if isinstance(value, str) and not FolioLattice._resource_uri_is_unsafe(value)
+            ]
+        origins = public.get("allowed_origins")
+        if isinstance(origins, list):
+            public["allowed_origins"] = [
+                value
+                for value in origins
+                if isinstance(value, str) and not FolioLattice._resource_uri_is_unsafe(value)
+            ]
         policy_value = row.get("policy_json")
         if isinstance(policy_value, str):
             try:
@@ -2022,6 +2098,28 @@ class FolioLattice:
                     public["policy"] = {"slack": safe_slack}
         return public | {"credential_configured": row.get("credential_ref") is not None}
 
+    @classmethod
+    def _resource_uri_is_unsafe(cls, value: str) -> bool:
+        try:
+            forms = cls._uri_forms(value)
+            return any(
+                (parsed := urlsplit(form)).username is not None
+                or parsed.password is not None
+                or bool(parsed.query)
+                or bool(parsed.fragment)
+                for form in forms
+            )
+        except (TypeError, ValueError):
+            return True
+
+    @classmethod
+    def _origin_is_unsafe(cls, value: str, *, endpoint: bool) -> bool:
+        try:
+            cls._external_origin(value, endpoint=endpoint)
+        except (FolioError, TypeError, ValueError):
+            return True
+        return False
+
     @staticmethod
     def _write_external_audit(
         db: sqlite3.Connection,
@@ -2031,6 +2129,7 @@ class FolioLattice:
         actor: str,
         action: str,
         outcome: str,
+        reason: str = "unspecified",
         tool_name: str | None = None,
         resource_uri: str | None = None,
     ) -> None:
@@ -2038,12 +2137,14 @@ class FolioLattice:
         # or content identifiers. The connection and action are sufficient for
         # the decision audit; never persist the raw URI.
         resource_uri = None
+        if not isinstance(reason, str) or not reason or len(reason) > 128:
+            reason = "unspecified"
         db.execute(
             """
             INSERT INTO external_mcp_audit(
                 id, tenant_id, connection_id, actor_id, action, outcome,
-                tool_name, resource_uri, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reason, tool_name, resource_uri, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 new_id("extaudit"),
@@ -2052,6 +2153,7 @@ class FolioLattice:
                 actor,
                 action,
                 outcome,
+                reason,
                 tool_name,
                 resource_uri,
                 utc_now(),
@@ -2100,7 +2202,10 @@ class FolioLattice:
         self._validate_text("reason", reason, MAX_REASON_LENGTH)
         endpoint_origin = self._external_origin(endpoint, endpoint=True)
         tools = self._external_items("approved_tools", approved_tools)
-        resources = self._external_items("approved_resources", approved_resources)
+        resources = [
+            self._resource_uri(value)
+            for value in self._external_items("approved_resources", approved_resources)
+        ]
         origins = [self._external_origin(value) for value in allowed_origins]
         if not tools and not resources:
             raise FolioError("external MCP connection needs an explicit tool or resource allowlist")
@@ -2276,6 +2381,7 @@ class FolioLattice:
         connection_id: str,
         actor: str,
         action: str,
+        reason: str = "not_authorized",
         tool_name: str | None = None,
         resource_uri: str | None = None,
     ) -> None:
@@ -2290,6 +2396,7 @@ class FolioLattice:
                         actor=actor,
                         action=action,
                         outcome="denied",
+                        reason=reason,
                         tool_name=tool_name,
                         resource_uri=resource_uri,
                     )
@@ -2345,6 +2452,15 @@ class FolioLattice:
     def authorize_external_resource(
         self, tenant_id: str, connection_id: str, resource_uri: str, *, actor: str
     ) -> dict[str, Any]:
+        if not isinstance(resource_uri, str) or self._resource_uri_is_unsafe(resource_uri):
+            self._record_external_denial(
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action="resource_read",
+                reason="resource_uri_invalid",
+            )
+            raise FolioError("external MCP resource is not approved")
         try:
             connection = self.external_connection_for_broker(tenant_id, connection_id, actor=actor)
         except FolioError:
@@ -2384,6 +2500,7 @@ class FolioLattice:
         actor: str,
         action: str,
         outcome: str,
+        reason: str = "unspecified",
         tool_name: str | None = None,
         resource_uri: str | None = None,
     ) -> None:
@@ -2395,6 +2512,7 @@ class FolioLattice:
                 actor=actor,
                 action=action,
                 outcome=outcome,
+                reason=reason,
                 tool_name=tool_name,
                 resource_uri=resource_uri,
             )
@@ -2412,14 +2530,14 @@ class FolioLattice:
         with self.connect() as db:
             if connection_id is None:
                 rows = db.execute(
-                    "SELECT id, connection_id, actor_id, action, outcome, tool_name, "
+                    "SELECT id, connection_id, actor_id, action, outcome, reason, tool_name, "
                     "resource_uri, created_at FROM external_mcp_audit "
                     "WHERE tenant_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
                     (tenant_id, max(1, min(limit, MAX_EXTERNAL_LIST_ITEMS))),
                 ).fetchall()
             else:
                 rows = db.execute(
-                    "SELECT id, connection_id, actor_id, action, outcome, tool_name, "
+                    "SELECT id, connection_id, actor_id, action, outcome, reason, tool_name, "
                     "resource_uri, created_at FROM external_mcp_audit "
                     "WHERE tenant_id = ? AND connection_id = ? "
                     "ORDER BY created_at DESC, id DESC LIMIT ?",

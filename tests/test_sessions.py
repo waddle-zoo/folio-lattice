@@ -336,6 +336,27 @@ class HostedAuthHttpTests(unittest.TestCase):
         self.assertNotIn(session_id, audit)
         self.assertNotIn("attacker.example", audit)
 
+    def test_audit_persistence_failure_does_not_log_exception_or_secret(self) -> None:
+        secret = "audit-provider-secret"
+
+        def fail_audit(**_kwargs: Any) -> None:
+            raise RuntimeError(f"database failure contains {secret}")
+
+        self.app.service.record_audit_event = fail_audit
+        session_id = self.sessions.create(self.subject)
+        status, _, _ = self.request(
+            "POST",
+            "/auth/logout",
+            cookie=f"{SESSION_COOKIE_NAME}={session_id}",
+            headers={"Origin": "https://127.0.0.1"},
+        )
+        self.assertEqual(status, 204)
+        audit = self.audit_stream.getvalue()
+        self.assertIn("audit_persist_failed", audit)
+        self.assertNotIn(secret, audit)
+        self.assertNotIn("Traceback", audit)
+        self.assertNotIn("RuntimeError", audit)
+
     def test_public_http_auth_routes_fail_closed_with_stable_rate_errors(self) -> None:
         for _ in range(AUTH_START_RATE_LIMIT):
             status, _, _ = self.request("GET", "/auth/start")

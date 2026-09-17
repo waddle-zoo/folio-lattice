@@ -176,17 +176,21 @@ class AttachedMcpBridge:
         try:
             async with asyncio.timeout(self.timeout_seconds):
                 result = await self.caller.call(tool, request["arguments"])
-        except TimeoutError as exc:
-            self._audit(audit, "allow", "timeout", started)
-            raise PublicMcpError("MCP call timed out") from exc
+        except TimeoutError:
+            self._audit(audit, "error", "timeout", started)
+            raise PublicMcpError("MCP call timed out") from None
         except Exception:
-            self._audit(audit, "allow", "tool_error", started)
-            raise
-        if tool == "artifact_search":
-            result = _restrict_search_result(result, audit["artifact_id"])
-        encoded = json.dumps(result, separators=(",", ":"), allow_nan=False).encode()
+            self._audit(audit, "error", "tool_error", started)
+            raise PublicMcpError("MCP call failed safely") from None
+        try:
+            if tool == "artifact_search":
+                result = _restrict_search_result(result, audit["artifact_id"])
+            encoded = json.dumps(result, separators=(",", ":"), allow_nan=False).encode()
+        except Exception:
+            self._audit(audit, "error", "invalid_result", started)
+            raise PublicMcpError("MCP result failed validation") from None
         if len(encoded) > self.max_result_bytes:
-            self._audit(audit, "allow", "oversized_result", started)
+            self._audit(audit, "error", "oversized_result", started)
             raise PublicMcpError("MCP result exceeds the bridge size limit")
         self._audit(audit, "allow", "completed", started)
         return result

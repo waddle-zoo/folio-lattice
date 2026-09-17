@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -266,7 +267,7 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source["provider"], "slack")
         self.assertEqual(source["connection_id"], connection_id)
         self.assertEqual(source["channel"], "#deployments")
-        self.assertEqual(source["query"], "renderer")
+        self.assertEqual(source["query_hash"], hashlib.sha256(b"renderer").hexdigest())
         self.assertEqual(source["message_ids"], ["msg-1"])
         self.assertEqual(
             source,
@@ -277,7 +278,7 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
                 "channel": "#deployments",
                 "start_time": START,
                 "end_time": END,
-                "query": "renderer",
+                "query_hash": hashlib.sha256(b"renderer").hexdigest(),
                 "policy_version": "external-mcp-v1",
                 "message_ids": ["msg-1"],
             },
@@ -468,6 +469,18 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(FolioError, "exceeds the allowed size"):
             self._member_save(connection_id=connection_id, **arguments)
         self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)
+        audit = self.broker.audit(
+            tenant_id="tenant-a", actor="admin", connection_id=connection_id, limit=20
+        )
+        self.assertIn(
+            {"outcome": "failed", "reason": "slack_result_over_limit"},
+            [{"outcome": row["outcome"], "reason": row["reason"]} for row in audit],
+        )
+        self.assertIn(
+            {"outcome": "failed", "reason": "slack_result_invalid"},
+            [{"outcome": row["outcome"], "reason": row["reason"]} for row in audit],
+        )
+        self.assertNotIn("renderer", repr(audit))
 
     async def test_upstream_credential_echo_is_rejected_before_save(self) -> None:
         connection_id = await self._register()

@@ -52,7 +52,12 @@ from .identity import (
 )
 from .inspection import InspectionApp
 from .mcp_protocol import build_mcp_server
-from .public_mcp import AdminMcpClient, HttpMcpClient
+from .public_mcp import (
+    INTERNAL_PRINCIPAL_HEADER,
+    AdminMcpClient,
+    HttpMcpClient,
+    TrustedPrincipalRelay,
+)
 from .renderer import RendererApp
 from .service import DEFAULT_MAX_ARTIFACT_BYTES, FolioLattice
 from .sessions import (
@@ -612,6 +617,7 @@ class FolioHttpApp:
         local_tenant_id: str | None = None,
         local_actor_id: str | None = None,
         backup_operations: BackupOperationsMonitor | None = None,
+        principal_relay: TrustedPrincipalRelay | None = None,
     ):
         if max_request_bytes < 1:
             raise ValueError("max_request_bytes must be positive")
@@ -640,6 +646,7 @@ class FolioHttpApp:
         self.local_tenant_id = local_tenant_id
         self.local_actor_id = local_actor_id
         self.backup_operations = backup_operations
+        self.principal_relay = principal_relay
         self.audit_logger = audit_logger or logging.getLogger("folio_lattice.audit")
         self.audit_logger.setLevel(logging.INFO)
         self._auth_rate_limiters = {
@@ -936,6 +943,16 @@ class FolioHttpApp:
                 reset_request_principal(principal_token)
 
     def _authenticate(self, scope: Scope, *, allow_session: bool = True) -> Principal:
+        internal_token = _header_value(scope, INTERNAL_PRINCIPAL_HEADER)
+        if internal_token is not None:
+            if scope.get("path") != "/mcp":
+                raise AuthenticationError("internal principal is limited to MCP")
+            if self.principal_relay is None:
+                raise AuthenticationError("internal principal relay is unavailable")
+            principal = self.principal_relay.resolve(internal_token)
+            if principal is None or not isinstance(principal, Principal):
+                raise AuthenticationError("internal principal is invalid")
+            return principal
         session_id = _session_cookie(scope)
         if session_id is not None and allow_session:
             if self.session_store is None:
@@ -1423,7 +1440,9 @@ class FolioHttpApp:
                 details={"status_code": status},
             )
         except Exception:
-            self.audit_logger.exception("audit_persist_failed")
+            # Persistence failures are deliberately logged without traceback or
+            # exception text: adapters and database drivers may echo secrets.
+            self.audit_logger.warning("audit_persist_failed")
 
     @staticmethod
     async def _error(
@@ -1455,6 +1474,20 @@ class FolioHttpApp:
 
 def _session_cookie(scope: Scope) -> str | None:
     return _cookie(scope, SESSION_COOKIE_NAME)
+
+
+def _header_value(scope: Scope, name: str) -> str | None:
+    values = [
+        value
+        for header, value in scope.get("headers", [])
+        if header.lower() == name.lower().encode()
+    ]
+    if len(values) != 1:
+        return None
+    try:
+        return values[0].decode("ascii")
+    except UnicodeDecodeError:
+        return None
 
 
 def _client_key(scope: Scope) -> str:
@@ -1717,9 +1750,21 @@ def run_http(host: str, port: int) -> None:
     )
     connect_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
     scheme = "https" if settings.tls_certfile else "http"
+    local_mcp_endpoint = f"{scheme}://{connect_host}:{port}/mcp"
+    mcp_endpoint = settings.mcp_url or local_mcp_endpoint
+    if settings.deployment_mode == "hosted" and mcp_endpoint != local_mcp_endpoint:
+        raise ValueError(
+            "hosted mode requires FOLIO_MCP_URL to resolve to this server's local /mcp endpoint"
+        )
+    principal_relay = (
+        TrustedPrincipalRelay(mcp_endpoint)
+        if settings.deployment_mode == "hosted" and mcp_endpoint == local_mcp_endpoint
+        else None
+    )
     caller = HttpMcpClient(
-        settings.mcp_url or f"{scheme}://{connect_host}:{port}/mcp",
+        mcp_endpoint,
         max_result_bytes=settings.max_request_bytes,
+        principal_relay=principal_relay,
     )
     inspection = InspectionApp(
         caller,
@@ -1759,6 +1804,7 @@ def run_http(host: str, port: int) -> None:
             config_ready=True,
             local_tenant_id=settings.tenant_id if settings.deployment_mode == "local" else None,
             local_actor_id=settings.actor if settings.deployment_mode == "local" else None,
+            principal_relay=principal_relay,
         ),
         host=host,
         port=port,

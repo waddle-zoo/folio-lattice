@@ -47,15 +47,18 @@ TOOL_SCOPES = {
 def _tool_errors[T](operation: Callable[[], T]) -> T:
     try:
         return operation()
-    except (binascii.Error, ValueError, FolioError) as exc:
-        raise ToolError(str(exc)) from exc
+    except (binascii.Error, ValueError, FolioError, ToolError) as exc:
+        message = str(exc)
+    except Exception:
+        message = "MCP tool failed safely"
+    raise ToolError(message) from None
 
 
 def _decode(content_base64: str) -> bytes:
     try:
         return base64.b64decode(content_base64, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise ToolError("content_base64 is not valid base64") from exc
+    except (binascii.Error, ValueError):
+        raise ToolError("content_base64 is not valid base64") from None
 
 
 def build_mcp_server(

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
+from urllib.parse import quote
 
 from mcp import Client
 
@@ -314,6 +315,77 @@ class ExternalMcpServiceTests(unittest.TestCase):
                 approved_tools=[TOOL],
                 approved_resources=[],
                 allowed_origins=["https://127.0.0.1"],
+            )
+
+    def test_resource_allowlist_rejects_encoded_secrets_and_public_projection_is_safe(self) -> None:
+        for index, resource in enumerate(
+            (
+                "calendar://events/today?token=secret",
+                "calendar://user:password@events/today",
+                "calendar://events/today%3Ftoken%3Dsecret",
+                "calendar://events/today%253Ftoken%253Dsecret",
+            )
+        ):
+            with self.subTest(resource=resource):
+                with self.assertRaisesRegex(FolioError, "safe resource URIs"):
+                    self.service.register_external_connection(
+                        tenant_id="acme",
+                        actor="admin",
+                        name=f"unsafe-{index}",
+                        endpoint=ENDPOINT,
+                        approved_tools=[],
+                        approved_resources=[resource],
+                        allowed_origins=[ORIGIN],
+                    )
+
+        unsafe = FolioLattice._external_public(
+            {
+                "id": "legacy",
+                "name": "legacy",
+                "endpoint": f"{ENDPOINT}?token=secret",
+                "origin": "https://user:password@calendar.example",
+                "approved_resources": [RESOURCE, "calendar://events/today%3Ftoken=secret"],
+                "allowed_origins": [ORIGIN, "https://calendar.example%3Ftoken=secret"],
+                "policy_json": "{}",
+                "credential_ref": SECRET_REF,
+            }
+        )
+        self.assertNotIn("endpoint", unsafe)
+        self.assertNotIn("origin", unsafe)
+        self.assertEqual(unsafe["approved_resources"], [RESOURCE])
+        self.assertEqual(unsafe["allowed_origins"], [ORIGIN])
+        self.assertNotIn(SECRET_REF, repr(unsafe))
+
+        with self.assertRaisesRegex(FolioError, "external MCP origin is invalid"):
+            self.service.register_external_connection(
+                tenant_id="acme",
+                actor="admin",
+                name="encoded-endpoint",
+                endpoint="https://calendar.example/mcp%3Ftoken%3Dsecret",
+                approved_tools=[TOOL],
+                approved_resources=[],
+                allowed_origins=[ORIGIN],
+            )
+        with self.assertRaisesRegex(FolioError, "external MCP origin is invalid"):
+            self.service.register_external_connection(
+                tenant_id="acme",
+                actor="admin",
+                name="encoded-origin",
+                endpoint=ENDPOINT,
+                approved_tools=[TOOL],
+                approved_resources=[],
+                allowed_origins=["https://calendar.example%3Ftoken%3Dsecret"],
+            )
+        with self.assertRaisesRegex(FolioError, "opaque secret"):
+            self.service.register_external_connection(
+                tenant_id="acme",
+                actor="admin",
+                name="encoded-credential",
+                endpoint=ENDPOINT,
+                approved_tools=[TOOL],
+                approved_resources=[],
+                allowed_origins=[ORIGIN],
+                credential_ref="secret://acme/calendar%3Ftoken%3Dsecret",
             )
 
     def test_broker_uses_secret_server_side_and_audits_without_it(self) -> None:
@@ -762,6 +834,50 @@ class ExternalMcpServiceTests(unittest.TestCase):
                     tenant_id="acme", actor="admin", connection_id=record["id"], limit=20
                 )
                 self.assertNotIn(secret, repr(audit))
+
+    def test_broker_rejects_percent_encoded_credential_echoes(self) -> None:
+        secret = "percent secret/credential"
+        credentials = FakeCredentials(secret)
+        transport = FakeTransport()
+        broker = ExternalMcpBroker(self.service, credentials=credentials, transport=transport)
+        record = broker.register(
+            tenant_id="acme",
+            actor="admin",
+            name="percent-encoded",
+            endpoint=ENDPOINT,
+            approved_tools=[TOOL],
+            approved_resources=[RESOURCE],
+            allowed_origins=[ORIGIN],
+            credential_ref=SECRET_REF,
+            reason="approved",
+        )
+
+        encoded = quote(secret, safe="")
+        transport.call_tool = lambda *args, **kwargs: {"credential": encoded}  # type: ignore[method-assign]
+        transport.read_resource = lambda *args, **kwargs: {  # type: ignore[method-assign]
+            "credential": encoded
+        }
+        for operation in ("tool", "resource"):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(ExternalMcpError, "credential material") as raised:
+                    if operation == "tool":
+                        broker.call_tool(
+                            tenant_id="acme",
+                            actor="admin",
+                            connection_id=record["id"],
+                            tool_name=TOOL,
+                            arguments={},
+                        )
+                    else:
+                        broker.read_resource(
+                            tenant_id="acme",
+                            actor="admin",
+                            connection_id=record["id"],
+                            resource_uri=RESOURCE,
+                        )
+                self.assertNotIn(secret, str(raised.exception))
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertIsNone(raised.exception.__context__)
 
     def test_broker_sanitizes_transport_error_message_and_cause(self) -> None:
         for operation in ("tool", "resource", "health"):

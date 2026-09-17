@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import secrets
+import threading
+import time
 from collections.abc import Mapping
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from mcp import Client
+
+from .auth import Principal, get_request_principal
 
 PUBLIC_TOOLS = frozenset(
     {
@@ -42,6 +49,62 @@ class PublicMcpError(Exception):
     """Bounded, client-visible failure from the public MCP boundary."""
 
 
+INTERNAL_PRINCIPAL_HEADER = "x-folio-internal-principal"
+
+
+class TrustedPrincipalRelay:
+    """Issue short-lived opaque capabilities for same-process HTTP handoffs.
+
+    The token carries no identity and is never accepted from bridge content.  It
+    is usable only for the exact configured MCP endpoint and is revoked when the
+    nested client closes its connection.
+    """
+
+    def __init__(self, endpoint: str, *, ttl_seconds: float = 15.0) -> None:
+        parsed = urlsplit(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path != "/mcp":
+            raise ValueError("trusted principal relay endpoint must be an HTTP /mcp URL")
+        if ttl_seconds <= 0 or ttl_seconds > 60:
+            raise ValueError("trusted principal relay TTL is outside the allowed bound")
+        self.endpoint = endpoint
+        self.ttl_seconds = ttl_seconds
+        self._tokens: dict[str, tuple[float, Principal]] = {}
+        self._lock = threading.Lock()
+
+    def issue(self, principal: Principal) -> str:
+        if not isinstance(principal, Principal):
+            raise ValueError("a verified principal is required")
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            self._purge_locked()
+            self._tokens[self._digest(token)] = (time.monotonic() + self.ttl_seconds, principal)
+        return token
+
+    def resolve(self, token: str) -> Principal | None:
+        if not isinstance(token, str) or not token or len(token) > 256:
+            return None
+        with self._lock:
+            self._purge_locked()
+            entry = self._tokens.get(self._digest(token))
+            return entry[1] if entry is not None else None
+
+    def revoke(self, token: str) -> None:
+        if not isinstance(token, str):
+            return
+        with self._lock:
+            self._tokens.pop(self._digest(token), None)
+
+    @staticmethod
+    def _digest(token: str) -> str:
+        return hashlib.sha256(token.encode("ascii", "ignore")).hexdigest()
+
+    def _purge_locked(self) -> None:
+        now = time.monotonic()
+        for key, (expires_at, _) in tuple(self._tokens.items()):
+            if expires_at <= now:
+                self._tokens.pop(key, None)
+
+
 class ToolCaller(Protocol):
     async def call(self, tool: str, arguments: Mapping[str, Any]) -> Any: ...
 
@@ -57,16 +120,23 @@ class HttpMcpClient:
         *,
         timeout_seconds: float = 5,
         max_result_bytes: int = 13 * 1024 * 1024,
+        principal_relay: TrustedPrincipalRelay | None = None,
     ):
         if timeout_seconds <= 0 or max_result_bytes < 1:
             raise ValueError("MCP client limits must be positive")
         self.endpoint = endpoint
         self.timeout_seconds = timeout_seconds
         self.max_result_bytes = max_result_bytes
+        if principal_relay is not None and principal_relay.endpoint != endpoint:
+            raise ValueError("trusted principal relay is bound to another MCP endpoint")
+        self.principal_relay = principal_relay
 
     async def call(self, tool: str, arguments: Mapping[str, Any]) -> Any:
         if tool not in PUBLIC_TOOLS:
             raise PublicMcpError("tool is not part of the Folio MCP contract")
+        principal = get_request_principal()
+        if self.principal_relay is not None and principal is not None:
+            return await self._call_with_relay(tool, arguments, principal)
         try:
             async with asyncio.timeout(self.timeout_seconds):
                 async with Client(
@@ -75,12 +145,12 @@ class HttpMcpClient:
                     read_timeout_seconds=self.timeout_seconds,
                 ) as client:
                     result = await client.call_tool(tool, dict(arguments))
-        except TimeoutError as exc:
-            raise PublicMcpError("MCP call timed out") from exc
+        except TimeoutError:
+            raise PublicMcpError("MCP call timed out") from None
         except PublicMcpError:
             raise
-        except Exception as exc:
-            raise PublicMcpError("MCP service unavailable") from exc
+        except Exception:
+            raise PublicMcpError("MCP service unavailable") from None
 
         if result.is_error:
             messages = [item.text for item in result.content if item.type == "text"]
@@ -91,8 +161,8 @@ class HttpMcpClient:
             raise PublicMcpError("MCP tool returned no structured result")
         try:
             encoded = json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
-        except (TypeError, ValueError) as exc:
-            raise PublicMcpError("MCP tool returned an invalid structured result") from exc
+        except (TypeError, ValueError):
+            raise PublicMcpError("MCP tool returned an invalid structured result") from None
         if len(encoded) > self.max_result_bytes:
             raise PublicMcpError("MCP result exceeds the allowed size")
         if isinstance(value, dict) and set(value) == {"result"}:
@@ -100,6 +170,13 @@ class HttpMcpClient:
         return value
 
     async def ready(self) -> bool:
+        principal = get_request_principal()
+        if self.principal_relay is not None and principal is not None:
+            try:
+                await self._ready_with_relay(principal)
+                return True
+            except Exception:
+                return False
         try:
             async with asyncio.timeout(self.timeout_seconds):
                 async with Client(
@@ -111,6 +188,84 @@ class HttpMcpClient:
             return "artifact_read" in {tool.name for tool in tools.tools}
         except Exception:
             return False
+
+    async def _call_with_relay(
+        self, tool: str, arguments: Mapping[str, Any], principal: Principal
+    ) -> Any:
+        assert self.principal_relay is not None
+        token = self.principal_relay.issue(principal)
+        try:
+            result = await self._session_call(
+                token,
+                lambda session: session.call_tool(tool, dict(arguments)),
+            )
+        except TimeoutError:
+            raise PublicMcpError("MCP call timed out") from None
+        except PublicMcpError:
+            raise
+        except Exception:
+            raise PublicMcpError("MCP service unavailable") from None
+        finally:
+            self.principal_relay.revoke(token)
+        return self._decode_result(result)
+
+    async def _ready_with_relay(self, principal: Principal) -> None:
+        assert self.principal_relay is not None
+        token = self.principal_relay.issue(principal)
+        try:
+            result = await self._session_call(token, lambda session: session.list_tools())
+            if "artifact_read" not in {tool.name for tool in result.tools}:
+                raise PublicMcpError("MCP service is not ready")
+        finally:
+            self.principal_relay.revoke(token)
+
+    async def _session_call(self, token: str, operation: Any) -> Any:
+        """Run one MCP operation with only the server-owned relay header."""
+
+        try:
+            import importlib
+
+            try:
+                httpx = importlib.import_module("httpx2")
+            except ImportError:
+                httpx = importlib.import_module("httpx")
+            from mcp.client.session import ClientSession
+            from mcp.client.streamable_http import streamable_http_client
+        except Exception:
+            raise PublicMcpError("MCP service unavailable") from None
+        async with asyncio.timeout(self.timeout_seconds):
+            async with httpx.AsyncClient(
+                headers={INTERNAL_PRINCIPAL_HEADER: token},
+                timeout=self.timeout_seconds,
+                follow_redirects=False,
+                trust_env=False,
+            ) as http_client:
+                async with streamable_http_client(
+                    self.endpoint, http_client=http_client
+                ) as streams:
+                    async with ClientSession(
+                        streams[0], streams[1], read_timeout_seconds=self.timeout_seconds
+                    ) as session:
+                        await session.initialize()
+                        return await operation(session)
+
+    def _decode_result(self, result: Any) -> Any:
+        if result.is_error:
+            messages = [item.text for item in result.content if item.type == "text"]
+            message = " ".join(messages).strip() or "MCP tool failed"
+            raise PublicMcpError(message[:500])
+        value = result.structured_content
+        if value is None:
+            raise PublicMcpError("MCP tool returned no structured result")
+        try:
+            encoded = json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
+        except (TypeError, ValueError):
+            raise PublicMcpError("MCP tool returned an invalid structured result") from None
+        if len(encoded) > self.max_result_bytes:
+            raise PublicMcpError("MCP result exceeds the allowed size")
+        if isinstance(value, dict) and set(value) == {"result"}:
+            return value["result"]
+        return value
 
 
 class AdminMcpClient:
@@ -129,12 +284,12 @@ class AdminMcpClient:
             async with asyncio.timeout(self.timeout_seconds):
                 async with Client(self.server, raise_exceptions=False) as client:
                     result = await client.call_tool(tool, dict(arguments))
-        except TimeoutError as exc:
-            raise PublicMcpError("admin MCP call timed out") from exc
+        except TimeoutError:
+            raise PublicMcpError("admin MCP call timed out") from None
         except PublicMcpError:
             raise
-        except Exception as exc:
-            raise PublicMcpError("admin MCP service unavailable") from exc
+        except Exception:
+            raise PublicMcpError("admin MCP service unavailable") from None
         if result.is_error:
             messages = [item.text for item in result.content if item.type == "text"]
             raise PublicMcpError(" ".join(messages).strip()[:500] or "Admin MCP tool failed")

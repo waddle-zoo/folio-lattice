@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from mcp import Client
+from mcp.server.mcpserver.exceptions import ToolError
 
 from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
-from folio_lattice.mcp_protocol import build_mcp_server
+from folio_lattice.mcp_protocol import _tool_errors, build_mcp_server
 from folio_lattice.service import FolioLattice
 
 
@@ -223,6 +224,19 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
                 "artifact_search", {"query": "anything", "graph_root_artifact_id": ""}
             )
             self.assertTrue(invalid_root.is_error)
+
+    def test_unexpected_tool_failure_has_no_secret_exception_chain(self) -> None:
+        secret = "unexpected-tool-secret"
+
+        def explode() -> None:
+            raise RuntimeError(secret)
+
+        with self.assertRaises(ToolError) as raised:
+            _tool_errors(explode)
+        self.assertEqual(str(raised.exception), "MCP tool failed safely")
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
 
     async def test_graph_scoped_search_requires_graph_read_scope(self) -> None:
         server = build_mcp_server(self.service)

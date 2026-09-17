@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .auth import get_request_principal
-from .external_mcp import ExternalMcpBroker
+from .external_mcp import ExternalMcpBroker, ExternalMcpValidationError
 from .service import FolioError, FolioLattice
 
 SLACK_SEARCH_TOOL = "slack.search"
@@ -218,31 +219,70 @@ class ApprovedSlackConsumer:
             query=query,
             limit=limit,
         )
-        connection = self.broker.authorize_tool(
+        validated_messages: list[dict[str, str]] | None = None
+        policy_version = "external-mcp-v1"
+
+        def validate_policy(connection: Mapping[str, Any]) -> None:
+            nonlocal policy_version
+            policy_version = str(connection.get("policy_version", policy_version))
+            approved_channels, max_range = self._policy(connection)
+            if channel not in approved_channels:
+                raise ExternalMcpValidationError(
+                    "Slack channel is not approved",
+                    reason="slack_channel_denied",
+                    outcome="denied",
+                    safe_message=True,
+                )
+            if end - start > max_range:
+                raise ExternalMcpValidationError(
+                    "Slack time range exceeds the approved maximum",
+                    reason="slack_time_range_denied",
+                    outcome="denied",
+                    safe_message=True,
+                )
+
+        def validate_result(raw: Any) -> None:
+            nonlocal validated_messages
+            try:
+                validated_messages = self._messages(
+                    raw,
+                    channel=channel,
+                    start=start,
+                    end=end,
+                    limit=limit,
+                )
+            except FolioError as exc:
+                message = str(exc)
+                if "more messages than requested" in message:
+                    reason = "slack_result_over_limit"
+                elif "outside its resource bounds" in message:
+                    reason = "slack_result_out_of_bounds"
+                else:
+                    reason = "slack_result_invalid"
+                raise ExternalMcpValidationError(
+                    message, reason=reason, safe_message=True
+                ) from None
+
+        result = self.broker.call_tool(
             tenant_id=tenant_id,
             actor=actor,
             connection_id=connection_id,
             tool_name=SLACK_SEARCH_TOOL,
             arguments=arguments,
+            pre_validator=validate_policy,
+            result_validator=validate_result,
         )
-        approved_channels, max_range = self._policy(connection)
-        if channel not in approved_channels:
-            raise FolioError("Slack channel is not approved")
-        if end - start > max_range:
-            raise FolioError("Slack time range exceeds the approved maximum")
-        messages = self._messages(
-            self.broker.call_tool(
-                tenant_id=tenant_id,
-                actor=actor,
-                connection_id=connection_id,
-                tool_name=SLACK_SEARCH_TOOL,
-                arguments=arguments,
-            ),
-            channel=channel,
-            start=start,
-            end=end,
-            limit=limit,
-        )
+        messages = validated_messages
+        if messages is None:
+            # The broker invokes the result validator before recording success.
+            # Keep this guard for alternate broker implementations.
+            messages = self._messages(
+                result,
+                channel=channel,
+                start=start,
+                end=end,
+                limit=limit,
+            )
         return {
             "provider": "slack",
             "connection_id": connection_id,
@@ -250,19 +290,20 @@ class ApprovedSlackConsumer:
             "start_time": self._wire_timestamp(start),
             "end_time": self._wire_timestamp(end),
             "query": query,
-            "policy_version": connection["policy_version"],
+            "policy_version": policy_version,
             "messages": messages,
             "match_count": len(messages),
         }
 
     @staticmethod
     def _artifact_body(search: Mapping[str, Any]) -> bytes:
+        query_hash = hashlib.sha256(str(search["query"]).encode("utf-8")).hexdigest()
         lines = [
             "# Slack approved search",
             "",
             f"Channel: {search['channel']}",
             f"Time range: {search['start_time']} to {search['end_time']}",
-            f"Query: {search['query']}",
+            f"Query fingerprint: sha256:{query_hash}",
             "",
         ]
         for message in search["messages"]:
@@ -287,7 +328,7 @@ class ApprovedSlackConsumer:
         reason: str = "saved approved Slack search",
     ) -> dict[str, Any]:
         name = self._text(name, "artifact name", 255)
-        reason = self._text(reason, "reason", 2_000)
+        self._text(reason, "reason", 2_000)
         search = self._search_internal(
             tenant_id=tenant_id,
             actor=actor,
@@ -306,7 +347,7 @@ class ApprovedSlackConsumer:
             "channel": search["channel"],
             "start_time": search["start_time"],
             "end_time": search["end_time"],
-            "query": search["query"],
+            "query_hash": hashlib.sha256(search["query"].encode("utf-8")).hexdigest(),
             "policy_version": search["policy_version"],
             "message_ids": message_ids,
         }
@@ -316,7 +357,7 @@ class ApprovedSlackConsumer:
             data=self._artifact_body(search),
             media_type="text/markdown",
             actor=actor,
-            reason=reason,
+            reason="approved Slack search",
             source_context=source_context,
         )
         return {
