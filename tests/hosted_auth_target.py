@@ -74,6 +74,8 @@ TOOL_SCOPES = {
     "artifact_share": "artifact:share",
     "artifact_revoke": "artifact:share",
     "artifact_acl": "artifact:share",
+    "slack_search": "artifact:search",
+    "slack_save": "artifact:write",
     "external_mcp_connection_register": "tenant:admin",
     "external_mcp_connection_list": "tenant:admin",
     "external_mcp_connection_status": "tenant:admin",

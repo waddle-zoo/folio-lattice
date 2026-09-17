@@ -46,6 +46,8 @@ EXPECTED_TOOLS = (
     "artifact_share",
     "artifact_revoke",
     "artifact_acl",
+    "slack_search",
+    "slack_save",
     "external_mcp_connection_register",
     "external_mcp_connection_list",
     "external_mcp_connection_status",
