@@ -148,7 +148,8 @@ def dump_dom(browser: str, url: str, profile: Path) -> str:
 
 class DevTools:
     def __init__(self, browser: str, url: str, profile: Path):
-        self.port = free_port()
+        self.profile = profile
+        self.port: int | None = None
         self.process = subprocess.Popen(
             [
                 browser,
@@ -158,7 +159,7 @@ class DevTools:
                 "--disable-background-networking",
                 "--no-first-run",
                 f"--user-data-dir={profile}",
-                f"--remote-debugging-port={self.port}",
+                "--remote-debugging-port=0",
                 url,
             ],
             stdout=subprocess.PIPE,
@@ -175,8 +176,13 @@ class DevTools:
         self.command("Emulation.setFocusEmulationEnabled", {"enabled": True})
 
     def _target(self) -> dict[str, Any]:
+        active_port = self.profile / "DevToolsActivePort"
         for _ in range(150):
+            if self.process.poll() is not None:
+                break
             try:
+                if self.port is None:
+                    self.port = int(active_port.read_text().splitlines()[0])
                 with urllib.request.urlopen(
                     f"http://127.0.0.1:{self.port}/json/list", timeout=0.2
                 ) as response:
@@ -186,8 +192,8 @@ class DevTools:
                     return page
             except Exception:
                 time.sleep(0.05)
-        self.close()
-        raise AssertionError("Chrome DevTools endpoint did not become ready")
+        details = self.close()
+        raise AssertionError(f"Chrome DevTools endpoint did not become ready: {details[-2000:]}")
 
     def command(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         self.identifier += 1
@@ -828,6 +834,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
             control = start_server(environment, "http", control_port)
             renderer: subprocess.Popen[bytes] | None = None
             chrome: DevTools | None = None
+            bridge_exercised = False
             try:
                 wait_ready(control_origin, control)
                 target = create(
@@ -1014,6 +1021,10 @@ document.querySelector('#create').requestSubmit();
                     chrome.evaluate("document.querySelector('#preview').getAttribute('sandbox')"),
                     "allow-scripts",
                 )
+                chrome.wait(
+                    "document.querySelector('#bridge-status').textContent.includes('did not run')"
+                )
+                bridge_exercised = True
                 artifact_ax = chrome.command("Accessibility.getFullAXTree")["nodes"]
                 artifact_names = {node.get("name", {}).get("value") for node in artifact_ax}
                 artifact_roles = {node.get("role", {}).get("value") for node in artifact_ax}
@@ -1340,9 +1351,10 @@ document.querySelector('#search').requestSubmit();
                 if renderer is not None:
                     stop_server(renderer)
                 logs = stop_server(control)
-                self.assertIn('"request_id":"bridgeAllow"', logs)
-                self.assertIn('"request_id":"bridgeDeny"', logs)
-                self.assertNotIn('"request_id":"spoofRequest"', logs)
+                if bridge_exercised:
+                    self.assertIn('"request_id":"bridgeAllow"', logs)
+                    self.assertIn('"request_id":"bridgeDeny"', logs)
+                    self.assertNotIn('"request_id":"spoofRequest"', logs)
 
     @staticmethod
     def _hostile_source(

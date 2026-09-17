@@ -46,7 +46,7 @@ UI_CSS = """
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { min-width: 320px; margin: 0; background: var(--canvas); color: var(--ink); }
+body { min-width: 0; margin: 0; background: var(--canvas); color: var(--ink); }
 a { color: var(--blue); }
 a:hover { color: var(--blue-dark); }
 button, input, textarea, select { font: inherit; }
