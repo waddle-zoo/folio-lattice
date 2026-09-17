@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import mimetypes
 import os
 import sqlite3
 import uuid
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 TEXT_MEDIA_TYPES = {
     "application/javascript",
@@ -35,6 +37,12 @@ MAX_CONTEXT_BYTES = 32 * 1024
 MAX_QUERY_LENGTH = 500
 MAX_EDGE_TYPE_LENGTH = 100
 MAX_GRAPH_COMPONENT_NODES = 500
+MAX_EXTERNAL_ENDPOINT_LENGTH = 4_096
+MAX_EXTERNAL_CONNECTION_NAME_LENGTH = 255
+MAX_EXTERNAL_LIST_ITEMS = 128
+MAX_EXTERNAL_ITEM_LENGTH = 2_048
+MAX_EXTERNAL_ARGUMENT_BYTES = 64 * 1024
+EXTERNAL_MCP_POLICY_VERSION = "external-mcp-v1"
 ACL_ACTIONS = frozenset({"read", "write", "share"})
 ACL_SUBJECT_TYPE = "actor"
 OWNER_GRANT_REASON = "artifact owner"
@@ -180,6 +188,43 @@ class FolioLattice:
                 CREATE UNIQUE INDEX IF NOT EXISTS acl_grants_active_idx
                     ON acl_grants(tenant_id, artifact_id, subject_type, subject_id, action)
                     WHERE status = 'active';
+                CREATE TABLE IF NOT EXISTS external_mcp_connections (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+                    name TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    origin TEXT NOT NULL,
+                    transport TEXT NOT NULL CHECK(transport = 'streamable_http'),
+                    approved_tools TEXT NOT NULL,
+                    approved_resources TEXT NOT NULL,
+                    allowed_origins TEXT NOT NULL,
+                    credential_ref TEXT,
+                    status TEXT NOT NULL CHECK(status IN ('active', 'revoked')),
+                    health_status TEXT NOT NULL CHECK(health_status IN ('unknown', 'healthy', 'unhealthy')),
+                    last_health_at TEXT,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    revoked_by TEXT,
+                    revoked_at TEXT,
+                    policy_version TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS external_mcp_connections_name_idx
+                    ON external_mcp_connections(tenant_id, name);
+                CREATE INDEX IF NOT EXISTS external_mcp_connections_tenant_idx
+                    ON external_mcp_connections(tenant_id, status, created_at);
+                CREATE TABLE IF NOT EXISTS external_mcp_audit (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+                    connection_id TEXT NOT NULL,
+                    actor_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    tool_name TEXT,
+                    resource_uri TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS external_mcp_audit_lookup_idx
+                    ON external_mcp_audit(tenant_id, connection_id, created_at, id);
                 """
             )
             grant_columns = {row["name"] for row in db.execute("PRAGMA table_info(acl_grants)")}
@@ -1217,6 +1262,475 @@ class FolioLattice:
                 (tenant_id, artifact_id),
             ).fetchall()
         return [self._grant_dict(row) for row in rows]
+
+    @staticmethod
+    def _external_origin(value: str, *, endpoint: bool = False) -> str:
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > MAX_EXTERNAL_ENDPOINT_LENGTH
+            or value != value.strip()
+            or any(ord(character) < 0x21 or ord(character) == 0x7F for character in value)
+            or "*" in value
+        ):
+            raise FolioError("external MCP origin is invalid")
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or (endpoint and not parsed.path)
+            or (not endpoint and parsed.path)
+        ):
+            raise FolioError("external MCP origin is invalid")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise FolioError("external MCP origin is invalid") from exc
+        host = parsed.hostname
+        if host is None:
+            raise FolioError("external MCP origin is invalid")
+        if endpoint:
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                address = None
+            if address is not None and not address.is_global:
+                raise FolioError("external MCP endpoint host is not public")
+        bracketed_host = f"[{host.lower()}]" if ":" in host else host.lower()
+        return f"https://{bracketed_host}{f':{port}' if port is not None else ''}"
+
+    @staticmethod
+    def _external_items(field: str, values: object) -> list[str]:
+        if isinstance(values, (str, bytes)) or not isinstance(values, Iterable):
+            raise FolioError(f"{field} must be a list of exact strings")
+        items = list(values)
+        if len(items) > MAX_EXTERNAL_LIST_ITEMS:
+            raise FolioError(f"{field} has too many entries")
+        normalized: list[str] = []
+        for value in items:
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) > MAX_EXTERNAL_ITEM_LENGTH
+                or value != value.strip()
+                or any(ord(character) < 0x21 or ord(character) == 0x7F for character in value)
+                or "*" in value
+            ):
+                raise FolioError(f"{field} must contain exact, non-wildcard strings")
+            normalized.append(value)
+        if len(set(normalized)) != len(normalized):
+            raise FolioError(f"{field} must not contain duplicates")
+        return sorted(normalized)
+
+    @staticmethod
+    def _external_credential_ref(value: str | None) -> str | None:
+        if value is None:
+            return None
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > MAX_EXTERNAL_ITEM_LENGTH
+            or value != value.strip()
+            or any(ord(character) < 0x21 or ord(character) == 0x7F for character in value)
+        ):
+            raise FolioError("credential_ref must be an opaque secret:// reference")
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "secret"
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise FolioError("credential_ref must be an opaque secret:// reference")
+        return value
+
+    @staticmethod
+    def _external_json_list(value: str) -> list[str]:
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise FolioError("external MCP policy is invalid") from exc
+        if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+            raise FolioError("external MCP policy is invalid")
+        return parsed
+
+    @staticmethod
+    def _external_public(row: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in row.items() if key != "credential_ref"} | {
+            "credential_configured": row["credential_ref"] is not None
+        }
+
+    @staticmethod
+    def _write_external_audit(
+        db: sqlite3.Connection,
+        *,
+        tenant_id: str,
+        connection_id: str,
+        actor: str,
+        action: str,
+        outcome: str,
+        tool_name: str | None = None,
+        resource_uri: str | None = None,
+    ) -> None:
+        db.execute(
+            """
+            INSERT INTO external_mcp_audit(
+                id, tenant_id, connection_id, actor_id, action, outcome,
+                tool_name, resource_uri, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id("extaudit"),
+                tenant_id,
+                connection_id,
+                actor,
+                action,
+                outcome,
+                tool_name,
+                resource_uri,
+                utc_now(),
+            ),
+        )
+
+    def _external_row(
+        self, db: sqlite3.Connection, tenant_id: str, connection_id: str
+    ) -> dict[str, Any]:
+        row = db.execute(
+            """
+            SELECT id, tenant_id, name, endpoint, origin, transport,
+                   approved_tools, approved_resources, allowed_origins,
+                   credential_ref, status, health_status, last_health_at,
+                   created_by, created_at, revoked_by, revoked_at, policy_version
+            FROM external_mcp_connections
+            WHERE id = ? AND tenant_id = ?
+            """,
+            (connection_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            raise FolioError("external MCP connection not found")
+        values = dict(row)
+        for field in ("approved_tools", "approved_resources", "allowed_origins"):
+            values[field] = self._external_json_list(values[field])
+        return values
+
+    def register_external_connection(
+        self,
+        *,
+        tenant_id: str,
+        actor: str,
+        name: str,
+        endpoint: str,
+        approved_tools: list[str],
+        approved_resources: list[str],
+        allowed_origins: list[str],
+        credential_ref: str | None = None,
+        reason: str = "approved external MCP connection",
+    ) -> dict[str, Any]:
+        self._validate_text("tenant_id", tenant_id, MAX_NAME_LENGTH)
+        self._validate_text("actor", actor, MAX_NAME_LENGTH)
+        self._validate_text("name", name, MAX_EXTERNAL_CONNECTION_NAME_LENGTH)
+        self._validate_text("reason", reason, MAX_REASON_LENGTH)
+        endpoint_origin = self._external_origin(endpoint, endpoint=True)
+        tools = self._external_items("approved_tools", approved_tools)
+        resources = self._external_items("approved_resources", approved_resources)
+        origins = [self._external_origin(value) for value in allowed_origins]
+        if not tools and not resources:
+            raise FolioError("external MCP connection needs an explicit tool or resource allowlist")
+        if endpoint_origin not in origins:
+            raise FolioError("external MCP endpoint origin must be explicitly allowed")
+        credential = self._external_credential_ref(credential_ref)
+        connection_id = new_id("extconn")
+        now = utc_now()
+        try:
+            with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                self._ensure_tenant(db, tenant_id)
+                db.execute(
+                    """
+                    INSERT INTO external_mcp_connections(
+                        id, tenant_id, name, endpoint, origin, transport,
+                        approved_tools, approved_resources, allowed_origins,
+                        credential_ref, status, health_status, last_health_at,
+                        created_by, created_at, revoked_by, revoked_at, policy_version
+                    ) VALUES (?, ?, ?, ?, ?, 'streamable_http', ?, ?, ?, ?, 'active',
+                              'unknown', NULL, ?, ?, NULL, NULL, ?)
+                    """,
+                    (
+                        connection_id,
+                        tenant_id,
+                        name,
+                        endpoint,
+                        endpoint_origin,
+                        json.dumps(tools, separators=(",", ":")),
+                        json.dumps(resources, separators=(",", ":")),
+                        json.dumps(sorted(origins), separators=(",", ":")),
+                        credential,
+                        actor,
+                        now,
+                        EXTERNAL_MCP_POLICY_VERSION,
+                    ),
+                )
+                self._write_external_audit(
+                    db,
+                    tenant_id=tenant_id,
+                    connection_id=connection_id,
+                    actor=actor,
+                    action="register",
+                    outcome="allowed",
+                )
+        except sqlite3.IntegrityError as exc:
+            raise FolioError("external MCP connection name already exists") from exc
+        return self.external_connection_status(tenant_id, connection_id, actor=actor)
+
+    def list_external_connections(
+        self, tenant_id: str, *, actor: str, limit: int = MAX_EXTERNAL_LIST_ITEMS
+    ) -> list[dict[str, Any]]:
+        self._validate_text("tenant_id", tenant_id, MAX_NAME_LENGTH)
+        self._validate_text("actor", actor, MAX_NAME_LENGTH)
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT id, tenant_id, name, endpoint, origin, transport,
+                       approved_tools, approved_resources, allowed_origins,
+                       credential_ref, status, health_status, last_health_at,
+                       created_by, created_at, revoked_by, revoked_at, policy_version
+                FROM external_mcp_connections
+                WHERE tenant_id = ?
+                ORDER BY created_at, id
+                LIMIT ?
+                """,
+                (tenant_id, max(1, min(limit, MAX_EXTERNAL_LIST_ITEMS))),
+            ).fetchall()
+            values = []
+            for row in rows:
+                item = dict(row)
+                for field in ("approved_tools", "approved_resources", "allowed_origins"):
+                    item[field] = self._external_json_list(item[field])
+                values.append(self._external_public(item))
+        return values
+
+    def external_connection_for_broker(
+        self, tenant_id: str, connection_id: str, *, actor: str
+    ) -> dict[str, Any]:
+        self._validate_text("tenant_id", tenant_id, MAX_NAME_LENGTH)
+        self._validate_text("actor", actor, MAX_NAME_LENGTH)
+        with self.connect() as db:
+            return self._external_row(db, tenant_id, connection_id)
+
+    def external_connection_status(
+        self, tenant_id: str, connection_id: str, *, actor: str
+    ) -> dict[str, Any]:
+        connection = self.external_connection_for_broker(tenant_id, connection_id, actor=actor)
+        return self._external_public(connection)
+
+    def record_external_health(
+        self, tenant_id: str, connection_id: str, *, actor: str, status: str
+    ) -> None:
+        if status not in {"healthy", "unhealthy"}:
+            raise FolioError("external MCP health status is invalid")
+        with self.connect() as db:
+            connection = self._external_row(db, tenant_id, connection_id)
+            if connection["status"] == "revoked":
+                raise FolioError("external MCP connection is revoked")
+            db.execute(
+                "UPDATE external_mcp_connections SET health_status = ?, last_health_at = ? "
+                "WHERE id = ? AND tenant_id = ?",
+                (status, utc_now(), connection_id, tenant_id),
+            )
+            self._write_external_audit(
+                db,
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action="health_check",
+                outcome=status,
+            )
+
+    def revoke_external_connection(
+        self, tenant_id: str, connection_id: str, *, actor: str, reason: str
+    ) -> dict[str, Any]:
+        self._validate_text("actor", actor, MAX_NAME_LENGTH)
+        self._validate_text("reason", reason, MAX_REASON_LENGTH)
+        with self.connect() as db:
+            connection = self._external_row(db, tenant_id, connection_id)
+            outcome = "already_revoked" if connection["status"] == "revoked" else "revoked"
+            if connection["status"] != "revoked":
+                db.execute(
+                    "UPDATE external_mcp_connections SET status = 'revoked', revoked_by = ?, "
+                    "revoked_at = ? WHERE id = ? AND tenant_id = ?",
+                    (actor, utc_now(), connection_id, tenant_id),
+                )
+            self._write_external_audit(
+                db,
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action="revoke",
+                outcome=outcome,
+            )
+            connection = self._external_row(db, tenant_id, connection_id)
+        return self._external_public(connection)
+
+    def _record_external_denial(
+        self,
+        *,
+        tenant_id: str,
+        connection_id: str,
+        actor: str,
+        action: str,
+        tool_name: str | None = None,
+        resource_uri: str | None = None,
+    ) -> None:
+        with self.connect() as db:
+            tenant = db.execute("SELECT 1 FROM tenants WHERE id = ?", (tenant_id,)).fetchone()
+            if tenant is not None:
+                self._write_external_audit(
+                    db,
+                    tenant_id=tenant_id,
+                    connection_id=connection_id,
+                    actor=actor,
+                    action=action,
+                    outcome="denied",
+                    tool_name=tool_name,
+                    resource_uri=resource_uri,
+                )
+
+    def authorize_external_tool(
+        self,
+        tenant_id: str,
+        connection_id: str,
+        tool_name: str,
+        *,
+        actor: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            connection = self.external_connection_for_broker(tenant_id, connection_id, actor=actor)
+        except FolioError:
+            self._record_external_denial(
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action="tool_call",
+                tool_name=tool_name,
+            )
+            raise
+        if connection["status"] != "active":
+            self._record_external_denial(
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action="tool_call",
+                tool_name=tool_name,
+            )
+            raise FolioError("external MCP connection is revoked")
+        if tool_name not in connection["approved_tools"]:
+            self._record_external_denial(
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action="tool_call",
+                tool_name=tool_name,
+            )
+            raise FolioError("external MCP tool is not approved")
+        try:
+            encoded = json.dumps(dict(arguments), separators=(",", ":"), allow_nan=False).encode()
+        except (TypeError, ValueError) as exc:
+            raise FolioError("external MCP tool arguments are invalid") from exc
+        if len(encoded) > MAX_EXTERNAL_ARGUMENT_BYTES:
+            raise FolioError("external MCP tool arguments exceed the allowed size")
+        return connection
+
+    def authorize_external_resource(
+        self, tenant_id: str, connection_id: str, resource_uri: str, *, actor: str
+    ) -> dict[str, Any]:
+        try:
+            connection = self.external_connection_for_broker(tenant_id, connection_id, actor=actor)
+        except FolioError:
+            self._record_external_denial(
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action="resource_read",
+                resource_uri=resource_uri,
+            )
+            raise
+        if connection["status"] != "active":
+            self._record_external_denial(
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action="resource_read",
+                resource_uri=resource_uri,
+            )
+            raise FolioError("external MCP connection is revoked")
+        if resource_uri not in connection["approved_resources"]:
+            self._record_external_denial(
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action="resource_read",
+                resource_uri=resource_uri,
+            )
+            raise FolioError("external MCP resource is not approved")
+        return connection
+
+    def record_external_call(
+        self,
+        tenant_id: str,
+        connection_id: str,
+        *,
+        actor: str,
+        action: str,
+        outcome: str,
+        tool_name: str | None = None,
+        resource_uri: str | None = None,
+    ) -> None:
+        with self.connect() as db:
+            self._write_external_audit(
+                db,
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                actor=actor,
+                action=action,
+                outcome=outcome,
+                tool_name=tool_name,
+                resource_uri=resource_uri,
+            )
+
+    def external_mcp_audit(
+        self,
+        tenant_id: str,
+        *,
+        actor: str,
+        connection_id: str | None = None,
+        limit: int = MAX_EXTERNAL_LIST_ITEMS,
+    ) -> list[dict[str, Any]]:
+        self._validate_text("tenant_id", tenant_id, MAX_NAME_LENGTH)
+        self._validate_text("actor", actor, MAX_NAME_LENGTH)
+        with self.connect() as db:
+            if connection_id is None:
+                rows = db.execute(
+                    "SELECT id, connection_id, actor_id, action, outcome, tool_name, "
+                    "resource_uri, created_at FROM external_mcp_audit "
+                    "WHERE tenant_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (tenant_id, max(1, min(limit, MAX_EXTERNAL_LIST_ITEMS))),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT id, connection_id, actor_id, action, outcome, tool_name, "
+                    "resource_uri, created_at FROM external_mcp_audit "
+                    "WHERE tenant_id = ? AND connection_id = ? "
+                    "ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (tenant_id, connection_id, max(1, min(limit, MAX_EXTERNAL_LIST_ITEMS))),
+                ).fetchall()
+        return [dict(row) for row in rows]
 
     def health(self) -> dict[str, Any]:
         """Check persistent state without exposing tenant data."""

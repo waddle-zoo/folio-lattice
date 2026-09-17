@@ -10,10 +10,13 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .auth import get_request_principal
+from .external_mcp import ExternalMcpBroker
 from .service import FolioError, FolioLattice
 
 MAX_ID_LENGTH = 255
 MAX_BASE64_LENGTH = 12 * 1024 * 1024
+MAX_EXTERNAL_LIST_ITEMS = 128
+EXTERNAL_MCP_ADMIN_SCOPE = "tenant:admin"
 
 TOOL_SCOPES = {
     "artifact_create": "artifact:write",
@@ -30,6 +33,13 @@ TOOL_SCOPES = {
     "artifact_share": "artifact:share",
     "artifact_revoke": "artifact:share",
     "artifact_acl": "artifact:share",
+    "external_mcp_connection_register": EXTERNAL_MCP_ADMIN_SCOPE,
+    "external_mcp_connection_list": EXTERNAL_MCP_ADMIN_SCOPE,
+    "external_mcp_connection_status": EXTERNAL_MCP_ADMIN_SCOPE,
+    "external_mcp_connection_revoke": EXTERNAL_MCP_ADMIN_SCOPE,
+    "external_mcp_audit": EXTERNAL_MCP_ADMIN_SCOPE,
+    "external_mcp_tool_call": EXTERNAL_MCP_ADMIN_SCOPE,
+    "external_mcp_resource_read": EXTERNAL_MCP_ADMIN_SCOPE,
 }
 
 
@@ -52,6 +62,7 @@ def build_mcp_server(
     *,
     tenant_id: str | None = None,
     actor: str | None = None,
+    external_broker: ExternalMcpBroker | None = None,
 ) -> MCPServer:
     """Bind local identity or resolve one authenticated principal per request."""
 
@@ -69,6 +80,8 @@ def build_mcp_server(
 
     def policy_actor(request_actor: str) -> str | None:
         return None if fixed_local_identity else request_actor
+
+    broker = external_broker or ExternalMcpBroker(service)
 
     server = MCPServer(
         "folio-lattice",
@@ -308,6 +321,119 @@ def build_mcp_server(
                 artifact_id,
                 actor=request_actor,
                 authorization_actor=policy_actor(request_actor),
+            )
+        )
+
+    @server.tool(description="Register one tenant-admin-approved external MCP connection.")
+    def external_mcp_connection_register(
+        name: Annotated[str, Field(min_length=1, max_length=255)],
+        endpoint: Annotated[str, Field(min_length=1, max_length=4096)],
+        approved_tools: list[str],
+        approved_resources: list[str],
+        allowed_origins: list[str],
+        credential_ref: Annotated[str | None, Field(max_length=2048)] = None,
+        reason: Annotated[str, Field(min_length=1, max_length=2_000)] = (
+            "approved external MCP connection"
+        ),
+    ) -> dict[str, Any]:
+        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_connection_register"])
+        return _tool_errors(
+            lambda: broker.register(
+                tenant_id=request_tenant,
+                actor=request_actor,
+                name=name,
+                endpoint=endpoint,
+                approved_tools=approved_tools,
+                approved_resources=approved_resources,
+                allowed_origins=allowed_origins,
+                credential_ref=credential_ref,
+                reason=reason,
+            )
+        )
+
+    @server.tool(description="List tenant-scoped external MCP connection records.")
+    def external_mcp_connection_list(
+        limit: Annotated[int, Field(ge=1, le=MAX_EXTERNAL_LIST_ITEMS)] = 128,
+    ) -> list[dict[str, Any]]:
+        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_connection_list"])
+        return _tool_errors(
+            lambda: broker.list_connections(tenant_id=request_tenant, actor=request_actor)[:limit]
+        )
+
+    @server.tool(description="Read or probe one tenant-scoped external MCP connection status.")
+    def external_mcp_connection_status(
+        connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+        probe: bool = False,
+    ) -> dict[str, Any]:
+        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_connection_status"])
+        return _tool_errors(
+            lambda: broker.health(
+                tenant_id=request_tenant,
+                actor=request_actor,
+                connection_id=connection_id,
+                probe=probe,
+            )
+        )
+
+    @server.tool(description="Revoke one external MCP connection immediately.")
+    def external_mcp_connection_revoke(
+        connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+        reason: Annotated[str, Field(min_length=1, max_length=2_000)] = "revoked connection",
+    ) -> dict[str, Any]:
+        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_connection_revoke"])
+        return _tool_errors(
+            lambda: broker.revoke(
+                tenant_id=request_tenant,
+                actor=request_actor,
+                connection_id=connection_id,
+                reason=reason,
+            )
+        )
+
+    @server.tool(description="List secret-free audit decisions for external MCP connections.")
+    def external_mcp_audit(
+        connection_id: Annotated[str | None, Field(max_length=MAX_ID_LENGTH)] = None,
+        limit: Annotated[int, Field(ge=1, le=MAX_EXTERNAL_LIST_ITEMS)] = 128,
+    ) -> list[dict[str, Any]]:
+        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_audit"])
+        return _tool_errors(
+            lambda: broker.audit(
+                tenant_id=request_tenant,
+                actor=request_actor,
+                connection_id=connection_id,
+                limit=limit,
+            )
+        )
+
+    @server.tool(description="Call one exact tool on one approved external MCP connection.")
+    def external_mcp_tool_call(
+        connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+        tool_name: Annotated[str, Field(min_length=1, max_length=2_048)],
+        arguments: dict[str, Any] | None = None,
+    ) -> Any:
+        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_tool_call"])
+        return _tool_errors(
+            lambda: broker.call_tool(
+                tenant_id=request_tenant,
+                actor=request_actor,
+                connection_id=connection_id,
+                tool_name=tool_name,
+                arguments=arguments or {},
+            )
+        )
+
+    @server.tool(description="Read one exact resource on one approved external MCP connection.")
+    def external_mcp_resource_read(
+        connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
+        resource_uri: Annotated[str, Field(min_length=1, max_length=2_048)],
+    ) -> Any:
+        request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_resource_read"])
+        return _tool_errors(
+            lambda: broker.read_resource(
+                tenant_id=request_tenant,
+                actor=request_actor,
+                connection_id=connection_id,
+                resource_uri=resource_uri,
             )
         )
 
