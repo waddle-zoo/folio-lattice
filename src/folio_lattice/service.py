@@ -1043,27 +1043,23 @@ class FolioLattice:
             cursor_params: tuple[str, ...] = ()
             if cursor_timestamp is not None and cursor_artifact_id is not None:
                 cursor_sql = """
-                      AND (
-                          COALESCE(v.created_at, a.created_at) < ?
+                      WHERE (
+                          updated_at < ?
                           OR (
-                              COALESCE(v.created_at, a.created_at) = ?
-                              AND a.id < ?
+                              updated_at = ?
+                              AND artifact_id < ?
                           )
                       )
                 """
                 cursor_params = (cursor_timestamp, cursor_timestamp, cursor_artifact_id)
             readable_sql = (
                 """
-                WITH readable AS (
-                    SELECT a.id AS artifact_id, a.name AS artifact_name,
+                WITH visible_base AS (
+                    SELECT a.tenant_id, a.id AS artifact_id, a.name AS artifact_name,
                            a.media_type, a.created_at,
                            a.current_version_id AS version_id,
                            v.created_at AS updated_at,
-                           v.source_context,
-                           (SELECT COUNT(*) FROM edges e
-                            WHERE e.tenant_id = a.tenant_id
-                              AND (e.source_artifact_id = a.id
-                                   OR e.target_artifact_id = a.id)) AS graph_edges
+                           v.source_context
                     FROM artifacts a
                     JOIN versions v
                       ON v.id = a.current_version_id AND v.tenant_id = a.tenant_id
@@ -1072,8 +1068,27 @@ class FolioLattice:
                 + component_sql
                 + " AND "
                 + access_sql
+                + """
+                ), readable_base AS (
+                    SELECT * FROM visible_base
+                """
                 + cursor_sql
                 + """
+                ), readable AS (
+                    SELECT rb.artifact_id, rb.artifact_name, rb.media_type,
+                           rb.created_at, rb.version_id, rb.updated_at,
+                           rb.source_context,
+                           (SELECT COUNT(*) FROM edges e
+                            JOIN visible_base other
+                              ON other.artifact_id = CASE
+                                  WHEN e.source_artifact_id = rb.artifact_id
+                                  THEN e.target_artifact_id
+                                  ELSE e.source_artifact_id
+                              END
+                            WHERE e.tenant_id = rb.tenant_id
+                              AND (e.source_artifact_id = rb.artifact_id
+                                   OR e.target_artifact_id = rb.artifact_id)) AS graph_edges
+                    FROM readable_base rb
                 ), metadata_matches AS (
                     SELECT r.*, NULL AS chunk_id, NULL AS content
                     FROM readable r

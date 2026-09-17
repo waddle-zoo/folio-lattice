@@ -211,6 +211,33 @@ class ServiceTests(unittest.TestCase):
             results = self.service.search("acme", "bounded", limit=100, actor="reader")
         self.assertEqual(len(results), 2)
 
+    def test_search_graph_context_counts_only_readable_neighbors(self):
+        root = self.service.create_artifact(
+            tenant_id="acme", name="reader-root.md", data=b"root marker", actor="reader"
+        )
+        private = self.service.create_artifact(
+            tenant_id="acme", name="private-neighbor.md", data=b"private marker", actor="owner"
+        )
+        # Direct service setup bypasses write ACL only to model an existing edge
+        # created by the owning workflow; reads must still enforce ACL visibility.
+        self.service.link("acme", root["artifact"]["id"], private["artifact"]["id"], "references")
+        self.service.share_artifact(
+            "acme", root["artifact"]["id"], actor="reader", subject_actor_id="owner"
+        )
+
+        reader_root = self.service.search("acme", "reader-root", actor="reader")
+        self.assertEqual(len(reader_root), 1)
+        self.assertEqual(reader_root[0]["graph_edges"], 0)
+        self.assertEqual(reader_root[0]["graph_context"]["edge_count"], 0)
+        self.assertEqual(self.service.search("acme", "private marker", actor="reader"), [])
+
+        owner_root = self.service.search("acme", "reader-root", actor="owner")
+        self.assertEqual(len(owner_root), 1)
+        self.assertEqual(owner_root[0]["graph_edges"], 1)
+        owner_private = self.service.search("acme", "private marker", actor="owner")
+        self.assertEqual(len(owner_private), 1)
+        self.assertEqual(owner_private[0]["graph_context"]["edge_count"], 1)
+
     def test_parent_mismatch_does_not_create_version(self):
         first = self.service.create_artifact(
             tenant_id="acme", name="one.txt", data=b"one", media_type="text/plain"
