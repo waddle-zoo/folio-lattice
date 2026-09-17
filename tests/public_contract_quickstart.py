@@ -278,7 +278,6 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         updated_version_id = updated["id"]
         version_ids.add(updated_version_id)
         assert updated_version_id != root_version_id
-        version_ids.add(updated_version_id)
 
         current_root = await call(client, "artifact_read", {"artifact_id": root_id})
         old_root = await call(
