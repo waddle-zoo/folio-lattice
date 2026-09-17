@@ -116,6 +116,10 @@ class FakeTransport:
         self.last_credential: str | None = None
         self.echo_credential = False
 
+    def validate_registration(self, endpoint: str) -> None:
+        if endpoint != ENDPOINT:
+            raise ExternalMcpError("test upstream endpoint is invalid")
+
     def health(self, endpoint: str, *, credential: str | None) -> str:
         self.last_credential = credential
         return "healthy"
@@ -300,6 +304,43 @@ class ExternalMcpServiceTests(unittest.TestCase):
         self.assertNotIn(UPSTREAM_SECRET, repr(audit))
         self.assertNotIn(UPSTREAM_SECRET, repr(record))
 
+    def test_broker_requires_transport_registration_validation(self) -> None:
+        class MissingValidator:
+            def health(self, endpoint: str, *, credential: str | None) -> str:
+                del endpoint, credential
+                return "healthy"
+
+            def call_tool(
+                self,
+                endpoint: str,
+                tool_name: str,
+                arguments: dict[str, Any],
+                *,
+                credential: str | None,
+            ) -> Any:
+                del endpoint, tool_name, arguments, credential
+                return {}
+
+            def read_resource(
+                self, endpoint: str, resource_uri: str, *, credential: str | None
+            ) -> Any:
+                del endpoint, resource_uri, credential
+                return {}
+
+        broker = ExternalMcpBroker(self.service, transport=MissingValidator())
+        with self.assertRaisesRegex(ExternalMcpError, "cannot validate registration"):
+            broker.register(
+                tenant_id="acme",
+                actor="admin",
+                name="calendar",
+                endpoint=ENDPOINT,
+                approved_tools=[TOOL],
+                approved_resources=[],
+                allowed_origins=[ORIGIN],
+                credential_ref=None,
+                reason="approved",
+            )
+
     def test_broker_rejects_credential_echo_from_upstream(self) -> None:
         credentials = FakeCredentials()
         transport = FakeTransport()
@@ -450,6 +491,63 @@ class ExternalMcpHttpTransportTests(unittest.TestCase):
             HttpExternalMcpTransport(dns_resolver=rebinding_dns)._resolve_endpoint(ENDPOINT)
         with self.assertRaisesRegex(ExternalMcpError, "blocked address"):
             HttpExternalMcpTransport()._resolve_endpoint("https://127.0.0.1/mcp")
+
+    def test_registration_rejects_localhost_and_non_global_dns_before_persisting(self) -> None:
+        def private_dns(host: str, port: int, **kwargs: Any) -> list[Any]:
+            del host, kwargs
+            return [(2, 1, 6, "", ("10.0.0.1", port))]
+
+        transport = HttpExternalMcpTransport(dns_resolver=self.public_dns)
+        broker = ExternalMcpBroker(self.service, transport=transport)
+        for name, endpoint, origin in (
+            ("localhost", "https://localhost/mcp", "https://localhost"),
+            ("literal", "https://127.0.0.1/mcp", "https://127.0.0.1"),
+        ):
+            with self.assertRaisesRegex(ExternalMcpError, "blocked address"):
+                broker.register(
+                    tenant_id="acme",
+                    actor="admin",
+                    name=name,
+                    endpoint=endpoint,
+                    approved_tools=[TOOL],
+                    approved_resources=[],
+                    allowed_origins=[origin],
+                    credential_ref=None,
+                    reason="approved",
+                )
+
+        private_broker = ExternalMcpBroker(
+            self.service,
+            transport=HttpExternalMcpTransport(dns_resolver=private_dns),
+        )
+        with self.assertRaisesRegex(ExternalMcpError, "blocked address"):
+            private_broker.register(
+                tenant_id="acme",
+                actor="admin",
+                name="private",
+                endpoint=ENDPOINT,
+                approved_tools=[TOOL],
+                approved_resources=[],
+                allowed_origins=[ORIGIN],
+                credential_ref=None,
+                reason="approved",
+            )
+        with self.service.connect() as db:
+            self.assertIsNone(
+                db.execute(
+                    "SELECT id FROM external_mcp_connections WHERE name = ?", ("private",)
+                ).fetchone()
+            )
+
+    def test_registration_dns_resolution_is_bounded(self) -> None:
+        def slow_dns(host: str, port: int, **kwargs: Any) -> list[Any]:
+            del host, port, kwargs
+            time.sleep(0.05)
+            return []
+
+        transport = HttpExternalMcpTransport(timeout_seconds=0.001, dns_resolver=slow_dns)
+        with self.assertRaisesRegex(ExternalMcpError, "resolution timed out"):
+            transport.validate_registration(ENDPOINT)
 
     def test_transport_bounds_timeout_and_response_size(self) -> None:
         async def slow_upstream(request: Any) -> Any:

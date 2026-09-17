@@ -79,6 +79,8 @@ class CredentialResolver:
 class ExternalMcpTransport(Protocol):
     """Call an already-approved upstream without accepting caller destinations."""
 
+    def validate_registration(self, endpoint: str) -> None: ...
+
     def health(self, endpoint: str, *, credential: str | None) -> str: ...
 
     def call_tool(
@@ -105,6 +107,10 @@ class UnavailableCredentialBroker:
 
 class UnavailableExternalMcpTransport:
     """Fail closed until a deployment supplies its bounded MCP transport adapter."""
+
+    def validate_registration(self, endpoint: str) -> None:
+        del endpoint
+        raise ExternalMcpError("external MCP transport unavailable")
 
     def health(self, endpoint: str, *, credential: str | None) -> str:
         del endpoint, credential
@@ -149,6 +155,13 @@ class HttpExternalMcpTransport:
         self.max_response_bytes = max_response_bytes
         self._dns_resolver = dns_resolver or socket.getaddrinfo
         self._http_transport = http_transport
+
+    def validate_registration(self, endpoint: str) -> None:
+        """Reject unsafe destinations before the registry writes them."""
+        try:
+            asyncio.run(self._bounded_resolve(endpoint))
+        except TimeoutError:
+            raise ExternalMcpError("external MCP endpoint resolution timed out") from None
 
     def health(self, endpoint: str, *, credential: str | None) -> str:
         return self._run(endpoint, credential, "health", None)
@@ -207,6 +220,10 @@ class HttpExternalMcpTransport:
     ) -> Any:
         async with asyncio.timeout(self.timeout_seconds):
             return await self._request(endpoint, credential, operation, value)
+
+    async def _bounded_resolve(self, endpoint: str) -> tuple[str, tuple[str, ...]]:
+        async with asyncio.timeout(self.timeout_seconds):
+            return await asyncio.to_thread(self._resolve_endpoint, endpoint)
 
     async def _request(
         self,
@@ -291,6 +308,8 @@ class HttpExternalMcpTransport:
             raise ExternalMcpError("external MCP endpoint is invalid") from None
         if not canonical_host:
             raise ExternalMcpError("external MCP endpoint is invalid")
+        if canonical_host == "localhost" or canonical_host.endswith(".localhost"):
+            raise ExternalMcpError("external MCP endpoint resolves to a blocked address")
         try:
             literal = ipaddress.ip_address(canonical_host)
         except ValueError:
@@ -448,6 +467,15 @@ class ExternalMcpBroker:
         credential_ref: str | None,
         reason: str,
     ) -> dict[str, Any]:
+        validator = getattr(self.transport, "validate_registration", None)
+        if not callable(validator):
+            raise ExternalMcpError("external MCP transport cannot validate registration")
+        try:
+            validator(endpoint)
+        except ExternalMcpError:
+            raise
+        except Exception:
+            raise ExternalMcpError("external MCP endpoint validation failed") from None
         return self.service.register_external_connection(
             tenant_id=tenant_id,
             actor=actor,

@@ -251,6 +251,9 @@ class _LoopbackExternalTransport:
         self.local_endpoint = local_endpoint
         self.transport = TestOnlyLoopbackHttpTransport(timeout_seconds=0.25)
 
+    def validate_registration(self, endpoint: str) -> None:
+        self._endpoint(endpoint)
+
     def _endpoint(self, endpoint: str) -> str:
         if endpoint != APPROVED_UPSTREAM_ENDPOINT:
             raise ValueError("unexpected approved upstream endpoint")
