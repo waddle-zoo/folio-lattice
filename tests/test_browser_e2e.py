@@ -25,6 +25,8 @@ from websockets.sync.client import connect
 
 from folio_lattice.inspection import UI_CSS, UI_JS, ui_html
 
+RENDERER_CAPABILITY_SECRET = "test-renderer-capability-secret-012345678901234567890123"
+
 
 def free_port() -> int:
     with socket.socket() as listener:
@@ -759,6 +761,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 "FOLIO_TENANT_ID": disposable_tenant("browser-test"),
                 "FOLIO_CONTROL_ORIGIN": harness_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
+                "FOLIO_RENDERER_CAPABILITY_SECRET": RENDERER_CAPABILITY_SECRET,
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
             }
             control = start_server(environment, "http", control_port)
@@ -885,6 +888,7 @@ parent.postMessage({{type: 'folio-linked-assets', value: linked ? 'linked-assets
                 "FOLIO_ACTOR": "browser-persona",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
+                "FOLIO_RENDERER_CAPABILITY_SECRET": RENDERER_CAPABILITY_SECRET,
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
             }
             control = start_server(environment, "http", control_port)
@@ -1168,6 +1172,7 @@ parent.postMessage({{type: 'folio-linked-assets', value: linked ? 'linked-assets
                 "FOLIO_ACTOR": "browser-persona",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
+                "FOLIO_RENDERER_CAPABILITY_SECRET": RENDERER_CAPABILITY_SECRET,
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
             }
             control = start_server(environment, "http", control_port)

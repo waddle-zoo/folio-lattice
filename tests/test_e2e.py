@@ -15,6 +15,12 @@ from typing import Any
 
 from mcp import Client, StdioServerParameters
 
+from folio_lattice.auth import Principal
+from folio_lattice.public_mcp import HttpMcpClient, PublicMcpError, SignedPrincipalRelay
+from folio_lattice.service import FolioLattice
+
+RENDERER_CAPABILITY_SECRET = "test-renderer-capability-secret-012345678901234567890123"
+
 
 def free_port() -> int:
     with socket.socket() as listener:
@@ -131,6 +137,7 @@ class HttpE2ETests(unittest.TestCase):
                 "FOLIO_ACTOR": "public-contract-fixture",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
+                "FOLIO_RENDERER_CAPABILITY_SECRET": RENDERER_CAPABILITY_SECRET,
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
             }
             control = start_server(environment, "http", control_port)
@@ -171,6 +178,110 @@ class HttpE2ETests(unittest.TestCase):
                 logs = stop_server(control)
                 self.assertIn('"decision":"allow"', logs)
                 self.assertIn('"decision":"deny"', logs)
+
+    def test_renderer_capability_isolated_across_actors_tenants_and_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_port, render_port = free_port(), free_port()
+            control_origin = f"http://127.0.0.1:{control_port}"
+            render_origin = f"http://127.0.0.1:{render_port}"
+            environment = {
+                **os.environ,
+                "FOLIO_DB_PATH": str(root / "folio.db"),
+                "FOLIO_BLOB_ROOT": str(root / "blobs"),
+                "FOLIO_TENANT_ID": "capability-tenant",
+                "FOLIO_ACTOR": "owner-actor",
+                "FOLIO_CONTROL_ORIGIN": control_origin,
+                "FOLIO_RENDER_ORIGIN": render_origin,
+                "FOLIO_RENDERER_CAPABILITY_SECRET": RENDERER_CAPABILITY_SECRET,
+                "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            }
+            control = start_server(environment, "http", control_port)
+            renderer: subprocess.Popen[bytes] | None = None
+            try:
+                wait_ready(control_origin, control)
+                owner = create(control_origin, "owner.css", b"OWNER_MARKER", "text/css")
+                service = FolioLattice(root / "folio.db", root / "blobs")
+                private = service.create_artifact(
+                    tenant_id="capability-tenant",
+                    name="private.css",
+                    data=b"PRIVATE_MARKER",
+                    media_type="text/css",
+                    actor="other-actor",
+                )
+                cross_tenant = service.create_artifact(
+                    tenant_id="another-tenant",
+                    name="cross.css",
+                    data=b"CROSS_TENANT_MARKER",
+                    media_type="text/css",
+                    actor="owner-actor",
+                )
+                renderer = start_server(
+                    {**environment, "FOLIO_MCP_URL": f"{control_origin}/mcp"},
+                    "renderer",
+                    render_port,
+                )
+                wait_ready(render_origin, renderer)
+
+                def read_content(artifact: dict[str, Any]) -> bytes:
+                    url = (
+                        f"{render_origin}/content/{artifact['artifact']['id']}"
+                        f"/{artifact['version']['id']}"
+                    )
+                    with urllib.request.urlopen(
+                        urllib.request.Request(url, headers={"Sec-Fetch-Dest": "style"}),
+                        timeout=10,
+                    ) as response:
+                        return response.read()
+
+                self.assertEqual(read_content(owner), b"OWNER_MARKER")
+                for artifact, marker in (
+                    (private, b"PRIVATE_MARKER"),
+                    (cross_tenant, b"CROSS_TENANT_MARKER"),
+                ):
+                    url = (
+                        f"{render_origin}/content/{artifact['artifact']['id']}"
+                        f"/{artifact['version']['id']}"
+                    )
+                    with self.assertRaises(urllib.error.HTTPError) as denied:
+                        urllib.request.urlopen(
+                            urllib.request.Request(url, headers={"Sec-Fetch-Dest": "style"}),
+                            timeout=10,
+                        )
+                    self.assertIn(denied.exception.code, {400, 401, 404})
+                    self.assertNotIn(marker, denied.exception.read())
+
+                mismatch_url = f"{render_origin}/content/{owner['artifact']['id']}/ver_mismatched"
+                with self.assertRaises(urllib.error.HTTPError) as mismatch:
+                    urllib.request.urlopen(
+                        urllib.request.Request(mismatch_url, headers={"Sec-Fetch-Dest": "style"}),
+                        timeout=10,
+                    )
+                self.assertIn(mismatch.exception.code, {400, 404})
+
+                async def forged_call() -> None:
+                    forged = HttpMcpClient(
+                        f"{control_origin}/mcp",
+                        principal_relay=SignedPrincipalRelay(
+                            f"{control_origin}/mcp",
+                            "wrong-renderer-secret-012345678901234567890123",
+                        ),
+                        principal=Principal(
+                            tenant_id="capability-tenant",
+                            actor_id="owner-actor",
+                            issuer="forged",
+                            subject="forged",
+                            scopes=frozenset({"artifact:read"}),
+                        ),
+                    )
+                    with self.assertRaises(PublicMcpError):
+                        await forged.call("artifact_read", {"artifact_id": owner["artifact"]["id"]})
+
+                asyncio.run(forged_call())
+            finally:
+                if renderer is not None:
+                    stop_server(renderer)
+                stop_server(control)
 
     def test_http_and_black_box_hyperset_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -356,6 +467,7 @@ class InspectionRendererE2ETests(unittest.TestCase):
                 "FOLIO_ACTOR": "inspection-user",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
+                "FOLIO_RENDERER_CAPABILITY_SECRET": RENDERER_CAPABILITY_SECRET,
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
             }
             control = start_server(environment, "http", control_port)

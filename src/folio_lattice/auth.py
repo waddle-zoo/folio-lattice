@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -45,8 +46,27 @@ class Principal:
         return self.actor_id
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityBinding:
+    """A server-owned, request-scoped capability for an MCP handoff."""
+
+    tool: str
+    arguments_digest: str
+
+
+def capability_arguments_digest(arguments: Mapping[str, Any]) -> str:
+    """Digest the exact tool arguments covered by a renderer capability."""
+
+    normalized = {key: value for key, value in arguments.items() if value is not None}
+    encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 _request_principal: ContextVar[Principal | None] = ContextVar(
     "folio_request_principal", default=None
+)
+_request_capability: ContextVar[CapabilityBinding | None] = ContextVar(
+    "folio_request_capability", default=None
 )
 
 
@@ -60,6 +80,18 @@ def set_request_principal(principal: Principal | None) -> Any:
 
 def reset_request_principal(token: Any) -> None:
     _request_principal.reset(token)
+
+
+def get_request_capability() -> CapabilityBinding | None:
+    return _request_capability.get()
+
+
+def set_request_capability(capability: CapabilityBinding | None) -> Any:
+    return _request_capability.set(capability)
+
+
+def reset_request_capability(token: Any) -> None:
+    _request_capability.reset(token)
 
 
 @dataclass(frozen=True, slots=True)

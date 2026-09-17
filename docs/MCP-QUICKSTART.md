@@ -5,6 +5,14 @@ catalog. Tenant and actor identity come from the authenticated server context,
 not tool arguments. Retain artifact IDs from results: filenames are labels and
 need not be unique.
 
+The two-process local stack requires one shared
+`FOLIO_RENDERER_CAPABILITY_SECRET` (at least 32 characters) in both the
+control and renderer processes. The renderer signs a short-lived capability
+for each MCP read; the control server verifies its tenant, actor, read scope,
+artifact ID, and version ID before the read. Do not put a tenant, actor, or
+capability token in an asset URL. Hosted mode without a configured renderer
+identity/capability fails closed.
+
 ## Root and component semantics
 
 A graph has no permanently designated root. A `start_artifact_id` or
@@ -140,8 +148,9 @@ The returned `html.artifact.id` and `html.version.id` are the values used for
 the HTML node below. The two URLs are intentionally version-pinned: a later
 write creates a new version and never changes what an older HTML version
 loads. The renderer serves these URLs only after the authenticated MCP
-`artifact_read` applies tenant and ACL checks; missing artifacts, mismatched
-artifact/version pairs, cross-tenant IDs, and denied artifacts fail closed.
+`artifact_read` applies the verified renderer capability plus tenant and ACL
+checks; missing artifacts, mismatched artifact/version pairs, cross-tenant
+IDs, and denied artifacts fail closed.
 Do not substitute an artifact name, a mutable `render/<id>` URL, a remote URL,
 or a guessed version.
 

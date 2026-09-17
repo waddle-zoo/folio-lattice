@@ -35,7 +35,9 @@ from .auth import (
     OidcVerifier,
     Principal,
     get_request_principal,
+    reset_request_capability,
     reset_request_principal,
+    set_request_capability,
     set_request_principal,
 )
 from .backup_ops import BackupOperationsMonitor
@@ -56,6 +58,7 @@ from .public_mcp import (
     INTERNAL_PRINCIPAL_HEADER,
     AdminMcpClient,
     HttpMcpClient,
+    SignedPrincipalRelay,
     TrustedPrincipalRelay,
 )
 from .renderer import RendererApp
@@ -192,6 +195,7 @@ class Settings:
     control_origin: str
     render_origin: str
     mcp_url: str | None
+    renderer_capability_secret: str | None
     deployment_mode: str
     bridge_timeout_seconds: float
     public_mcp_timeout_seconds: float
@@ -302,6 +306,7 @@ class Settings:
             control_origin=_origin_env("FOLIO_CONTROL_ORIGIN", "http://127.0.0.1:8000"),
             render_origin=_origin_env("FOLIO_RENDER_ORIGIN", "http://127.0.0.1:8001"),
             mcp_url=_optional_mcp_url_env("FOLIO_MCP_URL"),
+            renderer_capability_secret=os.environ.get("FOLIO_RENDERER_CAPABILITY_SECRET"),
             deployment_mode=deployment_mode,
             bridge_timeout_seconds=_positive_float_env("FOLIO_BRIDGE_TIMEOUT_SECONDS", 5),
             public_mcp_timeout_seconds=_bounded_positive_float_env(
@@ -367,6 +372,11 @@ class Settings:
             raise ValueError("Folio paths must not contain control characters")
         if not self.session_cookie_secure:
             raise ValueError("FOLIO_SESSION_COOKIE_SECURE must be true")
+        if (
+            self.renderer_capability_secret is not None
+            and len(self.renderer_capability_secret) < 32
+        ):
+            raise ValueError("FOLIO_RENDERER_CAPABILITY_SECRET must be at least 32 characters")
         if (self.tls_certfile is None) != (self.tls_keyfile is None):
             raise ValueError("FOLIO_TLS_CERTFILE and FOLIO_TLS_KEYFILE must be set together")
         if self.tls_certfile is not None and (
@@ -617,7 +627,7 @@ class FolioHttpApp:
         local_tenant_id: str | None = None,
         local_actor_id: str | None = None,
         backup_operations: BackupOperationsMonitor | None = None,
-        principal_relay: TrustedPrincipalRelay | None = None,
+        principal_relay: TrustedPrincipalRelay | SignedPrincipalRelay | None = None,
     ):
         if max_request_bytes < 1:
             raise ValueError("max_request_bytes must be positive")
@@ -837,10 +847,16 @@ class FolioHttpApp:
             await response(scope, receive, secure_send)
             return
         principal_token = None
+        capability_token = None
         principal: Principal | None = None
-        if self.authenticator is not None:
+        internal_principal = _header_value(scope, INTERNAL_PRINCIPAL_HEADER)
+        if self.authenticator is not None or (
+            internal_principal is not None and self.principal_relay is not None
+        ):
             try:
-                principal = self._authenticate(scope, allow_session=scope["path"] != "/mcp")
+                principal, capability = self._authenticate_context(
+                    scope, allow_session=scope["path"] != "/mcp"
+                )
             except AuthenticationError:
                 if public_mcp and not await self._check_public_mcp_rate(
                     scope, public_receive, secure_send, None
@@ -858,6 +874,8 @@ class FolioHttpApp:
                 )
                 return
             principal_token = set_request_principal(principal)
+            if capability is not None:
+                capability_token = set_request_capability(capability)
             if scope["path"] == "/mcp":
                 _bind_mcp_actor(scope, principal)
         path = scope["path"]
@@ -939,20 +957,28 @@ class FolioHttpApp:
                 return
             await self.app(scope, receive, secure_send)
         finally:
+            if capability_token is not None:
+                reset_request_capability(capability_token)
             if principal_token is not None:
                 reset_request_principal(principal_token)
 
     def _authenticate(self, scope: Scope, *, allow_session: bool = True) -> Principal:
+        principal, _ = self._authenticate_context(scope, allow_session=allow_session)
+        return principal
+
+    def _authenticate_context(
+        self, scope: Scope, *, allow_session: bool = True
+    ) -> tuple[Principal, Any | None]:
         internal_token = _header_value(scope, INTERNAL_PRINCIPAL_HEADER)
         if internal_token is not None:
             if scope.get("path") != "/mcp":
                 raise AuthenticationError("internal principal is limited to MCP")
             if self.principal_relay is None:
                 raise AuthenticationError("internal principal relay is unavailable")
-            principal = self.principal_relay.resolve(internal_token)
-            if principal is None or not isinstance(principal, Principal):
+            capability = self.principal_relay.resolve_capability(internal_token)
+            if capability is None or not isinstance(capability.principal, Principal):
                 raise AuthenticationError("internal principal is invalid")
-            return principal
+            return capability.principal, capability.binding
         session_id = _session_cookie(scope)
         if session_id is not None and allow_session:
             if self.session_store is None:
@@ -960,9 +986,9 @@ class FolioHttpApp:
             principal = self.session_store.lookup(session_id)
             if principal is None:
                 raise AuthenticationError("session is invalid")
-            return principal
+            return principal, None
         if self.authenticator is not None:
-            return self.authenticator.authenticate(scope)
+            return self.authenticator.authenticate(scope), None
         raise AuthenticationError("authentication is required")
 
     def _readiness(self) -> dict[str, Any]:
@@ -1756,11 +1782,13 @@ def run_http(host: str, port: int) -> None:
         raise ValueError(
             "hosted mode requires FOLIO_MCP_URL to resolve to this server's local /mcp endpoint"
         )
-    principal_relay = (
-        TrustedPrincipalRelay(mcp_endpoint)
-        if settings.deployment_mode == "hosted" and mcp_endpoint == local_mcp_endpoint
-        else None
-    )
+    principal_relay: SignedPrincipalRelay | TrustedPrincipalRelay | None
+    if settings.renderer_capability_secret is not None:
+        principal_relay = SignedPrincipalRelay(mcp_endpoint, settings.renderer_capability_secret)
+    elif settings.deployment_mode == "hosted" and mcp_endpoint == local_mcp_endpoint:
+        principal_relay = TrustedPrincipalRelay(mcp_endpoint)
+    else:
+        principal_relay = None
     caller = HttpMcpClient(
         mcp_endpoint,
         max_result_bytes=settings.max_request_bytes,
@@ -1816,10 +1844,21 @@ def run_renderer(host: str, port: int) -> None:
     settings = Settings.from_env()
     if settings.deployment_mode == "hosted":
         raise ValueError("hosted renderer is not implemented")
+    if settings.renderer_capability_secret is None:
+        raise ValueError("renderer requires FOLIO_RENDERER_CAPABILITY_SECRET")
     scheme = "https" if settings.tls_certfile else "http"
+    mcp_endpoint = settings.mcp_url or f"{scheme}://127.0.0.1:8000/mcp"
     caller = HttpMcpClient(
-        settings.mcp_url or f"{scheme}://127.0.0.1:8000/mcp",
+        mcp_endpoint,
         max_result_bytes=settings.max_request_bytes,
+        principal_relay=SignedPrincipalRelay(mcp_endpoint, settings.renderer_capability_secret),
+        principal=Principal(
+            tenant_id=settings.tenant_id,
+            actor_id=settings.actor,
+            issuer="folio-local-renderer",
+            subject=settings.actor,
+            scopes=frozenset({"artifact:read", "artifact:search", "graph:read"}),
+        ),
     )
     app = RendererApp(
         caller,

@@ -9,7 +9,7 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .auth import get_request_principal
+from .auth import capability_arguments_digest, get_request_capability, get_request_principal
 from .external_mcp import ExternalMcpBroker
 from .service import (
     MAX_CONTEXT_BYTES,
@@ -389,6 +389,16 @@ def build_mcp_server(
         artifact_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         version_id: Annotated[str | None, Field(max_length=MAX_ID_LENGTH)] = None,
     ) -> dict[str, Any]:
+        capability = get_request_capability()
+        if capability is not None:
+            arguments: dict[str, Any] = {"artifact_id": artifact_id}
+            if version_id is not None:
+                arguments["version_id"] = version_id
+            if (
+                capability.tool != "artifact_read"
+                or capability.arguments_digest != capability_arguments_digest(arguments)
+            ):
+                raise ToolError("operation not permitted")
         request_tenant, request_actor = identity(TOOL_SCOPES["artifact_read"])
         return _tool_errors(
             lambda: service.read_artifact(

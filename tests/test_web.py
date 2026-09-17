@@ -20,7 +20,12 @@ from folio_lattice.auth import Principal, reset_request_principal, set_request_p
 from folio_lattice.bridge import AttachedMcpBridge, BridgeRequestError, validate_bridge_request
 from folio_lattice.inspection import InspectionApp, ui_html
 from folio_lattice.mcp_protocol import build_mcp_server
-from folio_lattice.public_mcp import AdminMcpClient, HttpMcpClient, PublicMcpError
+from folio_lattice.public_mcp import (
+    AdminMcpClient,
+    HttpMcpClient,
+    PublicMcpError,
+    SignedPrincipalRelay,
+)
 from folio_lattice.renderer import RendererApp, versioned_content_url
 from folio_lattice.server import Settings, _optional_mcp_url_env, _origin_env
 from folio_lattice.service import FolioLattice
@@ -1036,6 +1041,36 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             reset_request_principal(token)
         self.assertIn(status, {400, 404})
         self.assertNotIn(b"color:orange", body)
+
+    async def test_signed_renderer_capability_is_scoped_and_expires(self) -> None:
+        relay = SignedPrincipalRelay(
+            "http://folio.internal:8000/mcp",
+            "renderer-capability-secret-012345678901234567890123456789",
+            ttl_seconds=1,
+        )
+        principal = Principal(
+            tenant_id="web",
+            actor_id="web-user",
+            issuer="folio-local-renderer",
+            subject="web-user",
+            scopes=frozenset({"artifact:read"}),
+        )
+        arguments = {"artifact_id": "art_private", "version_id": "ver_immutable"}
+        token = relay.issue(principal, tool="artifact_read", arguments=arguments)
+        capability = relay.resolve_capability(token)
+        self.assertIsNotNone(capability)
+        assert capability is not None
+        self.assertEqual(capability.principal.tenant_id, "web")
+        self.assertEqual(capability.principal.actor_id, "web-user")
+        self.assertEqual(capability.binding.tool, "artifact_read")
+        self.assertNotEqual(
+            capability.binding.arguments_digest,
+            relay.issue(principal, tool="artifact_read", arguments={"artifact_id": "other"}),
+        )
+        forged = f"{token[:-1]}{'A' if token[-1] != 'A' else 'B'}"
+        self.assertIsNone(relay.resolve_capability(forged))
+        await asyncio.sleep(2.05)
+        self.assertIsNone(relay.resolve_capability(token))
 
     async def test_renderer_denies_top_level_render_navigation_but_allows_iframe(self) -> None:
         html_id = self.html["artifact"]["id"]
