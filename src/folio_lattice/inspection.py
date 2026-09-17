@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import math
+import uuid
+from collections.abc import Mapping
 from html import escape
 from urllib.parse import parse_qs, quote
 
@@ -15,12 +19,34 @@ from .bridge import (
     validate_bridge_request,
 )
 from .public_mcp import PUBLIC_TOOLS, PublicMcpError, ToolCaller
+from .resource_limits import BoundedConcurrencyLimiter, DimensionRateLimiter
 
 CONTROL_HEADERS = {
     "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
 }
+
+DEFAULT_RESOURCE_RATE_LIMIT = 600
+DEFAULT_RESOURCE_RATE_WINDOW_SECONDS = 60.0
+DEFAULT_RESOURCE_RATE_MAX_KEYS = 4096
+DEFAULT_RESOURCE_CONCURRENCY_LIMIT = 32
+DEFAULT_RESOURCE_CONCURRENCY_PER_KEY = 8
+DEFAULT_RESOURCE_CONCURRENCY_MAX_KEYS = 4096
+DEFAULT_RESOURCE_TIMEOUT_SECONDS = 30.0
+MAX_RESOURCE_TIMEOUT_SECONDS = 300.0
+DEFAULT_RESOURCE_RESPONSE_BYTES = 1 * 1024 * 1024
+MAX_RESOURCE_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_RESOURCE_ARGUMENT_BYTES = 64 * 1024
+
+
+class _ResponseTooLarge(Exception):
+    pass
+
+
+class _ArgumentLimitExceeded(Exception):
+    pass
+
 
 UI_CSS = """
 :root {
@@ -3171,7 +3197,21 @@ class InspectionApp:
         auth_state: str = "local",
         organization: str | None = None,
         actor: str | None = None,
+        timeout_seconds: float = DEFAULT_RESOURCE_TIMEOUT_SECONDS,
+        max_response_bytes: int = DEFAULT_RESOURCE_RESPONSE_BYTES,
+        rate_limits: Mapping[str, int] | None = None,
+        rate_window_seconds: float = DEFAULT_RESOURCE_RATE_WINDOW_SECONDS,
+        concurrency_limit: int = DEFAULT_RESOURCE_CONCURRENCY_LIMIT,
+        concurrency_per_key: int = DEFAULT_RESOURCE_CONCURRENCY_PER_KEY,
     ):
+        if (
+            not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or timeout_seconds > MAX_RESOURCE_TIMEOUT_SECONDS
+        ):
+            raise ValueError("timeout_seconds is outside the allowed resource bound")
+        if max_response_bytes < 1 or max_response_bytes > MAX_RESOURCE_RESPONSE_BYTES:
+            raise ValueError("max_response_bytes is outside the allowed resource bound")
         self.caller = caller
         self.control_origin = control_origin
         self.render_origin = render_origin
@@ -3180,6 +3220,23 @@ class InspectionApp:
         self.auth_state = auth_state
         self.organization = organization
         self.actor = actor
+        self.timeout_seconds = timeout_seconds
+        self.max_response_bytes = max_response_bytes
+        self._rate_limiter = DimensionRateLimiter(
+            limits=rate_limits
+            or {
+                "tenant": DEFAULT_RESOURCE_RATE_LIMIT,
+                "actor": DEFAULT_RESOURCE_RATE_LIMIT,
+                "ip": DEFAULT_RESOURCE_RATE_LIMIT,
+            },
+            window_seconds=rate_window_seconds,
+            max_keys=DEFAULT_RESOURCE_RATE_MAX_KEYS,
+        )
+        self._concurrency_limiter = BoundedConcurrencyLimiter(
+            limit=concurrency_limit,
+            per_key_limit=concurrency_per_key,
+            max_keys=DEFAULT_RESOURCE_CONCURRENCY_MAX_KEYS,
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         method = scope["method"]
@@ -3237,7 +3294,96 @@ class InspectionApp:
             scope, receive, send
         )
 
+    def _resource_dimensions(self, scope: Scope) -> dict[str, str]:
+        principal = get_request_principal()
+        client = scope.get("client")
+        ip = client[0] if isinstance(client, (tuple, list)) and client else "unknown"
+        return {
+            "tenant": (principal.tenant_id if principal is not None else self.organization)
+            or "unknown",
+            "actor": (principal.actor_id if principal is not None else self.actor) or "unknown",
+            "ip": str(ip),
+        }
+
+    async def _api_error(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+        request_id: str,
+        retry_after: int | None = None,
+    ) -> None:
+        headers = dict(CONTROL_HEADERS)
+        if retry_after is not None:
+            headers["Retry-After"] = str(max(0, retry_after))
+        await JSONResponse(
+            {"code": code, "error": message, "request_id": request_id},
+            status_code=status_code,
+            headers=headers,
+        )(scope, receive, send)
+
     async def _api(self, scope: Scope, receive: Receive, send: Send, *, bridge: bool) -> None:
+        request_id = uuid.uuid4().hex
+        allowed, retry_after = self._rate_limiter.allow(self._resource_dimensions(scope))
+        if not allowed:
+            await self._api_error(
+                scope,
+                receive,
+                send,
+                status_code=429,
+                code="resource_rate_limited",
+                message="Too many requests. Try again later.",
+                request_id=request_id,
+                retry_after=retry_after,
+            )
+            return
+        dimensions = self._resource_dimensions(scope)
+        concurrency_key = "\x1f".join((dimensions["tenant"], dimensions["actor"], dimensions["ip"]))
+        if not self._concurrency_limiter.try_acquire(concurrency_key):
+            await self._api_error(
+                scope,
+                receive,
+                send,
+                status_code=429,
+                code="resource_concurrency_limited",
+                message="Service is busy. Try again later.",
+                request_id=request_id,
+                retry_after=1,
+            )
+            return
+        try:
+            try:
+                async with asyncio.timeout(self.timeout_seconds):
+                    await self._api_request(
+                        scope, receive, send, bridge=bridge, request_id=request_id
+                    )
+            except TimeoutError:
+                await self._api_error(
+                    scope,
+                    receive,
+                    send,
+                    status_code=504,
+                    code="resource_timeout",
+                    message="Request timed out. Try again later.",
+                    request_id=request_id,
+                    retry_after=1,
+                )
+        finally:
+            self._concurrency_limiter.release(concurrency_key)
+
+    async def _api_request(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        bridge: bool,
+        request_id: str,
+    ) -> None:
         headers = {key.lower(): value for key, value in scope["headers"]}
         origin = headers.get(b"origin", b"").decode("latin-1")
         if origin != self.control_origin:
@@ -3283,14 +3429,56 @@ class InspectionApp:
                     raise PublicMcpError("tool is not part of the Folio MCP contract")
                 if not isinstance(arguments, dict):
                     raise PublicMcpError("arguments must be a JSON object")
+                try:
+                    encoded_arguments = json.dumps(
+                        arguments, separators=(",", ":"), allow_nan=False
+                    ).encode()
+                except (TypeError, ValueError) as exc:
+                    raise PublicMcpError("arguments must be JSON serializable") from exc
+                if len(encoded_arguments) > MAX_RESOURCE_ARGUMENT_BYTES:
+                    raise _ArgumentLimitExceeded
                 response = await self.caller.call(tool, arguments)
+            try:
+                encoded_response = json.dumps(
+                    response, separators=(",", ":"), allow_nan=False
+                ).encode()
+            except (TypeError, ValueError) as exc:
+                raise PublicMcpError("response is not JSON serializable") from exc
+            if len(encoded_response) > self.max_response_bytes:
+                raise _ResponseTooLarge
             await JSONResponse(response, headers=CONTROL_HEADERS)(scope, receive, send)
         except OverflowError:
             if bridge:
                 self.bridge.audit_rejection("oversized_body")
             await JSONResponse(
-                {"error": "request body too large"}, status_code=413, headers=CONTROL_HEADERS
+                {
+                    "code": "request_too_large",
+                    "error": "request body too large",
+                    "request_id": request_id,
+                },
+                status_code=413,
+                headers=CONTROL_HEADERS,
             )(scope, receive, send)
+        except _ArgumentLimitExceeded:
+            await self._api_error(
+                scope,
+                receive,
+                send,
+                status_code=422,
+                code="arguments_too_large",
+                message="Tool arguments exceed the allowed size.",
+                request_id=request_id,
+            )
+        except _ResponseTooLarge:
+            await self._api_error(
+                scope,
+                receive,
+                send,
+                status_code=502,
+                code="response_too_large",
+                message="Response exceeds the allowed size.",
+                request_id=request_id,
+            )
         except (BridgeRequestError, PublicMcpError) as exc:
             if (
                 bridge
@@ -3299,9 +3487,19 @@ class InspectionApp:
             ):
                 self.bridge.audit_rejection(exc.reason)
             await JSONResponse(
-                {"error": str(exc)}, status_code=_error_status(exc), headers=CONTROL_HEADERS
+                {"error": str(exc), "request_id": request_id},
+                status_code=_error_status(exc),
+                headers=CONTROL_HEADERS,
             )(scope, receive, send)
+        except TimeoutError:
+            raise
         except Exception:
             await JSONResponse(
-                {"error": "request failed safely"}, status_code=502, headers=CONTROL_HEADERS
+                {
+                    "code": "request_failed_safely",
+                    "error": "request failed safely",
+                    "request_id": request_id,
+                },
+                status_code=502,
+                headers=CONTROL_HEADERS,
             )(scope, receive, send)

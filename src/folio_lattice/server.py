@@ -69,6 +69,13 @@ PUBLIC_MCP_CONCURRENCY_PER_KEY = 8
 PUBLIC_MCP_CONCURRENCY_MAX_KEYS = 4096
 PUBLIC_MCP_TIMEOUT_SECONDS = 30.0
 MAX_PUBLIC_MCP_TIMEOUT_SECONDS = 300.0
+RESOURCE_RATE_LIMIT = 600
+RESOURCE_RATE_WINDOW_SECONDS = 60.0
+RESOURCE_CONCURRENCY_LIMIT = 32
+RESOURCE_CONCURRENCY_PER_KEY = 8
+RESOURCE_TIMEOUT_SECONDS = 30.0
+RESOURCE_MAX_RESPONSE_BYTES = 1 * 1024 * 1024
+MAX_RESOURCE_RESPONSE_BYTES = 4 * 1024 * 1024
 MCP_REQUEST_TOO_LARGE_CODE = "request_too_large"
 MCP_REQUEST_TOO_LARGE_MESSAGE = "Request body exceeds the allowed size."
 MCP_RATE_LIMIT_CODE = "mcp_rate_limited"
@@ -181,6 +188,14 @@ class Settings:
     deployment_mode: str
     bridge_timeout_seconds: float
     public_mcp_timeout_seconds: float
+    tenant_rate_limit: int = RESOURCE_RATE_LIMIT
+    actor_rate_limit: int = RESOURCE_RATE_LIMIT
+    ip_rate_limit: int = RESOURCE_RATE_LIMIT
+    resource_rate_window_seconds: float = RESOURCE_RATE_WINDOW_SECONDS
+    resource_concurrency_limit: int = RESOURCE_CONCURRENCY_LIMIT
+    resource_concurrency_per_key: int = RESOURCE_CONCURRENCY_PER_KEY
+    resource_timeout_seconds: float = RESOURCE_TIMEOUT_SECONDS
+    resource_max_response_bytes: int = RESOURCE_MAX_RESPONSE_BYTES
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
@@ -286,6 +301,36 @@ class Settings:
                 "FOLIO_MCP_TIMEOUT_SECONDS",
                 PUBLIC_MCP_TIMEOUT_SECONDS,
                 MAX_PUBLIC_MCP_TIMEOUT_SECONDS,
+            ),
+            tenant_rate_limit=_bounded_positive_int_env(
+                "FOLIO_TENANT_RATE_LIMIT", RESOURCE_RATE_LIMIT, 100_000
+            ),
+            actor_rate_limit=_bounded_positive_int_env(
+                "FOLIO_ACTOR_RATE_LIMIT", RESOURCE_RATE_LIMIT, 100_000
+            ),
+            ip_rate_limit=_bounded_positive_int_env(
+                "FOLIO_IP_RATE_LIMIT", RESOURCE_RATE_LIMIT, 100_000
+            ),
+            resource_rate_window_seconds=_bounded_positive_float_env(
+                "FOLIO_RATE_LIMIT_WINDOW_SECONDS",
+                RESOURCE_RATE_WINDOW_SECONDS,
+                3_600,
+            ),
+            resource_concurrency_limit=_bounded_positive_int_env(
+                "FOLIO_RESOURCE_CONCURRENCY_LIMIT", RESOURCE_CONCURRENCY_LIMIT, 10_000
+            ),
+            resource_concurrency_per_key=_bounded_positive_int_env(
+                "FOLIO_RESOURCE_CONCURRENCY_PER_KEY", RESOURCE_CONCURRENCY_PER_KEY, 1_000
+            ),
+            resource_timeout_seconds=_bounded_positive_float_env(
+                "FOLIO_RESOURCE_TIMEOUT_SECONDS",
+                RESOURCE_TIMEOUT_SECONDS,
+                MAX_PUBLIC_MCP_TIMEOUT_SECONDS,
+            ),
+            resource_max_response_bytes=_bounded_positive_int_env(
+                "FOLIO_RESOURCE_MAX_RESPONSE_BYTES",
+                RESOURCE_MAX_RESPONSE_BYTES,
+                MAX_RESOURCE_RESPONSE_BYTES,
             ),
             oidc_issuer=oidc_issuer,
             oidc_audience=oidc_audience,
@@ -1488,7 +1533,18 @@ def build_runtime(settings: Settings) -> tuple[FolioLattice, Any, OidcAuthentica
     if settings.deployment_mode == "local":
         return (
             service,
-            build_mcp_server(service, tenant_id=settings.tenant_id, actor=settings.actor),
+            build_mcp_server(
+                service,
+                tenant_id=settings.tenant_id,
+                actor=settings.actor,
+                external_rate_limits={
+                    "tenant": settings.tenant_rate_limit,
+                    "actor": settings.actor_rate_limit,
+                },
+                external_rate_window_seconds=settings.resource_rate_window_seconds,
+                external_concurrency_limit=settings.resource_concurrency_limit,
+                external_concurrency_per_key=settings.resource_concurrency_per_key,
+            ),
             None,
         )
     assert settings.oidc_issuer and settings.oidc_audience and settings.oidc_jwks_url
@@ -1508,7 +1564,20 @@ def build_runtime(settings: Settings) -> tuple[FolioLattice, Any, OidcAuthentica
     )
     authenticator = OidcAuthenticator(verifier)
     authenticator.warm_up()
-    return service, build_mcp_server(service), authenticator
+    return (
+        service,
+        build_mcp_server(
+            service,
+            external_rate_limits={
+                "tenant": settings.tenant_rate_limit,
+                "actor": settings.actor_rate_limit,
+            },
+            external_rate_window_seconds=settings.resource_rate_window_seconds,
+            external_concurrency_limit=settings.resource_concurrency_limit,
+            external_concurrency_per_key=settings.resource_concurrency_per_key,
+        ),
+        authenticator,
+    )
 
 
 def run_http(host: str, port: int) -> None:
@@ -1564,6 +1633,16 @@ def run_http(host: str, port: int) -> None:
         auth_state="hosted" if authenticator is not None else "local",
         organization=settings.tenant_id if authenticator is None else None,
         actor=settings.actor if authenticator is None else None,
+        timeout_seconds=settings.resource_timeout_seconds,
+        max_response_bytes=settings.resource_max_response_bytes,
+        rate_limits={
+            "tenant": settings.tenant_rate_limit,
+            "actor": settings.actor_rate_limit,
+            "ip": settings.ip_rate_limit,
+        },
+        rate_window_seconds=settings.resource_rate_window_seconds,
+        concurrency_limit=settings.resource_concurrency_limit,
+        concurrency_per_key=settings.resource_concurrency_per_key,
     )
     uvicorn.run(
         FolioHttpApp(
@@ -1600,6 +1679,12 @@ def run_renderer(host: str, port: int) -> None:
         caller,
         control_origin=settings.control_origin,
         hsts_max_age=settings.hsts_max_age,
+        timeout_seconds=settings.resource_timeout_seconds,
+        max_response_bytes=settings.resource_max_response_bytes,
+        rate_limits={"ip": settings.ip_rate_limit},
+        rate_window_seconds=settings.resource_rate_window_seconds,
+        concurrency_limit=settings.resource_concurrency_limit,
+        concurrency_per_key=settings.resource_concurrency_per_key,
     )
     uvicorn.run(app, host=host, port=port, **_tls_options(settings))
 

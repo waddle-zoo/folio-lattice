@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Annotated, Any
 
 from mcp.server import MCPServer
@@ -63,6 +63,10 @@ def build_mcp_server(
     tenant_id: str | None = None,
     actor: str | None = None,
     external_broker: ExternalMcpBroker | None = None,
+    external_rate_limits: Mapping[str, int] | None = None,
+    external_rate_window_seconds: float = 60.0,
+    external_concurrency_limit: int = 32,
+    external_concurrency_per_key: int = 4,
 ) -> MCPServer:
     """Bind local identity or resolve one authenticated principal per request."""
 
@@ -86,7 +90,13 @@ def build_mcp_server(
             return request_actor
         return None if fixed_local_identity else request_actor
 
-    broker = external_broker or ExternalMcpBroker(service)
+    broker = external_broker or ExternalMcpBroker(
+        service,
+        rate_limits=external_rate_limits,
+        rate_window_seconds=external_rate_window_seconds,
+        concurrency_limit=external_concurrency_limit,
+        concurrency_per_key=external_concurrency_per_key,
+    )
 
     server = MCPServer(
         "folio-lattice",
@@ -378,7 +388,9 @@ def build_mcp_server(
     ) -> list[dict[str, Any]]:
         request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_connection_list"])
         return _tool_errors(
-            lambda: broker.list_connections(tenant_id=request_tenant, actor=request_actor)[:limit]
+            lambda: broker.list_connections(
+                tenant_id=request_tenant, actor=request_actor, limit=limit
+            )
         )
 
     @server.tool(description="Read or probe one tenant-scoped external MCP connection status.")
