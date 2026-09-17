@@ -8,7 +8,9 @@ never logs bearer material.
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 import socket
 import tempfile
 import threading
@@ -110,6 +112,7 @@ ROZobUhEnN1Ie6yZVxZI70o=
 PRINCIPALS = {
     "member_a": ("member-a", "tenant-a", "actor-a"),
     "member_b": ("member-b", "tenant-b", "actor-b"),
+    "limited": ("limited", "tenant-a", "limited"),
     "unmapped": ("unmapped", "tenant-a", "unmapped"),
     "ambiguous": ("ambiguous", "tenant-a", "ambiguous"),
     "disabled": ("disabled", "tenant-a", "disabled"),
@@ -122,6 +125,7 @@ ALL_SCOPES = {
     "graph:read",
     "graph:write",
 }
+LIMITED_SCOPES = frozenset({"artifact:read", "artifact:search", "graph:read"})
 
 
 class _BytesResponse:
@@ -261,6 +265,14 @@ class HostedAuthNegativeTarget:
                 actor_id=actor,
                 scopes=ALL_SCOPES,
             )
+        subject, tenant, actor = PRINCIPALS["limited"]
+        memberships.add(
+            issuer=ISSUER,
+            subject=subject,
+            tenant_id=tenant,
+            actor_id=actor,
+            scopes=LIMITED_SCOPES,
+        )
         memberships.set_status(ISSUER, PRINCIPALS["disabled"][0], "disabled")
         memberships.set_status(ISSUER, PRINCIPALS["revoked"][0], "revoked")
         self.memberships = memberships
@@ -279,6 +291,9 @@ class HostedAuthNegativeTarget:
             host="127.0.0.1",
         )
         session_store = SessionStore(db_path, memberships)
+        self.audit_stream = io.StringIO()
+        self.audit_logger = logging.Logger("folio-hosted-auth-negative")
+        self.audit_logger.addHandler(logging.StreamHandler(self.audit_stream))
         inner = FolioHttpApp(
             mcp_server,
             service,
@@ -289,6 +304,7 @@ class HostedAuthNegativeTarget:
             identity_adapter=self.identity_adapter,
             auth_redirect_uri=REDIRECT_URI,
             control_origin="https://folio.test",
+            audit_logger=self.audit_logger,
         )
         try:
             self.server = _HttpServer(inner)
