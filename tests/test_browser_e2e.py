@@ -579,6 +579,163 @@ class BrowserHostedAuthE2ETests(unittest.TestCase):
 
 
 class BrowserSandboxE2ETests(unittest.TestCase):
+    def test_connections_admin_settings_supports_pointer_keyboard_and_recovery(self) -> None:
+        browser = browser_path()
+        if browser is None:
+            self.skipTest("set FOLIO_BROWSER to Chrome or Chromium for connections UI evidence")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_port = free_port()
+            control_origin = f"http://127.0.0.1:{control_port}"
+            environment = {
+                **os.environ,
+                "FOLIO_DB_PATH": str(root / "folio.db"),
+                "FOLIO_BLOB_ROOT": str(root / "blobs"),
+                "FOLIO_TENANT_ID": "browser-connections",
+                "FOLIO_ACTOR": "browser-admin",
+                "FOLIO_CONTROL_ORIGIN": control_origin,
+                "FOLIO_RENDER_ORIGIN": control_origin,
+                "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            }
+            control = start_server(environment, "http", control_port)
+            chrome: DevTools | None = None
+            try:
+                wait_ready(control_origin, control)
+                chrome = DevTools(
+                    browser,
+                    f"{control_origin}/settings/connections",
+                    root / "chrome-connections",
+                )
+                chrome.wait(
+                    "document.querySelector('#connections-status')?.textContent.includes('No approved connections')"
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#connections-status').getAttribute('role')"
+                    ),
+                    "status",
+                )
+                ax = chrome.command("Accessibility.getFullAXTree")["nodes"]
+                names = {node.get("name", {}).get("value") for node in ax}
+                for expected_name in (
+                    "Approved connections",
+                    "Register a connection",
+                    "Connection name",
+                    "HTTPS endpoint",
+                    "Approved tools",
+                    "Audit activity",
+                ):
+                    self.assertIn(expected_name, names)
+
+                # Pointer path: register a real connection through the public UI.
+                chrome.evaluate(
+                    "document.querySelector('#connection-name').value='Browser calendar'; "
+                    "document.querySelector('#connection-endpoint').value='https://example.com/mcp'; "
+                    "document.querySelector('#connection-endpoint').dispatchEvent(new Event('input', {bubbles:true})); "
+                    "document.querySelector('#approved-tools').value='calendar.events.list'; "
+                    "document.querySelector('#connection-origin').value='https://example.com'; "
+                    "document.querySelector('#connection-origin').dispatchEvent(new Event('input', {bubbles:true}));"
+                )
+                chrome.evaluate("document.querySelector('#connection-submit').click()")
+                chrome.wait(
+                    "document.querySelector('#connections-list').innerText.includes('Browser calendar') || document.querySelector('#connections-status').dataset.state === 'error'"
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.querySelector('#connections-list').innerText.includes('Browser calendar')"
+                    ),
+                    chrome.evaluate("document.querySelector('#connections-status').textContent"),
+                )
+                chrome.wait(
+                    "document.querySelector('#connections-status').textContent.includes('Connection registered')"
+                )
+                self.assertFalse(
+                    chrome.evaluate("document.querySelector('#connection-submit').disabled")
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#connection-submit').getAttribute('aria-busy')"
+                    ),
+                    None,
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#connections-list .connection-actions button.button-danger').getAttribute('aria-label')"
+                    ),
+                    "Revoke Browser calendar",
+                )
+
+                # Keyboard path: open and cancel the native dialog, then verify focus
+                # returns to the invoking control.
+                chrome.evaluate(
+                    "document.querySelector('#connections-list .connection-actions .button-danger').focus()"
+                )
+                self.assertEqual(chrome.evaluate("document.activeElement.tagName"), "BUTTON")
+                chrome.key("Enter", "Enter", 13)
+                chrome.wait("document.querySelector('#revoke-access').open === true")
+                chrome.wait("document.activeElement?.id === 'revoke-cancel'")
+                self.assertIn(
+                    "Browser calendar",
+                    chrome.evaluate("document.querySelector('#revoke-name').textContent"),
+                )
+                chrome.evaluate("document.querySelector('#revoke-cancel').click()")
+                chrome.wait("document.querySelector('#revoke-access').open === false")
+                self.assertEqual(
+                    chrome.evaluate("document.activeElement.getAttribute('aria-label')"),
+                    "Revoke Browser calendar",
+                )
+
+                # Pointer confirm path: revoke through the production admin endpoint
+                # and assert the live state and rendered status.
+                chrome.evaluate(
+                    "document.querySelector('#connections-list .connection-actions .button-danger').click()"
+                )
+                chrome.wait("document.querySelector('#revoke-access').open === true")
+                chrome.evaluate("document.querySelector('#revoke-confirm').click()")
+                chrome.wait(
+                    "document.querySelector('#connections-status').textContent.includes('is revoked')"
+                )
+                chrome.wait(
+                    "document.querySelector('#connections-list').innerText.includes('Revoked')"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#connections-status').dataset.state"),
+                    "revoked",
+                )
+                page_text = chrome.evaluate("document.body.innerText").lower()
+                self.assertNotIn("credential_ref", page_text)
+                self.assertNotIn("bearer", page_text)
+
+                # Actual public endpoint error path: loopback HTTPS is rejected by
+                # registration policy; the form remains usable and exposes bounded copy.
+                chrome.evaluate(
+                    "document.querySelector('#connection-name').value='Rejected local'; "
+                    "document.querySelector('#connection-endpoint').value='https://127.0.0.1/mcp'; "
+                    "document.querySelector('#connection-endpoint').dispatchEvent(new Event('input', {bubbles:true})); "
+                    "document.querySelector('#approved-tools').value='calendar.events.list'; "
+                    "document.querySelector('#connection-origin').value='https://127.0.0.1'; "
+                    "document.querySelector('#connection-origin').dispatchEvent(new Event('input', {bubbles:true}));"
+                )
+                chrome.evaluate("document.querySelector('#connection-submit').click()")
+                chrome.wait(
+                    "document.querySelector('#connections-status').dataset.state === 'error'"
+                )
+                self.assertIn(
+                    "endpoint resolves to a blocked address",
+                    chrome.evaluate(
+                        "document.querySelector('#connections-status').textContent"
+                    ).lower(),
+                )
+                self.assertFalse(
+                    chrome.evaluate("document.querySelector('#connection-submit').disabled")
+                )
+                self.assertNotIn("Traceback", chrome.evaluate("document.body.innerText"))
+            finally:
+                if chrome is not None:
+                    chrome.close()
+                stop_server(control)
+
     def test_scripts_render_but_network_storage_and_host_escape_fail(self) -> None:
         browser = browser_path()
         if browser is None:
