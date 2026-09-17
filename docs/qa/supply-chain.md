@@ -12,14 +12,19 @@ Release inputs are checked before publishing. Every workflow action and every
 Docker base image is pinned by full commit SHA or digest. Direct dependencies
 must have bounded constraints and appear in `uv.lock`. The image build emits a
 CycloneDX SBOM and provenance, and the vulnerability scan fails on High or
-Critical findings. License inventory, SBOM, vulnerability, and provenance
-artifacts contain metadata only; secrets are not uploaded.
+Critical findings. The pushed digest is pulled back once to verify the
+`VCS_REF` image label equals the source SHA. License inventory, SBOM,
+vulnerability, and provenance artifacts contain metadata only; Cosign
+certificate material is removed before upload and missing evidence fails the
+artifact step.
 
 Before signing, the verifier requires a clean checkout, the exact source SHA,
 an image digest, populated SBOM/license/vulnerability evidence, and
 source-bound provenance. Cosign then signs and attests that digest. The final
 verification checks the signature, attestation, source repository and SHA,
-workflow ref, builder identity, image subject, and invocation ID. The digest
+workflow ref, builder identity, image subject, and invocation ID. It also
+requires the verified signature and attestation outputs to carry the exact
+image digest and requires the attestation payload before promotion. The digest
 record is the only release promotion input. This gate is evidence plumbing,
 not a release-readiness claim; dependency gates `.24` and `.29` remain
 separate closure blockers.
