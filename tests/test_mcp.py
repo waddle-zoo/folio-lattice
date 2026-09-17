@@ -1,4 +1,5 @@
 import base64
+import binascii
 import tempfile
 import unittest
 from pathlib import Path
@@ -248,6 +249,48 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             _tool_errors(explode)
         self.assertEqual(str(raised.exception), "MCP tool failed safely")
         self.assertNotIn(secret, str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
+    def test_exception_text_is_never_echoed_at_the_mcp_boundary(self) -> None:
+        secret = "PUBLICSECRET123"
+        failures = (
+            ValueError(secret),
+            ToolError(secret),
+            binascii.Error(secret),
+            FolioError(secret),
+            RuntimeError(secret),
+        )
+        for failure in failures:
+            with self.subTest(exception=type(failure).__name__):
+
+                def explode(failure: BaseException = failure) -> None:
+                    raise failure
+
+                with self.assertRaises(ToolError) as raised:
+                    _tool_errors(explode)
+                self.assertEqual(str(raised.exception), "MCP tool failed safely")
+                self.assertNotIn(secret, str(raised.exception))
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertIsNone(raised.exception.__context__)
+
+    def test_public_error_mapping_is_exact_and_suffix_free(self) -> None:
+        def parent_mismatch() -> None:
+            raise FolioError("parent version mismatch; expected PUBLICSECRET123")
+
+        with self.assertRaises(ToolError) as raised:
+            _tool_errors(parent_mismatch)
+        self.assertEqual(str(raised.exception), "parent version mismatch")
+        self.assertNotIn("PUBLICSECRET123", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
+        def invalid_from_time() -> None:
+            raise FolioError("from_time is invalid")
+
+        with self.assertRaises(ToolError) as raised:
+            _tool_errors(invalid_from_time)
+        self.assertEqual(str(raised.exception), "from_time is invalid")
         self.assertIsNone(raised.exception.__cause__)
         self.assertIsNone(raised.exception.__context__)
 
