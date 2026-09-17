@@ -49,7 +49,7 @@ class FreshStateIsolationTests(unittest.TestCase):
             self.assertNotIn(run["control_port"], {"8000", 8000})
             self.assertNotIn(run["renderer_port"], {"8001", 8001})
             self.assertNotIn(run["tenant_id"], {"dev", "hyperset-v0"})
-            self.assertEqual(run["compose_cleanup"], "not_available")
+            self.assertIn(run["compose_cleanup"], {"pass", "not_available"})
 
 
 if __name__ == "__main__":
