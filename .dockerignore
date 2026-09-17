@@ -5,6 +5,7 @@
 __pycache__
 *.py[cod]
 .data
+.env
 .pytest_cache
 
 # Local Gas Town metadata is not part of the service image.

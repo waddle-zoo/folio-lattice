@@ -52,9 +52,59 @@ class FreshStateIsolationTests(unittest.TestCase):
                 self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
                 self.assertNotIn("SHELL_INJECTION_MARKER", dry_run.stdout)
                 self.assertIn(
-                    'COMPOSE_PROJECT_NAME="${FOLIO_COMPOSE_PROJECT:-${COMPOSE_PROJECT_NAME:-}}"',
+                    'COMPOSE_PROJECT_NAME="${FOLIO_COMPOSE_PROJECT:-${COMPOSE_PROJECT_NAME:-folio-lattice-local}}"',
                     dry_run.stdout,
                 )
+
+    def test_local_compose_bootstrap_has_explicit_secret_and_stable_project(self) -> None:
+        root = Path(__file__).parents[1]
+        example = root / ".env.example"
+        values = {
+            key: value
+            for key, value in (
+                line.split("=", 1)
+                for line in example.read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("#") and "=" in line
+            )
+        }
+        secret = values["FOLIO_RENDERER_CAPABILITY_SECRET"]
+        self.assertGreaterEqual(len(secret), 32)
+        self.assertEqual(values["COMPOSE_PROJECT_NAME"], "folio-lattice-local")
+        self.assertEqual(values["FOLIO_COMPOSE_PROJECT"], values["COMPOSE_PROJECT_NAME"])
+        self.assertIn(".env", (root / ".dockerignore").read_text(encoding="utf-8").splitlines())
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key
+            not in {
+                "COMPOSE_PROJECT_NAME",
+                "FOLIO_COMPOSE_PROJECT",
+                "FOLIO_RENDERER_CAPABILITY_SECRET",
+                "FOLIO_HOST_PORT",
+                "FOLIO_RENDER_HOST_PORT",
+            }
+        }
+        environment["VCS_REF"] = "763c3d1e48434bbb0950b5ec57ebbdaf6a46f756"
+        result = subprocess.run(
+            ["docker", "compose", "--env-file", str(example), "config", "--format", "json"],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(result.stdout)
+        self.assertEqual(config["name"], values["COMPOSE_PROJECT_NAME"])
+        for service in ("folio", "renderer"):
+            self.assertEqual(
+                config["services"][service]["environment"]["FOLIO_RENDERER_CAPABILITY_SECRET"],
+                secret,
+            )
+            self.assertEqual(
+                config["services"][service]["environment"]["FOLIO_DEPLOYMENT_MODE"],
+                "local",
+            )
 
     def test_docker_test_starts_pinned_compose_and_uses_selected_urls(self) -> None:
         root = Path(__file__).parents[1]
@@ -78,7 +128,7 @@ class FreshStateIsolationTests(unittest.TestCase):
             'build --build-arg VCS_REF="1f9fb0164f1902981801aa11e9205d6e4d07beaf"', result.stdout
         )
         self.assertIn(
-            'COMPOSE_PROJECT_NAME="${FOLIO_COMPOSE_PROJECT:-${COMPOSE_PROJECT_NAME:-}}" docker compose up -d',
+            'COMPOSE_PROJECT_NAME="${FOLIO_COMPOSE_PROJECT:-${COMPOSE_PROJECT_NAME:-folio-lattice-local}}" docker compose up -d',
             result.stdout,
         )
         self.assertIn(

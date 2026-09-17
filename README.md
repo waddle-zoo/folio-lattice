@@ -29,11 +29,16 @@ make docker-build
 
 ## Local inspection and rendering
 
-Start both loopback-bound processes with:
+Bootstrap local-only configuration, then start both loopback-bound processes:
 
 ```bash
+cp .env.example .env
 make docker-up
 ```
+
+`.env` contains a known development-only renderer capability secret and a
+deterministic Compose project name. Keep it local; hosted deployments must use
+their own secret and the hosted configuration path.
 
 Open `http://127.0.0.1:8000` to create or upload an artifact, search or literally
 grep indexed content, read complete versions and chunks, create and navigate

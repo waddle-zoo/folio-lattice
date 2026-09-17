@@ -1,3 +1,5 @@
+name: folio-lattice-local
+
 services:
   folio:
     build:
