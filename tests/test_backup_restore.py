@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from folio_lattice.backup import (
     BackupError,
@@ -144,6 +145,21 @@ class BackupRestoreTests(unittest.TestCase):
             blob.write_bytes(b"tampered")
             with self.assertRaises(BackupError):
                 verify_backup(backup_path)
+
+    def test_restore_readiness_failure_rolls_back_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = FolioLattice(root / "folio.db", root / "blobs")
+            service.create_artifact(tenant_id="tenant-a", name="one.txt", data=b"one", actor="owner-a")
+            backup_path = root / "backup"
+            create_backup(root / "folio.db", root / "blobs", backup_path)
+            target_db = root / "recovered" / "folio.db"
+            target_blobs = root / "recovered" / "blobs"
+            with patch.object(FolioLattice, "readiness", return_value={"ready": False}):
+                with self.assertRaisesRegex(BackupError, "readiness"):
+                    restore_backup(backup_path, target_db, target_blobs)
+            self.assertFalse(target_db.exists())
+            self.assertFalse(target_blobs.exists())
 
 
 if __name__ == "__main__":

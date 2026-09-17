@@ -355,17 +355,31 @@ def restore_backup(
         tempfile.mkstemp(prefix=".folio-restore-", suffix=".sqlite", dir=target_db.parent)[1]
     )
     temporary_blobs = Path(tempfile.mkdtemp(prefix=".folio-restore-", dir=target_blobs.parent))
+    committed_db = False
+    committed_blobs = False
     try:
         shutil.copyfile(Path(backup) / DATABASE_NAME, temporary_db)
         shutil.copytree(Path(backup) / BLOBS_DIR_NAME, temporary_blobs / BLOBS_DIR_NAME)
-        os.replace(temporary_db, target_db)
-        os.replace(temporary_blobs / BLOBS_DIR_NAME, target_blobs)
-        temporary_blobs.rmdir()
-        restored = FolioLattice(target_db, target_blobs, read_only=True).readiness()
+        restored = FolioLattice(
+            temporary_db, temporary_blobs / BLOBS_DIR_NAME, read_only=True
+        ).readiness()
         if not restored["ready"]:
             raise BackupError("restored state failed readiness checks")
+        os.replace(temporary_db, target_db)
+        committed_db = True
+        os.replace(temporary_blobs / BLOBS_DIR_NAME, target_blobs)
+        committed_blobs = True
+    except BackupError:
+        if committed_db and not committed_blobs:
+            target_db.unlink(missing_ok=True)
+        raise
     except (OSError, sqlite3.Error) as exc:
+        if committed_db and not committed_blobs:
+            target_db.unlink(missing_ok=True)
         raise BackupError(f"restore failed: {exc}") from exc
+    finally:
+        temporary_db.unlink(missing_ok=True)
+        shutil.rmtree(temporary_blobs, ignore_errors=True)
     return {
         "status": "restored",
         "backup_created_at": manifest["created_at"],
