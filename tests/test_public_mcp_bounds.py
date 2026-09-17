@@ -4,15 +4,17 @@ import asyncio
 import io
 import json
 import logging
+import os
 import unittest
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from starlette.responses import JSONResponse
 from starlette.types import Message, Receive, Scope, Send
 
 from folio_lattice.auth import Principal
-from folio_lattice.server import FolioHttpApp, _BoundedRateLimiter
+from folio_lattice.server import FolioHttpApp, Settings, _BoundedRateLimiter
 
 
 async def invoke(
@@ -24,6 +26,7 @@ async def invoke(
     client: tuple[str, int] = ("127.0.0.1", 1),
     chunks: list[bytes] | None = None,
     fail_if_received: bool = False,
+    block_on_receive: bool = False,
 ) -> tuple[int, dict[str, str], bytes]:
     request_chunks = list(chunks if chunks is not None else [body])
     sent: list[Message] = []
@@ -47,6 +50,8 @@ async def invoke(
     async def receive() -> Message:
         if fail_if_received:
             raise AssertionError("oversized request reached the body stream")
+        if block_on_receive:
+            await asyncio.Event().wait()
         if request_chunks:
             chunk = request_chunks.pop(0)
             return {
@@ -91,6 +96,7 @@ def build_app(
     rate_limit: int = 100,
     concurrency_limit: int = 8,
     concurrency_per_key: int = 2,
+    timeout_seconds: float = 30,
     authenticator: _FixtureAuthenticator | None = None,
 ) -> FolioHttpApp:
     return FolioHttpApp(
@@ -103,6 +109,7 @@ def build_app(
         public_mcp_rate_limit=rate_limit,
         public_mcp_concurrency_limit=concurrency_limit,
         public_mcp_concurrency_per_key=concurrency_per_key,
+        public_mcp_timeout_seconds=timeout_seconds,
     )
 
 
@@ -246,6 +253,70 @@ class PublicMcpBoundsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await first)[0], 200)
         recovered = await invoke(app, principal="member-a")
         self.assertEqual(recovered[0], 200)
+
+    async def test_timeout_is_stable_and_releases_concurrency_slot(self) -> None:
+        calls = 0
+
+        async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                await asyncio.Event().wait()
+            await JSONResponse({"ok": True})(scope, receive, send)
+
+        app = build_app(
+            downstream,
+            timeout_seconds=0.01,
+            concurrency_limit=1,
+            concurrency_per_key=1,
+        )
+        status, headers, body = await invoke(app)
+        error = json.loads(body)
+        self.assertEqual(status, 504)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(headers["retry-after"], "1")
+        self.assertEqual(error["code"], "mcp_timeout")
+        self.assertTrue(error["retryable"])
+        self.assertTrue(error["request_id"])
+
+        status, _, body = await invoke(app)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+
+    async def test_body_timeout_is_bounded_before_dispatch(self) -> None:
+        calls = 0
+
+        async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
+            nonlocal calls
+            calls += 1
+            await JSONResponse({"ok": True})(scope, receive, send)
+
+        app = build_app(downstream, timeout_seconds=0.01)
+        status, headers, body = await invoke(app, block_on_receive=True)
+        error = json.loads(body)
+        self.assertEqual(status, 504)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(headers["retry-after"], "1")
+        self.assertEqual(error["code"], "mcp_timeout")
+        self.assertEqual(calls, 0)
+
+    def test_timeout_configuration_is_bounded(self) -> None:
+        self.assertEqual(Settings.from_env().public_mcp_timeout_seconds, 30.0)
+        with patch.dict(
+            os.environ,
+            {"FOLIO_MCP_TIMEOUT_SECONDS": "2.5"},
+        ):
+            self.assertEqual(Settings.from_env().public_mcp_timeout_seconds, 2.5)
+        for value in ("0", "-1", "301", "nan", "inf"):
+            with (
+                self.subTest(value=value),
+                patch.dict(
+                    os.environ,
+                    {"FOLIO_MCP_TIMEOUT_SECONDS": value},
+                ),
+            ):
+                with self.assertRaises(ValueError):
+                    Settings.from_env()
 
 
 class _Clock:

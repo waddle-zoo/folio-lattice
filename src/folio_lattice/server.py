@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hmac
 import json
 import logging
@@ -61,12 +62,16 @@ PUBLIC_MCP_RATE_MAX_KEYS = 4096
 PUBLIC_MCP_CONCURRENCY_LIMIT = 32
 PUBLIC_MCP_CONCURRENCY_PER_KEY = 8
 PUBLIC_MCP_CONCURRENCY_MAX_KEYS = 4096
+PUBLIC_MCP_TIMEOUT_SECONDS = 30.0
+MAX_PUBLIC_MCP_TIMEOUT_SECONDS = 300.0
 MCP_REQUEST_TOO_LARGE_CODE = "request_too_large"
 MCP_REQUEST_TOO_LARGE_MESSAGE = "Request body exceeds the allowed size."
 MCP_RATE_LIMIT_CODE = "mcp_rate_limited"
 MCP_RATE_LIMIT_MESSAGE = "Too many MCP requests. Try again later."
 MCP_CONCURRENCY_LIMIT_CODE = "mcp_concurrency_limited"
 MCP_CONCURRENCY_LIMIT_MESSAGE = "MCP service is busy. Try again later."
+MCP_TIMEOUT_CODE = "mcp_timeout"
+MCP_TIMEOUT_MESSAGE = "MCP request timed out. Try again later."
 MAX_AUTH_QUERY_BYTES = 8 * 1024
 MAX_AUTH_QUERY_VALUE = 4 * 1024
 AUTH_RATE_LIMIT_WINDOW_SECONDS = 60.0
@@ -169,6 +174,7 @@ class Settings:
     mcp_url: str | None
     deployment_mode: str
     bridge_timeout_seconds: float
+    public_mcp_timeout_seconds: float
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
@@ -266,6 +272,11 @@ class Settings:
             mcp_url=_optional_mcp_url_env("FOLIO_MCP_URL"),
             deployment_mode=deployment_mode,
             bridge_timeout_seconds=_positive_float_env("FOLIO_BRIDGE_TIMEOUT_SECONDS", 5),
+            public_mcp_timeout_seconds=_bounded_positive_float_env(
+                "FOLIO_MCP_TIMEOUT_SECONDS",
+                PUBLIC_MCP_TIMEOUT_SECONDS,
+                MAX_PUBLIC_MCP_TIMEOUT_SECONDS,
+            ),
             oidc_issuer=oidc_issuer,
             oidc_audience=oidc_audience,
             oidc_jwks_url=oidc_jwks_url,
@@ -461,14 +472,25 @@ class FolioHttpApp:
         public_mcp_rate_limit: int = PUBLIC_MCP_RATE_LIMIT,
         public_mcp_concurrency_limit: int = PUBLIC_MCP_CONCURRENCY_LIMIT,
         public_mcp_concurrency_per_key: int = PUBLIC_MCP_CONCURRENCY_PER_KEY,
+        public_mcp_timeout_seconds: float = PUBLIC_MCP_TIMEOUT_SECONDS,
     ):
         if max_request_bytes < 1:
             raise ValueError("max_request_bytes must be positive")
+        if (
+            not math.isfinite(public_mcp_timeout_seconds)
+            or public_mcp_timeout_seconds <= 0
+            or public_mcp_timeout_seconds > MAX_PUBLIC_MCP_TIMEOUT_SECONDS
+        ):
+            raise ValueError(
+                "public_mcp_timeout_seconds must be between 0 and "
+                f"{MAX_PUBLIC_MCP_TIMEOUT_SECONDS:g} seconds"
+            )
         self.app = app
         self.service = service
         self.inspection = inspection
         self.deployment_mode = deployment_mode
         self.max_request_bytes = max_request_bytes
+        self.public_mcp_timeout_seconds = public_mcp_timeout_seconds
         self.authenticator = authenticator
         self.session_store = session_store
         self.identity_adapter = identity_adapter
@@ -503,7 +525,24 @@ class FolioHttpApp:
         public_mcp = scope["path"] == "/mcp"
         public_receive = receive
         if public_mcp and scope["method"] == "POST":
-            accepted, public_receive = await self._check_public_mcp_body(scope, receive, send)
+            try:
+                async with asyncio.timeout(self.public_mcp_timeout_seconds):
+                    accepted, public_receive = await self._check_public_mcp_body(
+                        scope, receive, send
+                    )
+            except TimeoutError:
+                await self._public_mcp_error(
+                    scope,
+                    receive,
+                    send,
+                    status_code=504,
+                    code=MCP_TIMEOUT_CODE,
+                    message=MCP_TIMEOUT_MESSAGE,
+                    retry_after=1,
+                    retryable=True,
+                    event="mcp_timeout",
+                )
+                return
             if not accepted:
                 return
         if scope["method"] == "GET" and scope["path"] == "/sign-in":
@@ -663,7 +702,30 @@ class FolioHttpApp:
                     )
                     return
                 try:
-                    await self.app(scope, public_receive, send)
+                    response_started = False
+
+                    async def tracked_send(message: Message) -> None:
+                        nonlocal response_started
+                        if message["type"] == "http.response.start":
+                            response_started = True
+                        await send(message)
+
+                    try:
+                        async with asyncio.timeout(self.public_mcp_timeout_seconds):
+                            await self.app(scope, public_receive, tracked_send)
+                    except TimeoutError:
+                        if not response_started:
+                            await self._public_mcp_error(
+                                scope,
+                                public_receive,
+                                send,
+                                status_code=504,
+                                code=MCP_TIMEOUT_CODE,
+                                message=MCP_TIMEOUT_MESSAGE,
+                                retry_after=1,
+                                retryable=True,
+                                event="mcp_timeout",
+                            )
                 finally:
                     self._public_mcp_concurrency_limiter.release(key)
                 return
@@ -1342,6 +1404,7 @@ def run_http(host: str, port: int) -> None:
             auth_redirect_uri=auth_redirect_uri,
             control_origin=settings.control_origin,
             max_request_bytes=settings.max_request_bytes,
+            public_mcp_timeout_seconds=settings.public_mcp_timeout_seconds,
         ),
         host=host,
         port=port,
