@@ -178,6 +178,7 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
             },
         )
         html_render_version = html_version_2["id"]
+        version_ids.add(html_render_version)
 
         filename_search = await call(
             client, "artifact_search", {"query": html["artifact"]["name"], "limit": 20}
@@ -276,6 +277,7 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         assert updated["parent_version_id"] == root_version_id
         updated_version_id = updated["id"]
         assert updated_version_id != root_version_id
+        version_ids.add(updated_version_id)
 
         current_root = await call(client, "artifact_read", {"artifact_id": root_id})
         old_root = await call(
