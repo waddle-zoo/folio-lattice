@@ -1,6 +1,7 @@
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -463,6 +464,18 @@ class ExternalMcpHttpTransportTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ExternalMcpError, "timed out"):
             timeout_transport.health(ENDPOINT, credential=None)
+
+        def slow_dns(host: str, port: int, **kwargs: Any) -> list[Any]:
+            time.sleep(0.05)
+            return self.public_dns(host, port, **kwargs)
+
+        dns_timeout_transport = HttpExternalMcpTransport(
+            timeout_seconds=0.001,
+            dns_resolver=slow_dns,
+            http_transport=upstream_httpx.MockTransport(MockUpstream()),
+        )
+        with self.assertRaisesRegex(ExternalMcpError, "timed out"):
+            dns_timeout_transport.health(ENDPOINT, credential=None)
 
         oversized = upstream_httpx.MockTransport(
             lambda request: upstream_httpx.Response(

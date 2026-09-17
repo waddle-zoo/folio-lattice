@@ -225,7 +225,10 @@ class HttpExternalMcpTransport:
         from mcp.client.session import ClientSession
         from mcp.client.streamable_http import streamable_http_client
 
-        resolved = self._resolve_endpoint(endpoint)
+        # DNS resolution is blocking on common runtimes. Keep it off the event
+        # loop so the surrounding end-to-end timeout can fail closed on a slow
+        # or malicious resolver.
+        resolved = await asyncio.to_thread(self._resolve_endpoint, endpoint)
         headers = {"Authorization": f"Bearer {credential}"} if credential is not None else {}
         transport = self._http_transport
         if transport is None:

@@ -24,7 +24,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -230,10 +230,26 @@ class _LoopbackExternalTransport:
     """Real MCP HTTP transport pinned to one local fixture endpoint."""
 
     def __init__(self, local_endpoint: str):
-        from folio_lattice.external_mcp import HttpExternalMcpTransport
+        from folio_lattice.external_mcp import ExternalMcpError, HttpExternalMcpTransport
+
+        class TestOnlyLoopbackHttpTransport(HttpExternalMcpTransport):
+            """Pin the deterministic HTTP fixture without weakening production policy."""
+
+            def _resolve_endpoint(self, endpoint: str) -> tuple[str, tuple[str, ...]]:
+                parsed = urlsplit(endpoint)
+                if (
+                    endpoint != local_endpoint
+                    or parsed.scheme != "http"
+                    or parsed.hostname != "127.0.0.1"
+                    or parsed.query
+                    or parsed.fragment
+                    or parsed.path != "/mcp"
+                ):
+                    raise ExternalMcpError("test upstream endpoint is invalid")
+                return "127.0.0.1", ("127.0.0.1",)
 
         self.local_endpoint = local_endpoint
-        self.transport = HttpExternalMcpTransport(timeout_seconds=0.25)
+        self.transport = TestOnlyLoopbackHttpTransport(timeout_seconds=0.25)
 
     def _endpoint(self, endpoint: str) -> str:
         if endpoint != APPROVED_UPSTREAM_ENDPOINT:
