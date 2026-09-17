@@ -162,6 +162,7 @@ class HttpE2ETests(unittest.TestCase):
                 self.assertEqual(evidence["linked_count"], 4)
                 self.assertEqual(evidence["discovered_count"], 5)
                 self.assertEqual(evidence["component_count"], 5)
+                self.assertEqual(evidence["chunk_field"], "result.content")
                 self.assertEqual(evidence["version_count"], 2)
                 self.assertGreaterEqual(evidence["elapsed_ms"], 0)
             finally:

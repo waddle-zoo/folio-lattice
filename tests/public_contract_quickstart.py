@@ -231,6 +231,7 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
             await call(client, "artifact_read_chunk", {"chunk_id": descriptor["id"]})
             for descriptor in current_root["chunks"]
         ]
+        assert all("content" in chunk and "text" not in chunk for chunk in chunks)
         assert "".join(chunk["content"] for chunk in chunks) == updated_root_text
         assert all(chunk["offset_unit"] == "unicode_code_points" for chunk in chunks)
 
@@ -317,6 +318,13 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
     css = next(item for item in children if item["artifact"]["name"].endswith(".css"))
     javascript = next(item for item in children if item["artifact"]["name"].endswith(".js"))
     binary = next(item for item in children if item["artifact"]["name"].endswith(".bin"))
+    with urllib.request.urlopen(
+        f"{base_url.rstrip('/')}/standalone/{html['artifact']['id']}", timeout=10
+    ) as response:
+        standalone = response.read().decode()
+        assert response.status == 200
+        assert response.headers["Content-Type"].startswith("text/html")
+        assert 'id="human-preview"' in standalone
     with iframe_get(f"{render_url}/render/{html['artifact']['id']}") as response:
         assert response.read().decode() == f"<h1>{body_marker}</h1>"
         policy = response.headers["Content-Security-Policy"]
@@ -352,6 +360,7 @@ async def exercise(base_url: str, render_url: str) -> dict[str, Any]:
         "component_count": len(component_ids),
         "scoped_search_count": len(scoped_search),
         "grep_count": len(grep),
+        "chunk_field": "result.content",
         "version_count": 2,
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
     }
