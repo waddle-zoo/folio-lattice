@@ -221,8 +221,14 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .search-form .form-kicker { margin-bottom: .7rem; color: var(--soft); font-size: .68rem; font-weight: 800; letter-spacing: .12em; }
 .search-form button { margin-top: .85rem; }
 .results-wrap { margin-top: 1.15rem; }
+.results-toolbar { display: flex; align-items: center; justify-content: space-between; gap: .8rem; }
 .results-label { margin-bottom: .5rem; color: var(--muted); font-size: .77rem; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; }
+.results-filter { display: flex; align-items: center; gap: .45rem; color: var(--muted); font-size: .78rem; }
+.results-filter select { min-height: 32px; padding: .35rem .5rem; }
 .results-list { border-top: 1px solid var(--line); }
+.result-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; border-bottom: 1px solid var(--line); padding: .65rem .2rem .35rem; color: var(--muted); }
+.result-group-heading h3 { margin: 0; color: var(--ink); font-size: .78rem; }
+.result-group-heading span { font-size: .72rem; }
 .result-item { display: grid; gap: .25rem; border-bottom: 1px solid var(--line); padding: .75rem .2rem; color: var(--muted); font-size: .84rem; }
 .result-heading { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
 .result-meta { display: flex; gap: .45rem; flex-wrap: wrap; color: var(--muted); font-size: .72rem; }
@@ -406,6 +412,7 @@ iframe { display: block; width: 100%; min-height: 28rem; border: 0; background: 
   .section-heading { align-items: start; flex-direction: column; gap: .35rem; }
   .metadata-grid { grid-template-columns: 1fr; gap: .15rem; }
   .metadata-grid dd { margin-bottom: .45rem; }
+  .results-toolbar { align-items: flex-start; flex-direction: column; gap: .35rem; }
   .result-item { align-items: start; flex-direction: column; gap: .15rem; }
   .workspace-nav { flex-wrap: wrap; }
   .auth-context { justify-content: flex-start; flex-wrap: wrap; padding-inline: 1rem; }
@@ -1605,6 +1612,7 @@ let authRedirectStarted = false;
 let accessGrants = [];
 let pendingRevoke = null;
 let revokeTrigger = null;
+let librarySearchResults = null;
 
 function artifactPath(id) {
   const prefix = debugMode ? 'inspect' : workspaceMode ? 'workspace' : 'artifacts';
@@ -1809,6 +1817,16 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value || 'Unknown date');
   return new Intl.DateTimeFormat(undefined, {month: 'short', day: 'numeric', year: 'numeric'}).format(date);
+}
+function mediaTypeLabel(mediaType) {
+  return {
+    'text/markdown': 'Markdown', 'text/html': 'HTML', 'text/css': 'CSS',
+    'application/javascript': 'JavaScript', 'text/plain': 'Plain text',
+  }[mediaType] || (mediaType || 'Unknown type');
+}
+function isKnownMediaType(mediaType) {
+  return ['text/markdown', 'text/html', 'text/css', 'application/javascript', 'text/plain']
+    .includes(mediaType);
 }
 function button(label, action) {
   const value = document.createElement('button'); value.type = 'button';
@@ -2427,6 +2445,8 @@ async function loadLibrary() {
       const open = button(label, () => {
         location.assign(destination(artifact.id));
       });
+      open.dataset.artifactId = artifact.id;
+      open.dataset.mediaType = artifact.media_type || '';
       if (isWebArtifact(artifact, {media_type: artifact.media_type})) {
         open.setAttribute('aria-label', `Open artifact ${label}`);
         const action = document.createElement('a'); action.className = 'library-action';
@@ -2629,8 +2649,55 @@ function mergeSearchResults(results) {
   });
   return [...merged.values()];
 }
+function librarySearchFilter() {
+  return byId('search-type-filter')?.value || 'all';
+}
+function filteredLibrarySearchResults(results) {
+  const filter = librarySearchFilter();
+  if (filter === 'all') return results;
+  return results.filter((result) => filter === 'other'
+    ? !isKnownMediaType(result.media_type)
+    : result.media_type === filter);
+}
+function renderLibrarySearch() {
+  const allResults = librarySearchResults || [];
+  const results = filteredLibrarySearchResults(allResults);
+  const names = artifactNameCounts(results.map((result) => ({
+    name: result.artifact_name, id: result.artifact_id,
+  })));
+  renderResults(byId('results'), results, names);
+  const filter = librarySearchFilter();
+  const summary = byId('search-result-summary');
+  if (!summary) return;
+  if (!allResults.length) {
+    summary.textContent = filter === 'all' ? 'No results.' : `No ${mediaTypeLabel(filter).toLowerCase()} results.`;
+    return;
+  }
+  const typeCount = new Set(allResults.map((result) => mediaTypeLabel(result.media_type))).size;
+  summary.textContent = filter === 'all'
+    ? `${allResults.length} result${allResults.length === 1 ? '' : 's'} across ${typeCount} file type${typeCount === 1 ? '' : 's'}.`
+    : `${results.length} ${mediaTypeLabel(filter).toLowerCase()} result${results.length === 1 ? '' : 's'}.`;
+}
 function renderResults(target, results, names) {
-  list(target, results, (rawResult) => {
+  const groups = new Map();
+  results.map(searchResultShape).forEach((result) => {
+    const label = mediaTypeLabel(result.media_type);
+    const group = groups.get(label) || [];
+    group.push(result); groups.set(label, group);
+  });
+  const groupedResults = [];
+  [...groups.entries()].sort(([left], [right]) => left.localeCompare(right)).forEach(([label, items]) => {
+    groupedResults.push({groupLabel: label, groupCount: items.length});
+    groupedResults.push(...items);
+  });
+  list(target, groupedResults, (rawResult) => {
+    if (rawResult.groupLabel) {
+      const heading = document.createElement('li'); heading.className = 'result-group-heading';
+      const title = document.createElement('h3'); title.textContent = rawResult.groupLabel;
+      const count = document.createElement('span');
+      count.textContent = `${rawResult.groupCount} result${rawResult.groupCount === 1 ? '' : 's'}`;
+      heading.append(title, count); return heading;
+    }
     const result = searchResultShape(rawResult);
     const li = document.createElement('li'); li.className = 'result-item';
     const heading = document.createElement('div'); heading.className = 'result-heading';
@@ -2679,7 +2746,11 @@ async function discover(tool, field, inputId, resultsTarget) {
     const query = byId(inputId).value.trim();
     if (!query) {
       if (workspaceMode) clearWorkspaceSearch();
-      else byId('results')?.replaceChildren();
+      else {
+        librarySearchResults = null;
+        byId('results')?.replaceChildren();
+        if (byId('search-result-summary')) byId('search-result-summary').textContent = 'No search run yet.';
+      }
       status('');
       return;
     }
@@ -2694,9 +2765,6 @@ async function discover(tool, field, inputId, resultsTarget) {
       rawResults = (await exactMetadataResults(query)).concat(rawResults);
     }
     const results = mergeSearchResults(rawResults);
-    const names = artifactNameCounts(results.map((result) => ({
-      name: result.artifact_name, id: result.artifact_id,
-    })));
     if (workspaceMode) {
       const panel = byId('workspace-search-results');
       if (panel) panel.hidden = false;
@@ -2705,8 +2773,14 @@ async function discover(tool, field, inputId, resultsTarget) {
           ? `${results.length} artifact${results.length === 1 ? '' : 's'} found.`
           : 'No artifacts match that search.';
       }
+      const names = artifactNameCounts(results.map((result) => ({
+        name: result.artifact_name, id: result.artifact_id,
+      })));
+      renderResults(resultsTarget, results, names);
+    } else {
+      librarySearchResults = results;
+      renderLibrarySearch();
     }
-    renderResults(resultsTarget, results, names);
     status(`${results.length} result${results.length === 1 ? '' : 's'}.`);
   } catch (error) { handleFailure(error); }
 }
@@ -2715,6 +2789,9 @@ byId('search')?.addEventListener('submit', (event) => {
 });
 byId('grep')?.addEventListener('submit', (event) => {
   event.preventDefault(); discover('artifact_grep', 'pattern', 'grep-pattern', byId('results'));
+});
+byId('search-type-filter')?.addEventListener('change', () => {
+  if (librarySearchResults) renderLibrarySearch();
 });
 byId('new-entry')?.addEventListener('click', () => {
   const panel = byId('new');
@@ -3188,7 +3265,13 @@ def ui_html(
             if debug
             else ""
         )
-        + '</div><div class="results-wrap"><p class="results-label">Results</p><ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></div></details>'
+        + '</div><div class="results-wrap"><div class="results-toolbar"><p id="search-result-summary" class="results-label" role="status" aria-live="polite">No search run yet.</p>'
+        '<label class="results-filter" for="search-type-filter">Show <select id="search-type-filter" aria-label="Filter results by file type">'
+        '<option value="all">All file types</option><option value="text/markdown">Markdown</option>'
+        '<option value="text/html">HTML</option><option value="text/css">CSS</option>'
+        '<option value="application/javascript">JavaScript</option><option value="text/plain">Plain text</option>'
+        '<option value="other">Other types</option></select></label></div>'
+        '<ul id="results" class="results-list"><li class="muted">No search run yet.</li></ul></div></div></details>'
     )
     avatar_parts = []
     for part in str(actor or "").split():

@@ -353,6 +353,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"Choose a graph", page)
         self.assertIn(b"New graph or artifact", page)
         self.assertIn(b"Search documents and files", page)
+        self.assertIn(b'id="search-type-filter"', page)
+        self.assertIn(b"All file types", page)
         self.assertIn(b"GRAPH PICKER", page)
         for narration in (
             b"Search across the text you have indexed",
@@ -368,6 +370,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"did not run", script)
         self.assertIn(b"artifact_name", script)
         self.assertIn(b"dataset.artifactId", script)
+        self.assertIn(b"mediaTypeLabel", script)
+        self.assertIn(b"renderLibrarySearch", script)
+        self.assertIn(b"result-group-heading", script)
         self.assertIn(b"request count", script)
 
         status, _, css = await call(self.inspection, "GET", "/ui.css")

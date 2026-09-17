@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
+from uuid import uuid4
 
 from mcp import Client
 from websockets.sync.client import connect
@@ -29,6 +30,10 @@ def free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return int(listener.getsockname()[1])
+
+
+def disposable_tenant(label: str) -> str:
+    return f"{label}-{uuid4().hex}"
 
 
 def browser_path() -> str | None:
@@ -592,7 +597,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 **os.environ,
                 "FOLIO_DB_PATH": str(root / "folio.db"),
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                "FOLIO_TENANT_ID": "browser-connections",
+                "FOLIO_TENANT_ID": disposable_tenant("browser-connections"),
                 "FOLIO_ACTOR": "browser-admin",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": control_origin,
@@ -751,7 +756,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 **os.environ,
                 "FOLIO_DB_PATH": str(root / "folio.db"),
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                "FOLIO_TENANT_ID": "browser-test",
+                "FOLIO_TENANT_ID": disposable_tenant("browser-test"),
                 "FOLIO_CONTROL_ORIGIN": harness_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
@@ -860,7 +865,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 **os.environ,
                 "FOLIO_DB_PATH": str(root / "folio.db"),
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                "FOLIO_TENANT_ID": "browser-graph",
+                "FOLIO_TENANT_ID": disposable_tenant("browser-graph"),
                 "FOLIO_ACTOR": "browser-persona",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
@@ -1102,7 +1107,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 **os.environ,
                 "FOLIO_DB_PATH": str(root / "folio.db"),
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                "FOLIO_TENANT_ID": "browser-ui",
+                "FOLIO_TENANT_ID": disposable_tenant("browser-ui"),
                 "FOLIO_ACTOR": "browser-persona",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
@@ -1114,34 +1119,35 @@ class BrowserSandboxE2ETests(unittest.TestCase):
             bridge_exercised = False
             try:
                 wait_ready(control_origin, control)
+                body_marker = "library body marker"
                 target = create(
                     control_origin,
                     "decision.md",
-                    b"# Decision\n\n- browser target",
+                    f"# Decision\n\n- browser target\n\n{body_marker}".encode(),
                     "text/markdown",
                 )
                 duplicate_one = create(
                     control_origin,
                     "same-name.md",
-                    b"duplicate library marker one",
+                    f"duplicate library marker one\n{body_marker}".encode(),
                     "text/markdown",
                 )
                 duplicate_two = create(
                     control_origin,
                     "same-name.md",
-                    b"duplicate library marker two",
+                    f"duplicate library marker two\n{body_marker}".encode(),
                     "text/markdown",
                 )
                 javascript = create(
                     control_origin,
                     "browser.js",
-                    b"document.body.dataset.browserJavascript='ran'",
+                    f"document.body.dataset.browserJavascript='ran'; // {body_marker}".encode(),
                     "application/javascript",
                 )
                 stylesheet = create(
                     control_origin,
                     "browser.css",
-                    b"body { color: rgb(3, 4, 5); }",
+                    f"body {{ color: rgb(3, 4, 5); }} /* {body_marker} */".encode(),
                     "text/css",
                 )
                 source = b"""<!doctype html><body>browsermarker human-first<script>
@@ -1177,8 +1183,87 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                     set(duplicate_labels),
                     {"same-name.md · Copy 1 of 2", "same-name.md · Copy 2 of 2"},
                 )
+                self.assertEqual(
+                    set(
+                        chrome.evaluate(
+                            "[...document.querySelectorAll('#artifact-library button[data-artifact-id]')].filter((button) => button.textContent.startsWith('same-name.md')).map((button) => button.dataset.artifactId)"
+                        )
+                    ),
+                    {duplicate_one["artifact"]["id"], duplicate_two["artifact"]["id"]},
+                )
 
                 chrome.evaluate("document.querySelector('#find').open = true")
+                chrome.evaluate(f"""
+document.querySelector('#search-query').value = {json.dumps(body_marker)};
+document.querySelector('#search').requestSubmit();
+""")
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 5"
+                )
+                marker_result_ids = chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.artifactId)"
+                )
+                self.assertEqual(
+                    set(marker_result_ids),
+                    {
+                        target["artifact"]["id"],
+                        duplicate_one["artifact"]["id"],
+                        duplicate_two["artifact"]["id"],
+                        javascript["artifact"]["id"],
+                        stylesheet["artifact"]["id"],
+                    },
+                )
+                self.assertEqual(
+                    set(
+                        chrome.evaluate(
+                            "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.mediaType)"
+                        )
+                    ),
+                    {"text/markdown", "application/javascript", "text/css"},
+                )
+                self.assertEqual(
+                    set(
+                        chrome.evaluate(
+                            "[...document.querySelectorAll('#results .result-group-heading h3')].map((heading) => heading.textContent)"
+                        )
+                    ),
+                    {"Markdown", "JavaScript", "CSS"},
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#search-result-summary').textContent"),
+                    "5 results across 3 file types.",
+                )
+                self.assertNotIn(
+                    "art_",
+                    chrome.evaluate("document.querySelector('#results').innerText"),
+                )
+                chrome.evaluate(
+                    "document.querySelector('#search-type-filter').value = 'text/markdown'; "
+                    "document.querySelector('#search-type-filter').dispatchEvent(new Event('change', {bubbles:true}))"
+                )
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 3"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#search-result-summary').textContent"),
+                    "3 markdown results.",
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.mediaType)"
+                    ),
+                    ["text/markdown", "text/markdown", "text/markdown"],
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('#results .result-group-heading h3')].map((heading) => heading.textContent)"
+                    ),
+                    ["Markdown"],
+                )
+                chrome.evaluate(
+                    "document.querySelector('#search-type-filter').value = 'all'; "
+                    "document.querySelector('#search-type-filter').dispatchEvent(new Event('change', {bubbles:true}))"
+                )
                 chrome.evaluate("""
 window.__folioSearchCalls = [];
 const originalFetch = window.fetch;
