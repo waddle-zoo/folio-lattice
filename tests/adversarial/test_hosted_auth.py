@@ -8,14 +8,13 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
-
-from tests.hosted_auth_negative_target import (
+from hosted_auth_negative_target import (
     ISSUER,
     PRINCIPALS,
     HostedAuthNegativeTarget,
     factory,
 )
-from tests.test_hosted_auth_negative import (
+from test_hosted_auth_negative import (
     ACTOR_A,
     PRIVATE_MARKER,
     TENANT_A,

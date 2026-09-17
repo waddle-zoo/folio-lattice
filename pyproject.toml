@@ -39,6 +39,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 addopts = ["-ra"]
 markers = [
     "unit: fast isolated tests",
