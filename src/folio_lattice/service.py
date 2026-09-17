@@ -10,7 +10,8 @@ import re
 import sqlite3
 import uuid
 from collections import deque
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,27 @@ MAX_EXTERNAL_CONNECTION_NAME_LENGTH = 255
 MAX_EXTERNAL_LIST_ITEMS = 128
 MAX_EXTERNAL_ITEM_LENGTH = 2_048
 MAX_EXTERNAL_ARGUMENT_BYTES = 64 * 1024
+_EXTERNAL_POLICY_KEYS = frozenset({"slack"})
+_EXTERNAL_POLICY_PUBLIC_KEYS = frozenset({"channels", "max_time_range_seconds"})
+_EXTERNAL_PUBLIC_FIELDS = (
+    "id",
+    "tenant_id",
+    "name",
+    "endpoint",
+    "origin",
+    "transport",
+    "approved_tools",
+    "approved_resources",
+    "allowed_origins",
+    "status",
+    "health_status",
+    "last_health_at",
+    "created_by",
+    "created_at",
+    "revoked_by",
+    "revoked_at",
+    "policy_version",
+)
 EXTERNAL_MCP_POLICY_VERSION = "external-mcp-v1"
 ACL_ACTIONS = frozenset({"read", "write", "share"})
 ACL_SUBJECT_TYPE = "actor"
@@ -1622,7 +1644,16 @@ class FolioLattice:
             or "*" in value
         ):
             raise FolioError("external MCP origin is invalid")
-        parsed = urlsplit(value)
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+            host = parsed.hostname
+        except ValueError:
+            parsed = None
+            port = None
+            host = None
+        if parsed is None:
+            raise FolioError("external MCP origin is invalid")
         if (
             parsed.scheme != "https"
             or not parsed.netloc
@@ -1634,11 +1665,6 @@ class FolioLattice:
             or (not endpoint and parsed.path)
         ):
             raise FolioError("external MCP origin is invalid")
-        try:
-            port = parsed.port
-        except ValueError as exc:
-            raise FolioError("external MCP origin is invalid") from exc
-        host = parsed.hostname
         if host is None:
             raise FolioError("external MCP origin is invalid")
         if endpoint:
@@ -1686,9 +1712,13 @@ class FolioLattice:
             or any(ord(character) < 0x21 or ord(character) == 0x7F for character in value)
         ):
             raise FolioError("credential_ref must be an opaque secret:// reference")
-        parsed = urlsplit(value)
+        try:
+            parsed = urlsplit(value)
+        except ValueError:
+            parsed = None
         if (
-            parsed.scheme != "secret"
+            parsed is None
+            or parsed.scheme != "secret"
             or not parsed.netloc
             or parsed.username is not None
             or parsed.password is not None
@@ -1703,18 +1733,27 @@ class FolioLattice:
         try:
             parsed = json.loads(value)
         except (TypeError, ValueError):
-            raise FolioError("external MCP policy is invalid") from None
+            parsed = None
         if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
             raise FolioError("external MCP policy is invalid")
         return parsed
 
     @staticmethod
     def _external_policy(value: Mapping[str, Any] | None) -> str:
-        policy = dict(value or {})
+        if value is None:
+            policy: dict[str, Any] = {}
+        elif not isinstance(value, Mapping):
+            raise FolioError("external MCP policy is invalid")
+        else:
+            policy = dict(value)
+        if any(not isinstance(key, str) for key in policy) or set(policy) - _EXTERNAL_POLICY_KEYS:
+            raise FolioError("external MCP policy is invalid")
         try:
             encoded = json.dumps(policy, sort_keys=True, separators=(",", ":"), allow_nan=False)
         except (TypeError, ValueError):
-            raise FolioError("external MCP policy is invalid") from None
+            encoded = None
+        if encoded is None:
+            raise FolioError("external MCP policy is invalid")
         if len(encoded.encode()) > MAX_EXTERNAL_ARGUMENT_BYTES:
             raise FolioError("external MCP policy exceeds the allowed size")
         return encoded
@@ -1724,19 +1763,32 @@ class FolioLattice:
         try:
             parsed = json.loads(value)
         except (TypeError, ValueError):
-            raise FolioError("external MCP policy is invalid") from None
-        if not isinstance(parsed, dict):
+            parsed = None
+        if (
+            not isinstance(parsed, dict)
+            or any(not isinstance(key, str) for key in parsed)
+            or set(parsed) - _EXTERNAL_POLICY_KEYS
+        ):
             raise FolioError("external MCP policy is invalid")
         return parsed
 
     @staticmethod
     def _external_public(row: dict[str, Any]) -> dict[str, Any]:
-        public = {
-            key: value for key, value in row.items() if key not in {"credential_ref", "policy_json"}
-        }
-        if "policy_json" in row:
-            public["policy"] = FolioLattice._external_policy_dict(row["policy_json"])
-        return public | {"credential_configured": row["credential_ref"] is not None}
+        public = {key: row[key] for key in _EXTERNAL_PUBLIC_FIELDS if key in row}
+        policy_value = row.get("policy_json")
+        if isinstance(policy_value, str):
+            try:
+                policy = json.loads(policy_value)
+            except (TypeError, ValueError):
+                policy = {}
+            if isinstance(policy, dict):
+                slack = policy.get("slack")
+                if isinstance(slack, dict):
+                    safe_slack = {
+                        key: slack[key] for key in _EXTERNAL_POLICY_PUBLIC_KEYS if key in slack
+                    }
+                    public["policy"] = {"slack": safe_slack}
+        return public | {"credential_configured": row.get("credential_ref") is not None}
 
     @staticmethod
     def _write_external_audit(
@@ -1905,6 +1957,27 @@ class FolioLattice:
         connection = self.external_connection_for_broker(tenant_id, connection_id, actor=actor)
         return self._external_public(connection)
 
+    @contextmanager
+    def external_call_fence(
+        self, tenant_id: str, connection_id: str, *, actor: str
+    ) -> Iterator[dict[str, Any]]:
+        """Hold the registry write fence through upstream transport start."""
+
+        del actor
+        db = self.connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            connection = self._external_row(db, tenant_id, connection_id)
+            if connection["status"] != "active":
+                raise FolioError("external MCP connection is revoked")
+            yield connection
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     def record_external_health(
         self, tenant_id: str, connection_id: str, *, actor: str, status: str
     ) -> None:
@@ -1934,6 +2007,7 @@ class FolioLattice:
         self._validate_text("actor", actor, MAX_NAME_LENGTH)
         self._validate_text("reason", reason, MAX_REASON_LENGTH)
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             connection = self._external_row(db, tenant_id, connection_id)
             outcome = "already_revoked" if connection["status"] == "revoked" else "revoked"
             if connection["status"] != "revoked":
@@ -1963,19 +2037,22 @@ class FolioLattice:
         tool_name: str | None = None,
         resource_uri: str | None = None,
     ) -> None:
-        with self.connect() as db:
-            tenant = db.execute("SELECT 1 FROM tenants WHERE id = ?", (tenant_id,)).fetchone()
-            if tenant is not None:
-                self._write_external_audit(
-                    db,
-                    tenant_id=tenant_id,
-                    connection_id=connection_id,
-                    actor=actor,
-                    action=action,
-                    outcome="denied",
-                    tool_name=tool_name,
-                    resource_uri=resource_uri,
-                )
+        try:
+            with self.connect() as db:
+                tenant = db.execute("SELECT 1 FROM tenants WHERE id = ?", (tenant_id,)).fetchone()
+                if tenant is not None:
+                    self._write_external_audit(
+                        db,
+                        tenant_id=tenant_id,
+                        connection_id=connection_id,
+                        actor=actor,
+                        action=action,
+                        outcome="denied",
+                        tool_name=tool_name,
+                        resource_uri=resource_uri,
+                    )
+        except Exception:
+            return
 
     def authorize_external_tool(
         self,

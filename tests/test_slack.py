@@ -191,6 +191,56 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
                 query="renderer",
             )
 
+    async def test_unknown_policy_keys_fail_closed_without_public_disclosure(self) -> None:
+        with self.assertRaisesRegex(FolioError, "policy is invalid"):
+            self.service.register_external_connection(
+                tenant_id="tenant-a",
+                actor="tenant-admin",
+                name="unknown-policy",
+                endpoint=ENDPOINT,
+                approved_tools=["slack.search"],
+                approved_resources=[],
+                allowed_origins=[ORIGIN],
+                policy={"unknown": {"secret": "policy-secret"}},
+            )
+
+        with self.assertRaisesRegex(FolioError, "policy is invalid"):
+            ApprovedSlackConsumer._policy(
+                {
+                    "policy": {
+                        "slack": {
+                            "channels": ["#deployments"],
+                            "max_time_range_seconds": 86_400,
+                            "secret": "nested-policy-secret",
+                        }
+                    }
+                }
+            )
+        with self.assertRaisesRegex(FolioError, "policy is invalid"):
+            ApprovedSlackConsumer._policy(
+                {
+                    "policy": {
+                        "slack": {
+                            "channels": ["#deployments"],
+                            "max_time_range_seconds": 86_400,
+                        },
+                        "unknown": "top-level-policy-secret",
+                    }
+                }
+            )
+        public = FolioLattice._external_public(
+            {
+                "id": "connection",
+                "credential_ref": "secret://tenant-a/slack",
+                "future_secret": "public-secret",
+                "policy_json": '{"slack":{"channels":["#deployments"],"max_time_range_seconds":86400,"secret":"policy-secret"},"unknown":"generic-secret"}',
+            }
+        )
+        self.assertNotIn("public-secret", repr(public))
+        self.assertNotIn("policy-secret", repr(public))
+        self.assertNotIn("generic-secret", repr(public))
+        self.assertNotIn("credential_ref", public)
+
     async def test_approved_search_save_provenance_and_revoke(self) -> None:
         connection_id = await self._register()
         arguments = {

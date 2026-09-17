@@ -20,6 +20,7 @@ MAX_SLACK_ARTIFACT_BYTES = 512 * 1024
 MAX_SLACK_RANGE = timedelta(days=31)
 MAX_SLACK_POLICY_CHANNELS = 128
 SLACK_POLICY_KEY = "slack"
+_SLACK_POLICY_KEYS = frozenset({"channels", "max_time_range_seconds"})
 
 
 class ApprovedSlackConsumer:
@@ -88,9 +89,17 @@ class ApprovedSlackConsumer:
     @classmethod
     def _policy(cls, connection: Mapping[str, Any]) -> tuple[frozenset[str], timedelta]:
         policy = connection.get("policy")
-        slack_policy = policy.get(SLACK_POLICY_KEY) if isinstance(policy, Mapping) else None
+        if not isinstance(policy, Mapping):
+            raise FolioError("Slack connection policy is invalid")
+        if not policy:
+            raise FolioError("Slack connection policy is missing")
+        if set(policy) != {SLACK_POLICY_KEY}:
+            raise FolioError("Slack connection policy is invalid")
+        slack_policy = policy.get(SLACK_POLICY_KEY)
         if not isinstance(slack_policy, Mapping):
             raise FolioError("Slack connection policy is missing")
+        if set(slack_policy) != _SLACK_POLICY_KEYS:
+            raise FolioError("Slack connection policy is invalid")
         channels = slack_policy.get("channels")
         if isinstance(channels, (str, bytes)) or not isinstance(channels, list):
             raise FolioError("Slack channel policy is invalid")

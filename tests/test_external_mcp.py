@@ -1,6 +1,7 @@
 import asyncio
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -389,6 +390,171 @@ class ExternalMcpServiceTests(unittest.TestCase):
         self.assertNotIn(secret, str(raised.exception))
         self.assertIsNone(raised.exception.__cause__)
         self.assertIsNone(raised.exception.__context__)
+
+    def test_registration_validation_rejects_secret_bearing_ports_without_context(self) -> None:
+        for endpoint, origin in (
+            ("https://x.example:registration-secret/mcp", "https://x.example"),
+            (ENDPOINT, "https://x.example:origin-secret"),
+        ):
+            with self.subTest(endpoint=endpoint, origin=origin):
+                with self.assertRaisesRegex(FolioError, "origin is invalid") as raised:
+                    self.service.register_external_connection(
+                        tenant_id="acme",
+                        actor="admin",
+                        name="invalid-port",
+                        endpoint=endpoint,
+                        approved_tools=[TOOL],
+                        approved_resources=[],
+                        allowed_origins=[origin],
+                    )
+                self.assertNotIn("secret", str(raised.exception))
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertIsNone(raised.exception.__context__)
+
+    def test_audit_failures_are_bounded_and_sanitized(self) -> None:
+        transport = FakeTransport()
+        broker = ExternalMcpBroker(self.service, credentials=FakeCredentials(), transport=transport)
+        record = broker.register(
+            tenant_id="acme",
+            actor="admin",
+            name="audit-failure",
+            endpoint=ENDPOINT,
+            approved_tools=[TOOL],
+            approved_resources=[RESOURCE],
+            allowed_origins=[ORIGIN],
+            credential_ref=SECRET_REF,
+            reason="approved",
+        )
+        calls = 0
+
+        def fail_audit(*args: Any, **kwargs: Any) -> None:
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("sqlite audit secret")
+
+        self.service.record_external_call = fail_audit  # type: ignore[method-assign]
+        transport.transport_error_secret = "transport-secret"
+        with self.assertRaisesRegex(ExternalMcpError, "tool call failed") as raised:
+            broker.call_tool(
+                tenant_id="acme",
+                actor="admin",
+                connection_id=record["id"],
+                tool_name=TOOL,
+                arguments={},
+            )
+        self.assertEqual(calls, 1)
+        self.assertNotIn("sqlite audit secret", str(raised.exception))
+        self.assertNotIn("transport-secret", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        with self.assertRaisesRegex(ExternalMcpError, "resource read failed") as raised:
+            broker.read_resource(
+                tenant_id="acme",
+                actor="admin",
+                connection_id=record["id"],
+                resource_uri=RESOURCE,
+            )
+        self.assertEqual(calls, 2)
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
+    def test_health_persistence_failure_is_sanitized(self) -> None:
+        transport = FakeTransport()
+        broker = ExternalMcpBroker(self.service, credentials=FakeCredentials(), transport=transport)
+        record = broker.register(
+            tenant_id="acme",
+            actor="admin",
+            name="health-audit-failure",
+            endpoint=ENDPOINT,
+            approved_tools=[TOOL],
+            approved_resources=[],
+            allowed_origins=[ORIGIN],
+            credential_ref=SECRET_REF,
+            reason="approved",
+        )
+        calls = 0
+
+        def fail_health(*args: Any, **kwargs: Any) -> None:
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("sqlite health secret")
+
+        self.service.record_external_health = fail_health  # type: ignore[method-assign]
+        with self.assertRaisesRegex(ExternalMcpError, "health check failed") as raised:
+            broker.health(
+                tenant_id="acme",
+                actor="admin",
+                connection_id=record["id"],
+                probe=True,
+            )
+        self.assertEqual(calls, 1)
+        self.assertNotIn("sqlite health secret", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
+    def test_revoke_wins_after_authorization_before_transport_start(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        transport = FakeTransport()
+        transport_calls: list[str] = []
+
+        class BlockingCredentials:
+            def issue(self, **kwargs: str) -> str:
+                del kwargs
+                started.set()
+                if not release.wait(2):
+                    raise RuntimeError("credential test timed out")
+                return UPSTREAM_SECRET
+
+        original_call = transport.call_tool
+
+        def count_call(*args: Any, **kwargs: Any) -> Any:
+            transport_calls.append("started")
+            return original_call(*args, **kwargs)
+
+        transport.call_tool = count_call  # type: ignore[method-assign]
+        broker = ExternalMcpBroker(
+            self.service, credentials=BlockingCredentials(), transport=transport
+        )
+        record = broker.register(
+            tenant_id="acme",
+            actor="admin",
+            name="race",
+            endpoint=ENDPOINT,
+            approved_tools=[TOOL],
+            approved_resources=[],
+            allowed_origins=[ORIGIN],
+            credential_ref=SECRET_REF,
+            reason="approved",
+        )
+        result: list[BaseException] = []
+
+        def call() -> None:
+            try:
+                broker.call_tool(
+                    tenant_id="acme",
+                    actor="admin",
+                    connection_id=record["id"],
+                    tool_name=TOOL,
+                    arguments={},
+                )
+            except BaseException as exc:  # pragma: no branch - assertion below
+                result.append(exc)
+
+        worker = threading.Thread(target=call)
+        worker.start()
+        self.assertTrue(started.wait(2))
+        revoked = broker.revoke(
+            tenant_id="acme", actor="admin", connection_id=record["id"], reason="race test"
+        )
+        self.assertEqual(revoked["status"], "revoked")
+        release.set()
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(transport_calls, [])
+        self.assertEqual(len(result), 1)
+        self.assertIsInstance(result[0], ExternalMcpError)
+        self.assertIn("revoked", str(result[0]))
 
     def test_broker_rejects_credential_echo_from_upstream(self) -> None:
         credentials = FakeCredentials()

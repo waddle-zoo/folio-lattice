@@ -43,6 +43,7 @@ _SAFE_EXTERNAL_ERRORS = frozenset(
         "external MCP tool call failed",
         "external MCP resource read failed",
         "external MCP health check failed",
+        "external MCP connection is revoked",
     }
 )
 
@@ -528,6 +529,42 @@ class ExternalMcpBroker:
     def _release(self, key: str) -> None:
         self._concurrency_limiter.release(key)
 
+    def _record_external_call(
+        self,
+        tenant_id: str,
+        connection_id: str,
+        *,
+        actor: str,
+        action: str,
+        outcome: str,
+        tool_name: str | None = None,
+        resource_uri: str | None = None,
+    ) -> bool:
+        try:
+            self.service.record_external_call(
+                tenant_id,
+                connection_id,
+                actor=actor,
+                action=action,
+                outcome=outcome,
+                tool_name=tool_name,
+                resource_uri=resource_uri,
+            )
+        except Exception:
+            return False
+        return True
+
+    def _record_external_health(
+        self, tenant_id: str, connection_id: str, *, actor: str, status: str
+    ) -> bool:
+        try:
+            self.service.record_external_health(
+                tenant_id, connection_id, actor=actor, status=status
+            )
+        except Exception:
+            return False
+        return True
+
     @staticmethod
     def _check_registration_bounds(
         *,
@@ -536,8 +573,10 @@ class ExternalMcpBroker:
         approved_tools: list[str],
         approved_resources: list[str],
         allowed_origins: list[str],
-        policy: Mapping[str, Any],
+        policy: object,
     ) -> None:
+        if not isinstance(policy, Mapping):
+            raise ExternalMcpError("external MCP registration is invalid")
         if len(name) > 255 or len(endpoint) > 4_096:
             raise ExternalMcpError("external MCP registration value is too large")
         if any(len(items) > 128 for items in (approved_tools, approved_resources, allowed_origins)):
@@ -562,7 +601,9 @@ class ExternalMcpBroker:
                 allow_nan=False,
             ).encode()
         except (TypeError, ValueError):
-            raise ExternalMcpError("external MCP registration is invalid") from None
+            encoded = None
+        if encoded is None:
+            raise ExternalMcpError("external MCP registration is invalid")
         if len(encoded) > MAX_EXTERNAL_REQUEST_BYTES:
             raise ExternalMcpError("external MCP registration exceeds the allowed size")
 
@@ -586,7 +627,7 @@ class ExternalMcpBroker:
             approved_tools=approved_tools,
             approved_resources=approved_resources,
             allowed_origins=allowed_origins,
-            policy=policy or {},
+            policy={} if policy is None else policy,
         )
         key = self._admit(
             tenant_id=tenant_id, actor=actor, connection_id=name, operation="register"
@@ -687,16 +728,29 @@ class ExternalMcpBroker:
             failure: ExternalMcpError | None = None
             try:
                 credential = self._credential(connection)
-                health_status = self.transport.health(connection["endpoint"], credential=credential)
+                with self.service.external_call_fence(
+                    tenant_id, connection_id, actor=actor
+                ) as fenced:
+                    health_status = self.transport.health(fenced["endpoint"], credential=credential)
                 if health_status not in {"healthy", "unhealthy"}:
                     raise ExternalMcpError("external MCP health result is invalid")
             except ExternalMcpError as exc:
-                self.service.record_external_health(
+                if not self._record_external_health(
+                    tenant_id, connection_id, actor=actor, status="unhealthy"
+                ):
+                    failure = ExternalMcpError("external MCP health check failed")
+                else:
+                    failure = self._sanitize_external_error(exc, "external MCP health check failed")
+            except FolioError as exc:
+                self._record_external_health(
                     tenant_id, connection_id, actor=actor, status="unhealthy"
                 )
-                failure = self._sanitize_external_error(exc, "external MCP health check failed")
+                if str(exc) == "external MCP connection is revoked":
+                    failure = ExternalMcpError(str(exc))
+                else:
+                    failure = ExternalMcpError("external MCP health check failed")
             except Exception:
-                self.service.record_external_health(
+                self._record_external_health(
                     tenant_id, connection_id, actor=actor, status="unhealthy"
                 )
                 failure = ExternalMcpError("external MCP health check failed")
@@ -704,9 +758,10 @@ class ExternalMcpBroker:
                 credential = None
             if failure is not None:
                 raise failure from None
-            self.service.record_external_health(
+            if not self._record_external_health(
                 tenant_id, connection_id, actor=actor, status=health_status
-            )
+            ):
+                raise ExternalMcpError("external MCP health check failed") from None
             return self.service.external_connection_status(tenant_id, connection_id, actor=actor)
         finally:
             self._release(key)
@@ -808,24 +863,27 @@ class ExternalMcpBroker:
         failure: ExternalMcpError | None = None
         try:
             credential = self._credential(connection)
-            result = self.transport.call_tool(
-                connection["endpoint"],
-                tool_name,
-                arguments,
-                credential=credential,
-            )
-            self._bounded_result(result, credential)
-            self.service.record_external_call(
+            with self.service.external_call_fence(tenant_id, connection_id, actor=actor) as fenced:
+                result = self.transport.call_tool(
+                    fenced["endpoint"],
+                    tool_name,
+                    arguments,
+                    credential=credential,
+                )
+                self._bounded_result(result, credential)
+            if not self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
                 action="tool_call",
                 outcome="allowed",
                 tool_name=tool_name,
-            )
-            return result
+            ):
+                failure = ExternalMcpError("external MCP tool call failed")
+            else:
+                return result
         except ExternalMcpError as exc:
-            self.service.record_external_call(
+            self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
@@ -834,8 +892,21 @@ class ExternalMcpBroker:
                 tool_name=tool_name,
             )
             failure = self._sanitize_external_error(exc, "external MCP tool call failed")
+        except FolioError as exc:
+            self._record_external_call(
+                tenant_id,
+                connection_id,
+                actor=actor,
+                action="tool_call",
+                outcome="failed",
+                tool_name=tool_name,
+            )
+            if str(exc) == "external MCP connection is revoked":
+                failure = ExternalMcpError(str(exc))
+            else:
+                failure = ExternalMcpError("external MCP tool call failed")
         except Exception:
-            self.service.record_external_call(
+            self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
@@ -892,21 +963,24 @@ class ExternalMcpBroker:
         failure: ExternalMcpError | None = None
         try:
             credential = self._credential(connection)
-            result = self.transport.read_resource(
-                connection["endpoint"], resource_uri, credential=credential
-            )
-            self._bounded_result(result, credential)
-            self.service.record_external_call(
+            with self.service.external_call_fence(tenant_id, connection_id, actor=actor) as fenced:
+                result = self.transport.read_resource(
+                    fenced["endpoint"], resource_uri, credential=credential
+                )
+                self._bounded_result(result, credential)
+            if not self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
                 action="resource_read",
                 outcome="allowed",
                 resource_uri=resource_uri,
-            )
-            return result
+            ):
+                failure = ExternalMcpError("external MCP resource read failed")
+            else:
+                return result
         except ExternalMcpError as exc:
-            self.service.record_external_call(
+            self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
@@ -915,8 +989,21 @@ class ExternalMcpBroker:
                 resource_uri=resource_uri,
             )
             failure = self._sanitize_external_error(exc, "external MCP resource read failed")
+        except FolioError as exc:
+            self._record_external_call(
+                tenant_id,
+                connection_id,
+                actor=actor,
+                action="resource_read",
+                outcome="failed",
+                resource_uri=resource_uri,
+            )
+            if str(exc) == "external MCP connection is revoked":
+                failure = ExternalMcpError(str(exc))
+            else:
+                failure = ExternalMcpError("external MCP resource read failed")
         except Exception:
-            self.service.record_external_call(
+            self._record_external_call(
                 tenant_id,
                 connection_id,
                 actor=actor,
