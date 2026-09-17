@@ -1,0 +1,76 @@
+{
+  "schema": "fl-urj.27-g7",
+  "recorded_at": "2026-09-17T07:16:37Z",
+  "tested_commit": "176a2cebd2573287203f5931d4aad9d792be7905",
+  "result": "blocked",
+  "environment": {
+    "os": "macOS Darwin 24.6.0 arm64",
+    "python": "3.12.10",
+    "browser": "Google Chrome 153.0.8010.47",
+    "assistive_technology": "none; manual screen-reader run not performed",
+    "docker": "20.10.17",
+    "host": "local macOS host"
+  },
+  "commands": [
+    {
+      "command": "FOLIO_BROWSER='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' PYTHONPATH=src /Users/brandonsovran/Documents/Codex/2026-09-05/can-we-create-a-new-repo/gastown/folio_lattice/mayor/rig/.venv/bin/python -m pytest -q tests/test_browser_e2e.py",
+      "exit_code": 0,
+      "summary": "5 passed in 39.09s; 0 failed; 0 skipped; wall 39.55s"
+    },
+    {
+      "command": "FOLIO_BROWSER='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' PYTHONPATH=src /Users/brandonsovran/Documents/Codex/2026-09-05/can-we-create-a-new-repo/gastown/folio_lattice/mayor/rig/.venv/bin/python -m pytest -q tests/test_browser_e2e.py",
+      "exit_code": 0,
+      "summary": "5 passed in 37.31s; 0 failed; 0 skipped; wall 37.77s"
+    },
+    {
+      "command": "PYTHONPATH=src /Users/brandonsovran/Documents/Codex/2026-09-05/can-we-create-a-new-repo/gastown/folio_lattice/mayor/rig/.venv/bin/python -m pytest -q tests/test_web.py",
+      "exit_code": 0,
+      "summary": "16 passed; 9 subtests passed; 0 failed; 0 skipped"
+    },
+    {
+      "command": "PYTHONPATH=src /Users/brandonsovran/Documents/Codex/2026-09-05/can-we-create-a-new-repo/gastown/folio_lattice/mayor/rig/.venv/bin/python -m pytest -q tests/test_web.py -k 'static_ui_is_bounded_accessible_and_strictly_sandboxed or connections_admin_uses_real_tools_and_keeps_states_secret_free or connections_admin_denies_authenticated_non_admin or ui_contract_has_nontechnical_orientation_and_safe_status_copy or ui_contract_covers_core_loop_and_omits_debug_output or ui_renders_auth_context_without_local_warning_in_hosted_state'",
+      "exit_code": 0,
+      "summary": "6 passed; 10 deselected; 0 failed; 0 skipped; 9 subtests are included in the full web run"
+    }
+  ],
+  "automated_coverage": {
+    "auth_recovery": "pass",
+    "library_graph_and_filesystem": "pass",
+    "markdown_html_css_js": "pass",
+    "search_grep_chunk_version_history": "pass",
+    "share_revoke_and_acl_denial": "pass",
+    "bridge_allow_deny_and_security_disclosure": "pass",
+    "keyboard_pointer_and_focus": "pass",
+    "responsive_320px_overflow": "pass",
+    "headings_landmarks_accessible_names": "pass",
+    "busy_status_and_error_alerts": "pass",
+    "approved_connection_admin_static_contract": "pass",
+    "approved_connection_admin_browser_keyboard_flow": "not_run",
+    "manual_screen_reader": "not_run"
+  },
+  "defects": [
+    {
+      "id": "G7-MANUAL-AT-01",
+      "severity": "P1",
+      "status": "open",
+      "repro": "Run the required independent hosted browser/OS/assistive-technology review, including screen-reader task completion and nontechnical comprehension.",
+      "evidence": "No manual assistive-technology transcript, reviewer matrix, or independent sign-off is attached."
+    },
+    {
+      "id": "G7-CONNECTION-UI-01",
+      "severity": "P1",
+      "status": "open",
+      "repro": "Exercise approved-connection settings/admin states with keyboard and pointer in the hosted browser build.",
+      "evidence": "Static/API checks pass; the exact five-test browser suite has no approved-connection admin browser scenario."
+    }
+  ],
+  "artifacts": [
+    {"kind": "pytest-output", "path": "tests/test_browser_e2e.py (two exact-head runs)"},
+    {"kind": "pytest-output", "path": "tests/test_web.py (full and focused exact-head runs)"}
+  ],
+  "review": {
+    "ux_reviewer": "automated exact-head rerun only; not independent manual AT review",
+    "qa_reviewer": "pending",
+    "mayor_decision": "Keep fl-urj.27 and G7 open. Automated browser/static checks are green, but this package does not claim accessibility or enterprise readiness without independent manual AT and approved-connection browser evidence."
+  }
+}
