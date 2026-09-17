@@ -34,9 +34,12 @@ UPSTREAM_SECRET = "upstream-secret-must-not-escape"
 
 
 class FakeCredentials:
+    def __init__(self, secret: str = UPSTREAM_SECRET) -> None:
+        self.secret = secret
+
     def issue(self, **kwargs: str) -> str:
         self.last_request = kwargs
-        return UPSTREAM_SECRET
+        return self.secret
 
 
 class FakeSecretStore:
@@ -115,13 +118,32 @@ class FakeTransport:
     def __init__(self) -> None:
         self.last_credential: str | None = None
         self.echo_credential = False
+        self.echo_encoded_credential = False
+        self.transport_error_secret: str | None = None
+        self.validation_error_secret: str | None = None
+
+    def _raise_transport_error(self) -> None:
+        if self.transport_error_secret is None:
+            return
+        secret = self.transport_error_secret
+        try:
+            raise RuntimeError(f"upstream cause contains credential={secret}")
+        except RuntimeError as cause:
+            raise ExternalMcpError(f"upstream failure credential={secret}") from cause
 
     def validate_registration(self, endpoint: str) -> None:
         if endpoint != ENDPOINT:
             raise ExternalMcpError("test upstream endpoint is invalid")
+        if self.validation_error_secret is not None:
+            secret = self.validation_error_secret
+            try:
+                raise RuntimeError(f"validation cause contains credential={secret}")
+            except RuntimeError as cause:
+                raise ExternalMcpError(f"validation failure credential={secret}") from cause
 
     def health(self, endpoint: str, *, credential: str | None) -> str:
         self.last_credential = credential
+        self._raise_transport_error()
         return "healthy"
 
     def call_tool(
@@ -133,12 +155,18 @@ class FakeTransport:
         credential: str | None,
     ) -> Any:
         self.last_credential = credential
+        self._raise_transport_error()
         if self.echo_credential:
-            return {"credential": credential}
+            echoed = json.dumps(credential) if self.echo_encoded_credential else credential
+            return {"credential": echoed}
         return {"endpoint": endpoint, "tool": tool_name, "arguments": arguments}
 
     def read_resource(self, endpoint: str, resource_uri: str, *, credential: str | None) -> Any:
         self.last_credential = credential
+        self._raise_transport_error()
+        if self.echo_credential:
+            echoed = json.dumps(credential) if self.echo_encoded_credential else credential
+            return {"credential": echoed}
         return {"endpoint": endpoint, "resource": resource_uri}
 
 
@@ -341,6 +369,27 @@ class ExternalMcpServiceTests(unittest.TestCase):
                 reason="approved",
             )
 
+    def test_broker_sanitizes_transport_registration_error(self) -> None:
+        secret = "registration-transport-secret"
+        transport = FakeTransport()
+        transport.validation_error_secret = secret
+        broker = ExternalMcpBroker(self.service, transport=transport)
+        with self.assertRaisesRegex(ExternalMcpError, "endpoint validation failed") as raised:
+            broker.register(
+                tenant_id="acme",
+                actor="admin",
+                name="calendar",
+                endpoint=ENDPOINT,
+                approved_tools=[TOOL],
+                approved_resources=[],
+                allowed_origins=[ORIGIN],
+                credential_ref=None,
+                reason="approved",
+            )
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
     def test_broker_rejects_credential_echo_from_upstream(self) -> None:
         credentials = FakeCredentials()
         transport = FakeTransport()
@@ -371,6 +420,111 @@ class ExternalMcpServiceTests(unittest.TestCase):
                 broker.audit(tenant_id="acme", actor="admin", connection_id=record["id"], limit=20)
             ),
         )
+
+    def test_broker_rejects_decoded_credential_echoes_for_tool_and_resource(self) -> None:
+        for index, secret in enumerate(("sécret", 'sec"ret', "sec\\ret", "sec\nret")):
+            with self.subTest(secret=repr(secret)):
+                credentials = FakeCredentials(secret)
+                transport = FakeTransport()
+                transport.echo_credential = True
+                transport.echo_encoded_credential = True
+                broker = ExternalMcpBroker(
+                    self.service, credentials=credentials, transport=transport
+                )
+                record = broker.register(
+                    tenant_id="acme",
+                    actor="admin",
+                    name=f"calendar-{index}",
+                    endpoint=ENDPOINT,
+                    approved_tools=[TOOL],
+                    approved_resources=[RESOURCE],
+                    allowed_origins=[ORIGIN],
+                    credential_ref=SECRET_REF,
+                    reason="approved",
+                )
+                for operation in ("tool", "resource"):
+                    with self.subTest(operation=operation):
+                        with self.assertRaisesRegex(
+                            ExternalMcpError, "credential material"
+                        ) as raised:
+                            if operation == "tool":
+                                broker.call_tool(
+                                    tenant_id="acme",
+                                    actor="admin",
+                                    connection_id=record["id"],
+                                    tool_name=TOOL,
+                                    arguments={},
+                                )
+                            else:
+                                broker.read_resource(
+                                    tenant_id="acme",
+                                    actor="admin",
+                                    connection_id=record["id"],
+                                    resource_uri=RESOURCE,
+                                )
+                        self.assertNotIn(secret, str(raised.exception))
+                        self.assertIsNone(raised.exception.__cause__)
+                        self.assertIsNone(raised.exception.__context__)
+                audit = broker.audit(
+                    tenant_id="acme", actor="admin", connection_id=record["id"], limit=20
+                )
+                self.assertNotIn(secret, repr(audit))
+
+    def test_broker_sanitizes_transport_error_message_and_cause(self) -> None:
+        for operation in ("tool", "resource", "health"):
+            with self.subTest(operation=operation):
+                secret = f"transport-secret-{operation}"
+                transport = FakeTransport()
+                transport.transport_error_secret = secret
+                broker = ExternalMcpBroker(
+                    self.service, credentials=FakeCredentials(secret), transport=transport
+                )
+                record = broker.register(
+                    tenant_id="acme",
+                    actor="admin",
+                    name=f"failing-{operation}",
+                    endpoint=ENDPOINT,
+                    approved_tools=[TOOL],
+                    approved_resources=[RESOURCE],
+                    allowed_origins=[ORIGIN],
+                    credential_ref=SECRET_REF,
+                    reason="approved",
+                )
+                expected = {
+                    "tool": "tool call failed",
+                    "resource": "resource read failed",
+                    "health": "health check failed",
+                }[operation]
+                with self.assertRaisesRegex(ExternalMcpError, expected) as raised:
+                    if operation == "tool":
+                        broker.call_tool(
+                            tenant_id="acme",
+                            actor="admin",
+                            connection_id=record["id"],
+                            tool_name=TOOL,
+                            arguments={},
+                        )
+                    elif operation == "resource":
+                        broker.read_resource(
+                            tenant_id="acme",
+                            actor="admin",
+                            connection_id=record["id"],
+                            resource_uri=RESOURCE,
+                        )
+                    else:
+                        broker.health(
+                            tenant_id="acme",
+                            actor="admin",
+                            connection_id=record["id"],
+                            probe=True,
+                        )
+                self.assertNotIn(secret, str(raised.exception))
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertIsNone(raised.exception.__context__)
+                audit = broker.audit(
+                    tenant_id="acme", actor="admin", connection_id=record["id"], limit=20
+                )
+                self.assertNotIn(secret, repr(audit))
 
     def test_cross_tenant_connection_is_not_resolvable(self) -> None:
         record = self.register(tenant_id="acme")

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .auth import get_request_principal
 from .external_mcp import ExternalMcpBroker
 from .service import FolioError, FolioLattice
 
@@ -17,14 +18,19 @@ MAX_SLACK_MESSAGES = 50
 MAX_SLACK_MESSAGE_LENGTH = 20_000
 MAX_SLACK_ARTIFACT_BYTES = 512 * 1024
 MAX_SLACK_RANGE = timedelta(days=31)
+MAX_SLACK_POLICY_CHANNELS = 128
+SLACK_POLICY_KEY = "slack"
 
 
 class ApprovedSlackConsumer:
-    """Use one tenant-admin-approved, seeded Slack search connection.
+    """Internal adapter for one tenant-admin-approved Slack connection.
 
     This is deliberately not a general upstream proxy. The connection registry
     remains the source of authority, and this consumer can invoke only the exact
     slack.search tool with the bounded resource arguments below.
+
+    Callers must use :class:`AuthenticatedSlackEdge`; methods accepting raw
+    tenant and actor IDs are internal to the trusted edge integration.
     """
 
     def __init__(self, service: FolioLattice, broker: ExternalMcpBroker) -> None:
@@ -59,6 +65,7 @@ class ApprovedSlackConsumer:
         end_time: str,
         query: str,
         limit: int,
+        max_range: timedelta = MAX_SLACK_RANGE,
     ) -> tuple[str, datetime, datetime, str, int]:
         channel = cls._text(channel, "channel", MAX_SLACK_CHANNEL_LENGTH)
         if any(character.isspace() for character in channel):
@@ -67,8 +74,8 @@ class ApprovedSlackConsumer:
         end = cls._timestamp(end_time, "end_time")
         if end <= start:
             raise FolioError("Slack end_time must be after start_time")
-        if end - start > MAX_SLACK_RANGE:
-            raise FolioError("Slack time range exceeds 31 days")
+        if end - start > max_range:
+            raise FolioError("Slack time range exceeds the approved maximum")
         query = cls._text(query, "query", MAX_SLACK_QUERY_LENGTH)
         if (
             not isinstance(limit, int)
@@ -77,6 +84,33 @@ class ApprovedSlackConsumer:
         ):
             raise FolioError(f"Slack limit must be between 1 and {MAX_SLACK_MESSAGES}")
         return channel, start, end, query, limit
+
+    @classmethod
+    def _policy(cls, connection: Mapping[str, Any]) -> tuple[frozenset[str], timedelta]:
+        policy = connection.get("policy")
+        slack_policy = policy.get(SLACK_POLICY_KEY) if isinstance(policy, Mapping) else None
+        if not isinstance(slack_policy, Mapping):
+            raise FolioError("Slack connection policy is missing")
+        channels = slack_policy.get("channels")
+        if isinstance(channels, (str, bytes)) or not isinstance(channels, list):
+            raise FolioError("Slack channel policy is invalid")
+        if not 1 <= len(channels) <= MAX_SLACK_POLICY_CHANNELS:
+            raise FolioError("Slack channel policy is invalid")
+        normalized = {
+            cls._text(channel, "approved channel", MAX_SLACK_CHANNEL_LENGTH) for channel in channels
+        }
+        if len(normalized) != len(channels) or any(
+            any(character.isspace() for character in channel) for channel in normalized
+        ):
+            raise FolioError("Slack channel policy is invalid")
+        max_seconds = slack_policy.get("max_time_range_seconds")
+        if (
+            not isinstance(max_seconds, int)
+            or isinstance(max_seconds, bool)
+            or not 1 <= max_seconds <= int(MAX_SLACK_RANGE.total_seconds())
+        ):
+            raise FolioError("Slack time-range policy is invalid")
+        return frozenset(normalized), timedelta(seconds=max_seconds)
 
     @staticmethod
     def _wire_timestamp(value: datetime) -> str:
@@ -149,7 +183,7 @@ class ApprovedSlackConsumer:
             "limit": limit,
         }
 
-    def search(
+    def _search_internal(
         self,
         *,
         tenant_id: str,
@@ -168,19 +202,32 @@ class ApprovedSlackConsumer:
             query=query,
             limit=limit,
         )
+        arguments = self._arguments(
+            channel=channel,
+            start=start,
+            end=end,
+            query=query,
+            limit=limit,
+        )
+        connection = self.broker.authorize_tool(
+            tenant_id=tenant_id,
+            actor=actor,
+            connection_id=connection_id,
+            tool_name=SLACK_SEARCH_TOOL,
+            arguments=arguments,
+        )
+        approved_channels, max_range = self._policy(connection)
+        if channel not in approved_channels:
+            raise FolioError("Slack channel is not approved")
+        if end - start > max_range:
+            raise FolioError("Slack time range exceeds the approved maximum")
         messages = self._messages(
             self.broker.call_tool(
                 tenant_id=tenant_id,
                 actor=actor,
                 connection_id=connection_id,
                 tool_name=SLACK_SEARCH_TOOL,
-                arguments=self._arguments(
-                    channel=channel,
-                    start=start,
-                    end=end,
-                    query=query,
-                    limit=limit,
-                ),
+                arguments=arguments,
             ),
             channel=channel,
             start=start,
@@ -194,6 +241,7 @@ class ApprovedSlackConsumer:
             "start_time": self._wire_timestamp(start),
             "end_time": self._wire_timestamp(end),
             "query": query,
+            "policy_version": connection["policy_version"],
             "messages": messages,
             "match_count": len(messages),
         }
@@ -215,7 +263,7 @@ class ApprovedSlackConsumer:
             raise FolioError("Slack saved artifact exceeds the allowed size")
         return body
 
-    def save(
+    def _save_internal(
         self,
         *,
         tenant_id: str,
@@ -231,7 +279,7 @@ class ApprovedSlackConsumer:
     ) -> dict[str, Any]:
         name = self._text(name, "artifact name", 255)
         reason = self._text(reason, "reason", 2_000)
-        search = self.search(
+        search = self._search_internal(
             tenant_id=tenant_id,
             actor=actor,
             connection_id=connection_id,
@@ -250,6 +298,7 @@ class ApprovedSlackConsumer:
             "start_time": search["start_time"],
             "end_time": search["end_time"],
             "query": search["query"],
+            "policy_version": search["policy_version"],
             "message_ids": message_ids,
         }
         created = self.service.create_artifact(
@@ -267,3 +316,35 @@ class ApprovedSlackConsumer:
             "source": source_context,
             "match_count": search["match_count"],
         }
+
+
+class AuthenticatedSlackEdge:
+    """Bind Slack adapter calls to the authenticated request principal."""
+
+    def __init__(self, consumer: ApprovedSlackConsumer) -> None:
+        self.consumer = consumer
+
+    @staticmethod
+    def _identity(*required_scopes: str, any_scope: tuple[str, ...] = ()) -> tuple[str, str]:
+        principal = get_request_principal()
+        if (
+            principal is None
+            or any(scope not in principal.scopes for scope in required_scopes)
+            or (any_scope and not any(scope in principal.scopes for scope in any_scope))
+        ):
+            raise FolioError("operation not permitted")
+        return principal.tenant_id, principal.actor_id
+
+    def search(self, *, connection_id: str, **kwargs: Any) -> dict[str, Any]:
+        tenant_id, actor = self._identity("artifact:search")
+        return self.consumer._search_internal(
+            tenant_id=tenant_id, actor=actor, connection_id=connection_id, **kwargs
+        )
+
+    def save(self, *, connection_id: str, **kwargs: Any) -> dict[str, Any]:
+        tenant_id, actor = self._identity(
+            "artifact:write", any_scope=("artifact:search", "artifact:read")
+        )
+        return self.consumer._save_internal(
+            tenant_id=tenant_id, actor=actor, connection_id=connection_id, **kwargs
+        )

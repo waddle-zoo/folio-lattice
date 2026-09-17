@@ -9,7 +9,7 @@ from folio_lattice.auth import Principal, reset_request_principal, set_request_p
 from folio_lattice.external_mcp import ExternalMcpBroker
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.service import FolioError, FolioLattice
-from folio_lattice.slack import ApprovedSlackConsumer
+from folio_lattice.slack import ApprovedSlackConsumer, AuthenticatedSlackEdge
 
 ENDPOINT = "https://slack.fixture.example/mcp"
 ORIGIN = "https://slack.fixture.example"
@@ -19,9 +19,12 @@ END = "2026-01-02T00:00:00Z"
 
 
 class FakeCredentials:
+    def __init__(self, secret: str = SECRET) -> None:
+        self.secret = secret
+
     def issue(self, **kwargs: str) -> str:
         self.last_request = kwargs
-        return SECRET
+        return self.secret
 
 
 class SeededSlackTransport:
@@ -36,7 +39,7 @@ class SeededSlackTransport:
 
     def health(self, endpoint: str, *, credential: str | None) -> str:
         assert endpoint == ENDPOINT
-        assert credential == SECRET
+        assert isinstance(credential, str) and credential
         return "healthy"
 
     def call_tool(
@@ -48,7 +51,7 @@ class SeededSlackTransport:
         credential: str | None,
     ) -> Any:
         assert endpoint == ENDPOINT
-        assert credential == SECRET
+        assert isinstance(credential, str) and credential
         self.calls.append({"tool": tool_name, "arguments": dict(arguments)})
         if tool_name != "slack.search":
             raise AssertionError(f"unapproved tool reached fixture: {tool_name}")
@@ -98,6 +101,7 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
             transport=self.transport,
         )
         self.consumer = ApprovedSlackConsumer(self.service, self.broker)
+        self.edge = AuthenticatedSlackEdge(self.consumer)
         self.admin_server = build_mcp_server(
             self.service,
             tenant_id="tenant-a",
@@ -125,6 +129,12 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
                     "approved_tools": ["slack.search"],
                     "approved_resources": [],
                     "allowed_origins": [ORIGIN],
+                    "policy": {
+                        "slack": {
+                            "channels": ["#deployments"],
+                            "max_time_range_seconds": 86_400,
+                        }
+                    },
                     "credential_ref": "secret://tenant-a/slack",
                 },
             )
@@ -135,20 +145,34 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
         return self.connection_id
 
     def _member_search(self, **kwargs: Any) -> dict[str, Any]:
-        return self.consumer.search(
-            tenant_id="tenant-a",
-            actor="member-a",
-            connection_id=kwargs.pop("connection_id"),
-            **kwargs,
+        token = set_request_principal(
+            Principal(
+                "tenant-a",
+                "member-a",
+                "https://issuer.example",
+                "member-a",
+                frozenset({"artifact:search"}),
+            )
         )
+        try:
+            return self.edge.search(connection_id=kwargs.pop("connection_id"), **kwargs)
+        finally:
+            reset_request_principal(token)
 
     def _member_save(self, **kwargs: Any) -> dict[str, Any]:
-        return self.consumer.save(
-            tenant_id="tenant-a",
-            actor="member-a",
-            connection_id=kwargs.pop("connection_id"),
-            **kwargs,
+        token = set_request_principal(
+            Principal(
+                "tenant-a",
+                "member-a",
+                "https://issuer.example",
+                "member-a",
+                frozenset({"artifact:search", "artifact:write"}),
+            )
         )
+        try:
+            return self.edge.save(connection_id=kwargs.pop("connection_id"), **kwargs)
+        finally:
+            reset_request_principal(token)
 
     async def test_core_mcp_contract_has_no_provider_specific_tools(self) -> None:
         async with Client(self.admin_server) as client:
@@ -158,6 +182,14 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("slack_save", names)
         self.assertIn("external_mcp_tool_call", names)
         self.assertIn("artifact_create", names)
+        with self.assertRaisesRegex(FolioError, "operation not permitted"):
+            self.edge.search(
+                connection_id="not-authenticated",
+                channel="#deployments",
+                start_time=START,
+                end_time=END,
+                query="renderer",
+            )
 
     async def test_approved_search_save_provenance_and_revoke(self) -> None:
         connection_id = await self._register()
@@ -196,6 +228,7 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
                 "start_time": START,
                 "end_time": END,
                 "query": "renderer",
+                "policy_version": "external-mcp-v1",
                 "message_ids": ["msg-1"],
             },
         )
@@ -236,17 +269,27 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_tenant_isolation_and_bounds_fail_closed(self) -> None:
         connection_id = await self._register()
         with self.assertRaisesRegex(FolioError, "connection not found"):
-            self.consumer.search(
-                tenant_id="tenant-b",
-                actor="member-b",
-                connection_id=connection_id,
-                channel="#deployments",
-                start_time=START,
-                end_time=END,
-                query="renderer",
+            token = set_request_principal(
+                Principal(
+                    "tenant-b",
+                    "member-b",
+                    "https://issuer.example",
+                    "member-b",
+                    frozenset({"artifact:search"}),
+                )
             )
+            try:
+                self.edge.search(
+                    connection_id=connection_id,
+                    channel="#deployments",
+                    start_time=START,
+                    end_time=END,
+                    query="renderer",
+                )
+            finally:
+                reset_request_principal(token)
 
-        with self.assertRaisesRegex(FolioError, "31 days"):
+        with self.assertRaisesRegex(FolioError, "approved maximum"):
             self._member_search(
                 connection_id=connection_id,
                 channel="#deployments",
@@ -263,6 +306,53 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
                 end_time=END,
                 query="renderer",
             )
+        self.assertEqual(self.transport.calls, [])
+
+    async def test_channel_and_time_policy_fail_before_transport(self) -> None:
+        connection_id = await self._register()
+        with self.assertRaisesRegex(FolioError, "channel is not approved"):
+            self._member_search(
+                connection_id=connection_id,
+                channel="#private",
+                start_time=START,
+                end_time=END,
+                query="renderer",
+            )
+        with self.assertRaisesRegex(FolioError, "approved maximum"):
+            self._member_search(
+                connection_id=connection_id,
+                channel="#deployments",
+                start_time=START,
+                end_time="2026-01-03T00:00:00Z",
+                query="renderer",
+            )
+        self.assertEqual(self.transport.calls, [])
+
+    async def test_save_requires_search_and_write_authority(self) -> None:
+        connection_id = await self._register()
+        arguments = {
+            "connection_id": connection_id,
+            "name": "unauthorized.md",
+            "channel": "#deployments",
+            "start_time": START,
+            "end_time": END,
+            "query": "renderer",
+        }
+        for scopes in ({"artifact:write"}, {"artifact:search"}):
+            token = set_request_principal(
+                Principal(
+                    "tenant-a",
+                    "member-a",
+                    "https://issuer.example",
+                    "member-a",
+                    frozenset(scopes),
+                )
+            )
+            try:
+                with self.assertRaisesRegex(FolioError, "operation not permitted"):
+                    self.edge.save(**arguments)
+            finally:
+                reset_request_principal(token)
         self.assertEqual(self.transport.calls, [])
 
     async def test_empty_results_are_a_valid_bounded_search(self) -> None:
@@ -345,3 +435,23 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
             self._member_save(**arguments)
         self.assertNotIn(SECRET, str(raised.exception))
         self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)
+
+    async def test_credential_variants_never_reach_artifact_or_exception(self) -> None:
+        connection_id = await self._register()
+        self.transport.echo_credential = True
+        before = self.service.list_artifacts("tenant-a", actor="member-a")
+        for secret in ("sécret", 'sec"ret', "sec\\ret", "sec\nret"):
+            self.broker.credentials = FakeCredentials(secret)
+            with self.subTest(secret=repr(secret)):
+                with self.assertRaisesRegex(FolioError, "credential material") as raised:
+                    self._member_save(
+                        connection_id=connection_id,
+                        name="variant.md",
+                        channel="#deployments",
+                        start_time=START,
+                        end_time=END,
+                        query="secret",
+                    )
+                self.assertNotIn(secret, str(raised.exception))
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)

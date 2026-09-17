@@ -90,7 +90,15 @@ REQUIRED_SCHEMA_COLUMNS = {
         }
     ),
     "external_mcp_connections": frozenset(
-        {"tenant_id", "endpoint", "origin", "status", "health_status", "policy_version"}
+        {
+            "tenant_id",
+            "endpoint",
+            "origin",
+            "status",
+            "health_status",
+            "policy_json",
+            "policy_version",
+        }
     ),
     "external_mcp_audit": frozenset(
         {"tenant_id", "connection_id", "actor_id", "action", "outcome"}
@@ -312,6 +320,7 @@ class FolioLattice:
                     approved_tools TEXT NOT NULL,
                     approved_resources TEXT NOT NULL,
                     allowed_origins TEXT NOT NULL,
+                    policy_json TEXT NOT NULL DEFAULT '{}',
                     credential_ref TEXT,
                     status TEXT NOT NULL CHECK(status IN ('active', 'revoked')),
                     health_status TEXT NOT NULL CHECK(health_status IN ('unknown', 'healthy', 'unhealthy')),
@@ -344,6 +353,13 @@ class FolioLattice:
             grant_columns = {row["name"] for row in db.execute("PRAGMA table_info(acl_grants)")}
             if "revocation_reason" not in grant_columns:
                 db.execute("ALTER TABLE acl_grants ADD COLUMN revocation_reason TEXT")
+            external_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(external_mcp_connections)")
+            }
+            if "policy_json" not in external_columns:
+                db.execute(
+                    "ALTER TABLE external_mcp_connections ADD COLUMN policy_json TEXT NOT NULL DEFAULT '{}'"
+                )
             columns = {row["name"] for row in db.execute("PRAGMA table_info(artifacts)")}
             if "owner_actor_id" not in columns:
                 db.execute("ALTER TABLE artifacts ADD COLUMN owner_actor_id TEXT")
@@ -1686,17 +1702,41 @@ class FolioLattice:
     def _external_json_list(value: str) -> list[str]:
         try:
             parsed = json.loads(value)
-        except (TypeError, ValueError) as exc:
-            raise FolioError("external MCP policy is invalid") from exc
+        except (TypeError, ValueError):
+            raise FolioError("external MCP policy is invalid") from None
         if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
             raise FolioError("external MCP policy is invalid")
         return parsed
 
     @staticmethod
+    def _external_policy(value: Mapping[str, Any] | None) -> str:
+        policy = dict(value or {})
+        try:
+            encoded = json.dumps(policy, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError):
+            raise FolioError("external MCP policy is invalid") from None
+        if len(encoded.encode()) > MAX_EXTERNAL_ARGUMENT_BYTES:
+            raise FolioError("external MCP policy exceeds the allowed size")
+        return encoded
+
+    @staticmethod
+    def _external_policy_dict(value: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            raise FolioError("external MCP policy is invalid") from None
+        if not isinstance(parsed, dict):
+            raise FolioError("external MCP policy is invalid")
+        return parsed
+
+    @staticmethod
     def _external_public(row: dict[str, Any]) -> dict[str, Any]:
-        return {key: value for key, value in row.items() if key != "credential_ref"} | {
-            "credential_configured": row["credential_ref"] is not None
+        public = {
+            key: value for key, value in row.items() if key not in {"credential_ref", "policy_json"}
         }
+        if "policy_json" in row:
+            public["policy"] = FolioLattice._external_policy_dict(row["policy_json"])
+        return public | {"credential_configured": row["credential_ref"] is not None}
 
     @staticmethod
     def _write_external_audit(
@@ -1737,7 +1777,7 @@ class FolioLattice:
             """
             SELECT id, tenant_id, name, endpoint, origin, transport,
                    approved_tools, approved_resources, allowed_origins,
-                   credential_ref, status, health_status, last_health_at,
+                   policy_json, credential_ref, status, health_status, last_health_at,
                    created_by, created_at, revoked_by, revoked_at, policy_version
             FROM external_mcp_connections
             WHERE id = ? AND tenant_id = ?
@@ -1749,6 +1789,7 @@ class FolioLattice:
         values = dict(row)
         for field in ("approved_tools", "approved_resources", "allowed_origins"):
             values[field] = self._external_json_list(values[field])
+        values["policy"] = self._external_policy_dict(values["policy_json"])
         return values
 
     def register_external_connection(
@@ -1761,6 +1802,7 @@ class FolioLattice:
         approved_tools: list[str],
         approved_resources: list[str],
         allowed_origins: list[str],
+        policy: Mapping[str, Any] | None = None,
         credential_ref: str | None = None,
         reason: str = "approved external MCP connection",
     ) -> dict[str, Any]:
@@ -1776,6 +1818,7 @@ class FolioLattice:
             raise FolioError("external MCP connection needs an explicit tool or resource allowlist")
         if endpoint_origin not in origins:
             raise FolioError("external MCP endpoint origin must be explicitly allowed")
+        policy_json = self._external_policy(policy)
         credential = self._external_credential_ref(credential_ref)
         connection_id = new_id("extconn")
         now = utc_now()
@@ -1788,9 +1831,9 @@ class FolioLattice:
                     INSERT INTO external_mcp_connections(
                         id, tenant_id, name, endpoint, origin, transport,
                         approved_tools, approved_resources, allowed_origins,
-                        credential_ref, status, health_status, last_health_at,
+                        policy_json, credential_ref, status, health_status, last_health_at,
                         created_by, created_at, revoked_by, revoked_at, policy_version
-                    ) VALUES (?, ?, ?, ?, ?, 'streamable_http', ?, ?, ?, ?, 'active',
+                    ) VALUES (?, ?, ?, ?, ?, 'streamable_http', ?, ?, ?, ?, ?, 'active',
                               'unknown', NULL, ?, ?, NULL, NULL, ?)
                     """,
                     (
@@ -1802,6 +1845,7 @@ class FolioLattice:
                         json.dumps(tools, separators=(",", ":")),
                         json.dumps(resources, separators=(",", ":")),
                         json.dumps(sorted(origins), separators=(",", ":")),
+                        policy_json,
                         credential,
                         actor,
                         now,
@@ -1816,8 +1860,8 @@ class FolioLattice:
                     action="register",
                     outcome="allowed",
                 )
-        except sqlite3.IntegrityError as exc:
-            raise FolioError("external MCP connection name already exists") from exc
+        except sqlite3.IntegrityError:
+            raise FolioError("external MCP connection name already exists") from None
         return self.external_connection_status(tenant_id, connection_id, actor=actor)
 
     def list_external_connections(
@@ -1830,7 +1874,7 @@ class FolioLattice:
                 """
                 SELECT id, tenant_id, name, endpoint, origin, transport,
                        approved_tools, approved_resources, allowed_origins,
-                       credential_ref, status, health_status, last_health_at,
+                       policy_json, credential_ref, status, health_status, last_health_at,
                        created_by, created_at, revoked_by, revoked_at, policy_version
                 FROM external_mcp_connections
                 WHERE tenant_id = ?
@@ -1973,8 +2017,8 @@ class FolioLattice:
             raise FolioError("external MCP tool is not approved")
         try:
             encoded = json.dumps(dict(arguments), separators=(",", ":"), allow_nan=False).encode()
-        except (TypeError, ValueError) as exc:
-            raise FolioError("external MCP tool arguments are invalid") from exc
+        except (TypeError, ValueError):
+            raise FolioError("external MCP tool arguments are invalid") from None
         if len(encoded) > MAX_EXTERNAL_ARGUMENT_BYTES:
             raise FolioError("external MCP tool arguments exceed the allowed size")
         return connection

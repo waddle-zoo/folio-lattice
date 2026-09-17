@@ -371,6 +371,7 @@ def build_mcp_server(
         approved_tools: list[str],
         approved_resources: list[str],
         allowed_origins: list[str],
+        policy: dict[str, Any] | None = None,
         credential_ref: Annotated[str | None, Field(max_length=2048)] = None,
         reason: Annotated[str, Field(min_length=1, max_length=2_000)] = (
             "approved external MCP connection"
@@ -386,6 +387,7 @@ def build_mcp_server(
                 approved_tools=approved_tools,
                 approved_resources=approved_resources,
                 allowed_origins=allowed_origins,
+                policy=policy,
                 credential_ref=credential_ref,
                 reason=reason,
             )
