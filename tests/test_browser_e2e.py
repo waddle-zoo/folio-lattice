@@ -1540,7 +1540,51 @@ document.querySelector('#search').requestSubmit();
                 )
                 chrome.command("Page.navigate", {"url": control_origin})
                 chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.evaluate("""
+librarySearchResults = [
+  {artifact_id: 'bounded-a', artifact_name: 'bounded-copy.md', media_type: 'text/markdown'},
+  {artifact_id: 'bounded-b', artifact_name: 'bounded-copy.md', media_type: 'text/markdown'},
+  ...Array.from({length: 18}, (_, index) => ({
+    artifact_id: `bounded-html-${index}`,
+    artifact_name: `bounded-${index}.html`,
+    media_type: 'text/html',
+  })),
+];
+document.querySelector('#search-type-filter').value = 'text/markdown';
+renderLibrarySearch();
+""")
+                self.assertEqual(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('#results button[data-artifact-id]')]"
+                        ".map((button) => button.textContent)"
+                    ),
+                    ["bounded-copy.md", "bounded-copy.md"],
+                )
+                self.assertEqual(
+                    chrome.evaluate("""
+const debugMap = document.createElement('div');
+debugMap.id = 'graph-map';
+document.body.append(debugMap);
+renderGraphMap([
+  {target_artifact_id: 'bounded-a', target_artifact_name: 'bounded-copy.md', edge_type: 'references'},
+  {target_artifact_id: 'bounded-b', target_artifact_name: 'bounded-copy.md', edge_type: 'references'},
+]);
+const labels = [...debugMap.querySelectorAll('.graph-target')].map((button) => button.textContent);
+debugMap.remove();
+labels;
+"""),
+                    ["bounded-copy.md", "bounded-copy.md"],
+                )
                 chrome.command("Page.navigate", {"url": f"{control_origin}/#find"})
+                chrome.wait(
+                    "document.querySelector('#find').open && "
+                    "document.activeElement?.id === 'search-query'"
+                )
+                chrome.evaluate(
+                    "document.querySelector('#find').open = false; "
+                    "document.querySelector('#search-query').blur(); "
+                    "document.querySelector('a[href=\"/#find\"]').click()"
+                )
                 chrome.wait(
                     "document.querySelector('#find').open && "
                     "document.activeElement?.id === 'search-query'"

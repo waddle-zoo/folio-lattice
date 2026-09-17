@@ -2012,7 +2012,7 @@ function renderArtifactTree(artifacts) {
   };
   target.append(renderNode(root));
 }
-function renderGraphMap(edges, component = []) {
+function renderGraphMap(edges, component) {
   const map = byId('graph-map');
   if (!map) return;
   map.replaceChildren();
@@ -2020,7 +2020,7 @@ function renderGraphMap(edges, component = []) {
   source.textContent = byId('title')?.textContent || 'Current artifact'; map.append(source);
   const edgeById = new Map(edges.map((edge) => [edge.target_artifact_id, edge]));
   const targets = new Map();
-  component.forEach((artifact) => {
+  (component || []).forEach((artifact) => {
     if (artifact.id && artifact.id !== artifactId) targets.set(artifact.id, artifact);
   });
   edges.forEach((edge) => {
@@ -2033,7 +2033,8 @@ function renderGraphMap(edges, component = []) {
     empty.textContent = 'No connected artifacts.'; map.append(empty); return;
   }
   const links = document.createElement('div'); links.className = 'graph-links';
-  const names = artifactLabelMap([...targets.values()], component.length < 100);
+  const componentComplete = Array.isArray(component) && component.length < 100;
+  const names = artifactLabelMap([...targets.values()], componentComplete);
   targets.forEach((artifact, id) => {
     const edge = edgeById.get(id);
     const target = stableArtifactLabel(artifact.name, id, names);
@@ -2689,9 +2690,9 @@ function filteredLibrarySearchResults(results) {
 function renderLibrarySearch() {
   const allResults = librarySearchResults || [];
   const results = filteredLibrarySearchResults(allResults);
-  const names = artifactLabelMap(results.map((result) => ({
+  const names = artifactLabelMap(allResults.map((result) => ({
     name: result.artifact_name, id: result.artifact_id,
-  })), results.length < 20);
+  })), allResults.length < 20);
   renderResults(byId('results'), results, names);
   const filter = librarySearchFilter();
   const summary = byId('search-result-summary');
