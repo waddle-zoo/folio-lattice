@@ -14,6 +14,7 @@ import base64
 import json
 import os
 import shlex
+import socket
 import subprocess
 import sys
 import tempfile
@@ -26,12 +27,14 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode
 from urllib.request import Request, urlopen
 
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
 ALGORITHM = "EdDSA"
 KEY_ID = "fl-hosted-test-1"
 AUDIENCE = "https://folio-lattice.test/mcp"
 TENANT_A = "tenant-a"
 TENANT_B = "tenant-b"
 MAX_REQUEST_BYTES = 13 * 1024 * 1024
+APPROVED_UPSTREAM_ENDPOINT = "https://approved-upstream.test/mcp"
 PRIVATE_SEED = bytes(range(32))
 RESTART_READY_TIMEOUT_SECONDS = 10.0
 RESTART_POLL_INTERVAL_SECONDS = 0.05
@@ -42,7 +45,7 @@ PROFILES = {
         "subject": "a-owner",
         "tenant": TENANT_A,
         "actor": "a-owner",
-        "scope": "artifact:read artifact:write artifact:search graph:read graph:write",
+        "scope": "artifact:read artifact:write artifact:search graph:read graph:write artifact:share tenant:admin",
     },
     "A_MEMBER": {
         "subject": "a-member",
@@ -54,7 +57,7 @@ PROFILES = {
         "subject": "b-owner",
         "tenant": TENANT_B,
         "actor": "b-owner",
-        "scope": "artifact:read artifact:write artifact:search graph:read graph:write",
+        "scope": "artifact:read artifact:write artifact:search graph:read graph:write artifact:share tenant:admin",
     },
 }
 TOOL_SCOPES = {
@@ -68,6 +71,16 @@ TOOL_SCOPES = {
     "graph_traverse": "graph:read",
     "graph_component": "graph:read",
     "artifact_versions": "artifact:read",
+    "artifact_share": "artifact:share",
+    "artifact_revoke": "artifact:share",
+    "artifact_acl": "artifact:share",
+    "external_mcp_connection_register": "tenant:admin",
+    "external_mcp_connection_list": "tenant:admin",
+    "external_mcp_connection_status": "tenant:admin",
+    "external_mcp_connection_revoke": "tenant:admin",
+    "external_mcp_audit": "tenant:admin",
+    "external_mcp_tool_call": "tenant:admin",
+    "external_mcp_resource_read": "tenant:admin",
 }
 
 
@@ -206,6 +219,85 @@ def _verify(token: str, issuer: Issuer) -> dict[str, Any] | None:
     return claims if isinstance(claims, dict) else None
 
 
+class _StaticCredentials:
+    def issue(self, **_: str) -> str:
+        from approved_upstream_target import UPSTREAM_SECRET
+
+        return UPSTREAM_SECRET
+
+
+class _LoopbackExternalTransport:
+    """Real MCP HTTP transport pinned to one local fixture endpoint."""
+
+    def __init__(self, local_endpoint: str):
+        from folio_lattice.external_mcp import HttpExternalMcpTransport
+
+        self.local_endpoint = local_endpoint
+        self.transport = HttpExternalMcpTransport(timeout_seconds=0.25)
+
+    def _endpoint(self, endpoint: str) -> str:
+        if endpoint != APPROVED_UPSTREAM_ENDPOINT:
+            raise ValueError("unexpected approved upstream endpoint")
+        return self.local_endpoint
+
+    def health(self, endpoint: str, *, credential: str | None) -> str:
+        return self.transport.health(self._endpoint(endpoint), credential=credential)
+
+    def call_tool(
+        self,
+        endpoint: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        credential: str | None,
+    ) -> Any:
+        return self.transport.call_tool(
+            self._endpoint(endpoint), tool_name, arguments, credential=credential
+        )
+
+    def read_resource(self, endpoint: str, resource_uri: str, *, credential: str | None) -> Any:
+        return self.transport.read_resource(
+            self._endpoint(endpoint), resource_uri, credential=credential
+        )
+
+
+class _ApprovedUpstream:
+    def __init__(self) -> None:
+        script = Path(__file__).with_name("approved_upstream_target.py")
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = int(listener.getsockname()[1])
+        self.process = subprocess.Popen(
+            [sys.executable, str(script), "--host", "127.0.0.1", "--port", str(port)],
+            cwd=SOURCE_ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        base_url = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                with urlopen(f"{base_url}/health", timeout=0.2) as response:
+                    if json.loads(response.read()).get("ready"):
+                        self.endpoint = f"{base_url}/mcp"
+                        return
+            except (OSError, URLError, json.JSONDecodeError):
+                if self.process.poll() is not None:
+                    break
+                time.sleep(0.05)
+        self.close()
+        raise RuntimeError("approved upstream did not become ready")
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
+
+
 async def _read_body(receive: Callable[[], Awaitable[dict[str, Any]]]) -> bytes:
     body = bytearray()
     while True:
@@ -299,11 +391,14 @@ class AuthenticatedMcpApp:
         await app(scope, replay if scope.get("method") == "POST" else receive, send)
 
 
-def _server_app(host: str, port: int, state_dir: Path, audience: str) -> Any:
+def _server_app(
+    host: str, port: int, state_dir: Path, audience: str, upstream: _ApprovedUpstream
+) -> Any:
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
 
+    from folio_lattice.external_mcp import ExternalMcpBroker
     from folio_lattice.mcp_protocol import build_mcp_server
     from folio_lattice.service import FolioLattice
 
@@ -312,6 +407,11 @@ def _server_app(host: str, port: int, state_dir: Path, audience: str) -> Any:
     issuer = Issuer(issuer_url, audience)
     memberships = Memberships(state_dir / "memberships.json")
     service = FolioLattice(state_dir / "folio.db", state_dir / "blobs")
+    broker = ExternalMcpBroker(
+        service,
+        credentials=_StaticCredentials(),
+        transport=_LoopbackExternalTransport(upstream.endpoint),
+    )
     child_apps = {}
     session_apps = []
     for route, tenant, profiles in (
@@ -322,7 +422,10 @@ def _server_app(host: str, port: int, state_dir: Path, audience: str) -> Any:
         for profile in profiles:
             profile_data = PROFILES[profile]
             child = build_mcp_server(
-                service, tenant_id=tenant, actor=profile_data["actor"]
+                service,
+                tenant_id=tenant,
+                actor=profile_data["actor"],
+                external_broker=broker,
             ).streamable_http_app(json_response=True)
             apps[profile_data["subject"]] = child
             session_apps.append(child)
@@ -395,9 +498,49 @@ def serve(host: str, port: int, state_dir: Path, audience: str) -> None:
     import uvicorn
 
     state_dir.mkdir(parents=True, exist_ok=True)
-    uvicorn.run(
-        _server_app(host, port, state_dir, audience), host=host, port=port, log_level="warning"
-    )
+    upstream = _ApprovedUpstream()
+    try:
+        uvicorn.run(
+            _server_app(host, port, state_dir, audience, upstream),
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+    finally:
+        upstream.close()
+
+
+def stdio(state_dir: Path, issuer_url: str, audience: str, profile: str, token: str) -> None:
+    from folio_lattice.external_mcp import ExternalMcpBroker
+    from folio_lattice.mcp_protocol import build_mcp_server
+    from folio_lattice.service import FolioLattice
+
+    if profile not in PROFILES:
+        raise ValueError("unknown stdio profile")
+    issuer = Issuer(issuer_url, audience)
+    claims = _verify(token, issuer)
+    profile_data = PROFILES[profile]
+    if claims is None or claims.get("sub") != profile_data["subject"]:
+        raise RuntimeError("stdio bearer authentication failed")
+    memberships = Memberships(state_dir / "memberships.json")
+    if not memberships.get(profile_data["subject"]):
+        raise RuntimeError("stdio membership is unavailable")
+    upstream = _ApprovedUpstream()
+    try:
+        service = FolioLattice(state_dir / "folio.db", state_dir / "blobs")
+        broker = ExternalMcpBroker(
+            service,
+            credentials=_StaticCredentials(),
+            transport=_LoopbackExternalTransport(upstream.endpoint),
+        )
+        build_mcp_server(
+            service,
+            tenant_id=profile_data["tenant"],
+            actor=profile_data["actor"],
+            external_broker=broker,
+        ).run("stdio")
+    finally:
+        upstream.close()
 
 
 def _url_json(
@@ -615,6 +758,13 @@ def main() -> None:
     serve_parser.add_argument("--state-dir", type=Path, required=True)
     serve_parser.add_argument("--audience", default=AUDIENCE)
 
+    stdio_parser = subparsers.add_parser("stdio")
+    stdio_parser.add_argument("--state-dir", type=Path, required=True)
+    stdio_parser.add_argument("--issuer", required=True)
+    stdio_parser.add_argument("--audience", default=AUDIENCE)
+    stdio_parser.add_argument("--profile", choices=tuple(PROFILES), required=True)
+    stdio_parser.add_argument("--token", default="")
+
     token_parser = subparsers.add_parser("token")
     token_parser.add_argument("--base-url", required=True)
     token_parser.add_argument("--profile", choices=tuple(PROFILES), required=True)
@@ -634,6 +784,15 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "serve":
         serve(args.host, args.port, args.state_dir, args.audience)
+    elif args.command == "stdio":
+        args.state_dir.mkdir(parents=True, exist_ok=True)
+        stdio(
+            args.state_dir,
+            args.issuer,
+            args.audience,
+            args.profile,
+            args.token or os.environ.get("FOLIO_TEST_BEARER", ""),
+        )
     elif args.command == "token":
         token_command(args.base_url, args.profile, args.variant)
     elif args.command == "control":

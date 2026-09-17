@@ -80,9 +80,6 @@ def _sha256(value: bytes) -> str:
 
 
 def _source_sha() -> str:
-    configured = os.environ.get("FOLIO_CONFORMANCE_SOURCE_SHA")
-    if configured:
-        return configured
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -93,7 +90,26 @@ def _source_sha() -> str:
         )
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
-    return result.stdout.strip()
+    actual = result.stdout.strip()
+    configured = os.environ.get("FOLIO_CONFORMANCE_SOURCE_SHA")
+    if configured and configured != actual:
+        raise ConformanceError(
+            f"source SHA mismatch: configured {configured!r}, checkout {actual!r}"
+        )
+    if os.environ.get("FOLIO_CONFORMANCE_REQUIRE_CLEAN", "1") == "1":
+        try:
+            dirty = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=SOURCE_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise ConformanceError("could not verify source tree status") from exc
+        if dirty:
+            raise ConformanceError("source tree is dirty")
+    return actual
 
 
 def _schema_snapshot(value: Any) -> dict[str, Any]:
@@ -174,7 +190,12 @@ class RawResponse:
 class RawHttpClient:
     """Independent public Streamable HTTP MCP client."""
 
-    def __init__(self, endpoint: str, transcript: Transcript):
+    def __init__(
+        self,
+        endpoint: str,
+        transcript: Transcript,
+        headers: Mapping[str, str] | None = None,
+    ):
         self.endpoint = endpoint
         self.transcript = transcript
         self.next_id = 1
@@ -183,6 +204,7 @@ class RawHttpClient:
             "Content-Type": "application/json",
             "MCP-Protocol-Version": PROTOCOL_VERSION,
         }
+        self.headers.update(headers or {})
 
     def request(self, payload: Mapping[str, Any], *, expect_response: bool = True) -> RawResponse:
         request_id = payload.get("id")
@@ -268,12 +290,17 @@ class RawHttpClient:
 class RawStdioClient:
     """Independent newline-delimited JSON-RPC client for public stdio."""
 
-    def __init__(self, environment: Mapping[str, str], transcript: Transcript):
+    def __init__(
+        self,
+        environment: Mapping[str, str],
+        transcript: Transcript,
+        command: list[str] | None = None,
+    ):
         self.transcript = transcript
         self.next_id = 1
         try:
             self.process = subprocess.Popen(
-                [sys.executable, "-m", "folio_lattice.server", "--transport", "stdio"],
+                command or [sys.executable, "-m", "folio_lattice.server", "--transport", "stdio"],
                 cwd=SOURCE_ROOT,
                 env=dict(environment),
                 stdin=subprocess.PIPE,
@@ -388,9 +415,19 @@ def _transcript_payload(value: Any) -> Any:
     if value is None:
         return None
     encoded = _json_bytes(value)
-    if len(encoded) <= 32 * 1024:
-        return value
-    return {"bytes": len(encoded), "sha256": _sha256(encoded)}
+    if len(encoded) > 32 * 1024:
+        return {"bytes": len(encoded), "sha256": _sha256(encoded)}
+    if isinstance(value, Mapping):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if str(key).lower() in {"authorization", "access_token", "credential_ref"}:
+                redacted[str(key)] = "[redacted]"
+            else:
+                redacted[str(key)] = _transcript_payload(item)
+        return redacted
+    if isinstance(value, list):
+        return [_transcript_payload(item) for item in value]
+    return value
 
 
 def _require_success(response: Any, operation: str) -> Any:
@@ -453,7 +490,12 @@ async def _official_flow(
         return await _flow(call)
 
 
-def _raw_flow(client: RawHttpClient | RawStdioClient, transcript: Transcript) -> dict[str, Any]:
+def _raw_flow(
+    client: RawHttpClient | RawStdioClient,
+    transcript: Transcript,
+    *,
+    approved_upstream: bool = False,
+) -> dict[str, Any]:
     listed = client.initialize()
     snapshot = _schema_snapshot(listed)
     transcript.add(
@@ -485,10 +527,12 @@ def _raw_flow(client: RawHttpClient | RawStdioClient, transcript: Transcript) ->
     async def call(tool: str, arguments: Mapping[str, Any], *, expect_error: bool = False) -> Any:
         return raw_call(tool, arguments, expect_error=expect_error)
 
-    return asyncio.run(_flow(call))
+    return asyncio.run(_flow(call, approved_upstream=approved_upstream, transcript=transcript))
 
 
-async def _flow(call: Any) -> dict[str, Any]:
+async def _flow(
+    call: Any, *, approved_upstream: bool = False, transcript: Transcript | None = None
+) -> dict[str, Any]:
     content = base64.b64encode(b"conformance source marker").decode()
     target_content = base64.b64encode(b"conformance target marker").decode()
     source = await call(
@@ -542,14 +586,24 @@ async def _flow(call: Any) -> dict[str, Any]:
         {"artifact_id": source_id, "grant_id": grant["id"], "reason": "conformance revoke"},
     )
     acl_after = await call("artifact_acl", {"artifact_id": source_id})
+    approved_tools = ["calendar.events.list"]
+    if approved_upstream:
+        approved_tools.extend(["calendar.events.slow", "calendar.events.oversize"])
     connection = await call(
         "external_mcp_connection_register",
         {
             "name": "conformance-calendar",
-            "endpoint": "https://calendar.example/mcp",
-            "approved_tools": ["calendar.events.list"],
+            "endpoint": "https://approved-upstream.test/mcp"
+            if approved_upstream
+            else "https://calendar.example/mcp",
+            "approved_tools": approved_tools,
             "approved_resources": ["calendar://events/today"],
-            "allowed_origins": ["https://calendar.example"],
+            "allowed_origins": [
+                "https://approved-upstream.test"
+                if approved_upstream
+                else "https://calendar.example"
+            ],
+            **({"credential_ref": "secret://conformance/upstream"} if approved_upstream else {}),
             "reason": "conformance registry flow",
         },
     )
@@ -558,6 +612,53 @@ async def _flow(call: Any) -> dict[str, Any]:
     connection_status = await call(
         "external_mcp_connection_status", {"connection_id": connection_id}
     )
+    external_tool_allowed = None
+    external_resource_allowed = None
+    external_timeout = None
+    external_oversized = None
+    if approved_upstream:
+        connection_health = await call(
+            "external_mcp_connection_status", {"connection_id": connection_id, "probe": True}
+        )
+        external_tool_allowed = await call(
+            "external_mcp_tool_call",
+            {
+                "connection_id": connection_id,
+                "tool_name": "calendar.events.list",
+                "arguments": {"limit": 5},
+            },
+        )
+        external_resource_allowed = await call(
+            "external_mcp_resource_read",
+            {
+                "connection_id": connection_id,
+                "resource_uri": "calendar://events/today",
+            },
+        )
+        external_timeout = await call(
+            "external_mcp_tool_call",
+            {
+                "connection_id": connection_id,
+                "tool_name": "calendar.events.slow",
+                "arguments": {},
+            },
+            expect_error=True,
+        )
+        external_oversized = await call(
+            "external_mcp_tool_call",
+            {
+                "connection_id": connection_id,
+                "tool_name": "calendar.events.oversize",
+                "arguments": {},
+            },
+            expect_error=True,
+        )
+        if connection_health.get("health_status") != "healthy":
+            raise ConformanceError("approved upstream health mismatch")
+        if external_tool_allowed.get("upstream") != "approved-conformance":
+            raise ConformanceError("approved upstream tool call mismatch")
+        if "calendar://events/today" not in json.dumps(external_resource_allowed):
+            raise ConformanceError("approved upstream resource read mismatch")
     external_tool_denied = await call(
         "external_mcp_tool_call",
         {
@@ -580,6 +681,17 @@ async def _flow(call: Any) -> dict[str, Any]:
         "external_mcp_connection_revoke",
         {"connection_id": connection_id, "reason": "conformance revoke"},
     )
+    external_post_revoke = None
+    if approved_upstream:
+        external_post_revoke = await call(
+            "external_mcp_tool_call",
+            {
+                "connection_id": connection_id,
+                "tool_name": "calendar.events.list",
+                "arguments": {},
+            },
+            expect_error=True,
+        )
     malformed = await call("artifact_read", {"artifact_id": 7}, expect_error=True)
     oversized = await call(
         "artifact_create", {"name": "x" * 256, "content_base64": content}, expect_error=True
@@ -595,12 +707,26 @@ async def _flow(call: Any) -> dict[str, Any]:
         unauthorized,
         external_tool_denied,
         external_resource_denied,
+        *(item for item in (external_timeout, external_oversized, external_post_revoke) if item),
     ):
         if any(
             secret in json.dumps(failure)
-            for secret in ("sqlite", "Traceback", "conformance source marker")
+            for secret in (
+                "sqlite",
+                "Traceback",
+                "conformance source marker",
+                "conformance/upstream",
+                "upstream-conformance-secret",
+            )
         ):
             raise ConformanceError("failure response leaked internal or fixture content")
+    if approved_upstream:
+        encoded_transcript = json.dumps(transcript.entries if transcript else {}, sort_keys=True)
+        if any(
+            secret in encoded_transcript
+            for secret in ("secret://conformance/upstream", "upstream-conformance-secret")
+        ):
+            raise ConformanceError("approved upstream transcript leaked secret material")
     if len(listed) != 2 or chunk["content"] != "conformance source marker":
         raise ConformanceError("artifact create/read/chunk/list mismatch")
     if not searched or not grepped or edge["target_artifact_id"] != target_id:
@@ -618,9 +744,16 @@ async def _flow(call: Any) -> dict[str, Any]:
     if (
         len(connections) != 1
         or connection_status["id"] != connection_id
-        or connection_status["credential_configured"]
+        or connection_status["credential_configured"] != approved_upstream
         or connection_revoked["status"] != "revoked"
         or not any(item["outcome"] == "denied" for item in external_audit)
+        or (
+            approved_upstream
+            and (
+                not any(item["outcome"] == "allowed" for item in external_audit)
+                or external_post_revoke is None
+            )
+        )
     ):
         raise ConformanceError("external MCP registry/revoke/audit mismatch")
     return {
@@ -633,6 +766,12 @@ async def _flow(call: Any) -> dict[str, Any]:
         "grant_status": grant["status"],
         "revoke_status": revoked["status"],
         "external_connection_status": connection_revoked["status"],
+        "approved_upstream": approved_upstream,
+        "approved_upstream_tool": external_tool_allowed is not None,
+        "approved_upstream_resource": external_resource_allowed is not None,
+        "approved_upstream_timeout": external_timeout is not None,
+        "approved_upstream_oversize": external_oversized is not None,
+        "approved_upstream_post_revoke_denied": external_post_revoke is not None,
         "negative_cases": [
             "malformed",
             "oversized",

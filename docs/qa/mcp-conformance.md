@@ -35,3 +35,31 @@ than copied into evidence.
 
 This is protocol and regression evidence only. It does not certify hosted or
 enterprise readiness.
+
+## Hosted-authenticated gate (`fl-urj.30`)
+
+`tests/hosted_mcp_conformance.py` runs the same flow as a hosted-authenticated
+two-client matrix: official SDK and independent raw JSON-RPC, each over
+process-authenticated stdio and bearer-authenticated Streamable HTTP. Every
+row starts fresh state. The stdio target verifies a process-scoped bearer
+before exposing the stdio server; production hosted mode remains HTTP-only.
+
+The external connection row reaches a real loopback Streamable HTTP MCP
+upstream through `HttpExternalMcpTransport`, then proves exact approval,
+server-side credential use, secret-free evidence, timeout, oversized-result
+rejection, and immediate revoke denial. Oversized transcripts retain only
+byte count and SHA-256.
+
+Run after committing the checkout under test:
+
+```sh
+FOLIO_CONFORMANCE_SOURCE_SHA="$(git rev-parse HEAD)" \
+FOLIO_HOSTED_CONFORMANCE_EVIDENCE=/tmp/folio-lattice-fl-urj.30.json \
+  make hosted-conformance
+```
+
+The runner fails if the configured source SHA differs from `HEAD` or the
+checkout is dirty. Evidence records the exact source SHA, four matrix rows,
+matching tool schemas, and redacted upstream checks. It does not claim a
+deployment or external internet service: the upstream is an isolated live
+loopback MCP process.

@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test test-unit test-e2e hosted-e2e hosted-auth-adversarial hosted-auth-e2e browser-test check docker-build docker-up docker-test docker-down docker-sync docker-sync-once
+.PHONY: install format lint typecheck test test-unit test-e2e conformance hosted-conformance hosted-e2e hosted-auth-adversarial hosted-auth-e2e browser-test check docker-build docker-up docker-test docker-down docker-sync docker-sync-once
 
 install:
 	uv sync --dev
@@ -21,6 +21,14 @@ test-unit:
 
 test-e2e:
 	uv run pytest -q tests/test_e2e.py tests/test_browser_e2e.py
+
+conformance:
+	FOLIO_CONFORMANCE_EVIDENCE="$${FOLIO_CONFORMANCE_EVIDENCE:-/tmp/folio-lattice-mcp-conformance.json}" \
+	uv run python tests/mcp_conformance.py
+
+hosted-conformance:
+	FOLIO_HOSTED_CONFORMANCE_EVIDENCE="$${FOLIO_HOSTED_CONFORMANCE_EVIDENCE:-/tmp/folio-lattice-fl-urj.30.json}" \
+	uv run python tests/hosted_mcp_conformance.py
 
 hosted-e2e:
 	FOLIO_GATE_COMMAND="$${FOLIO_GATE_COMMAND:-make hosted-e2e}" \
