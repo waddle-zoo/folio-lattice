@@ -23,8 +23,6 @@ PUBLIC_TOOLS = frozenset(
         "artifact_share",
         "artifact_revoke",
         "artifact_acl",
-        "slack_search",
-        "slack_save",
     }
 )
 

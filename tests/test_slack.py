@@ -8,7 +8,8 @@ from mcp import Client
 from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
 from folio_lattice.external_mcp import ExternalMcpBroker
 from folio_lattice.mcp_protocol import build_mcp_server
-from folio_lattice.service import FolioLattice
+from folio_lattice.service import FolioError, FolioLattice
+from folio_lattice.slack import ApprovedSlackConsumer
 
 ENDPOINT = "https://slack.fixture.example/mcp"
 ORIGIN = "https://slack.fixture.example"
@@ -96,6 +97,7 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
             credentials=FakeCredentials(),
             transport=self.transport,
         )
+        self.consumer = ApprovedSlackConsumer(self.service, self.broker)
         self.admin_server = build_mcp_server(
             self.service,
             tenant_id="tenant-a",
@@ -132,49 +134,52 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
         self.connection_id = record["id"]
         return self.connection_id
 
-    async def _member_call(self, tool: str, arguments: dict[str, Any]) -> Any:
-        token = set_request_principal(
-            Principal(
-                "tenant-a",
-                "member-a",
-                "https://issuer.example",
-                "member-a",
-                frozenset({"artifact:read", "artifact:search", "artifact:write"}),
-            )
+    def _member_search(self, **kwargs: Any) -> dict[str, Any]:
+        return self.consumer.search(
+            tenant_id="tenant-a",
+            actor="member-a",
+            connection_id=kwargs.pop("connection_id"),
+            **kwargs,
         )
-        try:
-            async with Client(
-                build_mcp_server(self.service, external_broker=self.broker)
-            ) as client:
-                return await client.call_tool(tool, arguments)
-        finally:
-            reset_request_principal(token)
+
+    def _member_save(self, **kwargs: Any) -> dict[str, Any]:
+        return self.consumer.save(
+            tenant_id="tenant-a",
+            actor="member-a",
+            connection_id=kwargs.pop("connection_id"),
+            **kwargs,
+        )
+
+    async def test_core_mcp_contract_has_no_provider_specific_tools(self) -> None:
+        async with Client(self.admin_server) as client:
+            listed = await client.list_tools()
+        names = {tool.name for tool in listed.tools}
+        self.assertNotIn("slack_search", names)
+        self.assertNotIn("slack_save", names)
+        self.assertIn("external_mcp_tool_call", names)
+        self.assertIn("artifact_create", names)
 
     async def test_approved_search_save_provenance_and_revoke(self) -> None:
         connection_id = await self._register()
         arguments = {
-            "connection_id": connection_id,
             "channel": "#deployments",
             "start_time": START,
             "end_time": END,
             "query": "renderer",
             "limit": 10,
         }
-        searched = await self._member_call("slack_search", arguments)
-        self.assertFalse(searched.is_error, searched)
-        result = self.payload(searched)
+        result = self._member_search(connection_id=connection_id, **arguments)
         self.assertEqual(result["provider"], "slack")
         self.assertEqual(result["connection_id"], connection_id)
         self.assertEqual(result["match_count"], 1)
         self.assertEqual(result["messages"][0]["id"], "msg-1")
         self.assertNotIn(SECRET, repr(result))
 
-        saved = await self._member_call(
-            "slack_save",
-            {**arguments, "name": "renderer-search.md"},
+        saved_result = self._member_save(
+            connection_id=connection_id,
+            name="renderer-search.md",
+            **arguments,
         )
-        self.assertFalse(saved.is_error, saved)
-        saved_result = self.payload(saved)
         source = saved_result["version"]["source_context"]
         self.assertEqual(source["provider"], "slack")
         self.assertEqual(source["connection_id"], connection_id)
@@ -223,92 +228,60 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertFalse(revoked.is_error, revoked)
         calls_before = len(self.transport.calls)
-        revoked_search = await self._member_call("slack_search", arguments)
-        self.assertTrue(revoked_search.is_error)
-        self.assertIn("revoked", revoked_search.content[0].text)
+        with self.assertRaisesRegex(FolioError, "revoked"):
+            self._member_search(connection_id=connection_id, **arguments)
         self.assertEqual(len(self.transport.calls), calls_before)
         self.assertTrue(all(call["tool"] == "slack.search" for call in self.transport.calls))
 
     async def test_tenant_isolation_and_bounds_fail_closed(self) -> None:
         connection_id = await self._register()
-        other_token = set_request_principal(
-            Principal(
-                "tenant-b",
-                "member-b",
-                "https://issuer.example",
-                "member-b",
-                frozenset({"artifact:search"}),
+        with self.assertRaisesRegex(FolioError, "connection not found"):
+            self.consumer.search(
+                tenant_id="tenant-b",
+                actor="member-b",
+                connection_id=connection_id,
+                channel="#deployments",
+                start_time=START,
+                end_time=END,
+                query="renderer",
             )
-        )
-        try:
-            async with Client(
-                build_mcp_server(self.service, external_broker=self.broker)
-            ) as client:
-                cross_tenant = await client.call_tool(
-                    "slack_search",
-                    {
-                        "connection_id": connection_id,
-                        "channel": "#deployments",
-                        "start_time": START,
-                        "end_time": END,
-                        "query": "renderer",
-                    },
-                )
-                self.assertTrue(cross_tenant.is_error)
-                self.assertIn("connection not found", cross_tenant.content[0].text)
-        finally:
-            reset_request_principal(other_token)
 
-        overlong = await self._member_call(
-            "slack_search",
-            {
-                "connection_id": connection_id,
-                "channel": "#deployments",
-                "start_time": START,
-                "end_time": "2026-02-15T00:00:00Z",
-                "query": "renderer",
-            },
-        )
-        self.assertTrue(overlong.is_error)
-        self.assertIn("31 days", overlong.content[0].text)
+        with self.assertRaisesRegex(FolioError, "31 days"):
+            self._member_search(
+                connection_id=connection_id,
+                channel="#deployments",
+                start_time=START,
+                end_time="2026-02-15T00:00:00Z",
+                query="renderer",
+            )
 
-        invalid_channel = await self._member_call(
-            "slack_search",
-            {
-                "connection_id": connection_id,
-                "channel": "#deploy ments",
-                "start_time": START,
-                "end_time": END,
-                "query": "renderer",
-            },
-        )
-        self.assertTrue(invalid_channel.is_error)
-        self.assertIn("channel is invalid", invalid_channel.content[0].text)
+        with self.assertRaisesRegex(FolioError, "channel is invalid"):
+            self._member_search(
+                connection_id=connection_id,
+                channel="#deploy ments",
+                start_time=START,
+                end_time=END,
+                query="renderer",
+            )
         self.assertEqual(self.transport.calls, [])
 
     async def test_empty_results_are_a_valid_bounded_search(self) -> None:
         connection_id = await self._register()
         self.transport.response_override = {"messages": []}
-        searched = await self._member_call(
-            "slack_search",
-            {
-                "connection_id": connection_id,
-                "channel": "#deployments",
-                "start_time": START,
-                "end_time": END,
-                "query": "no-match",
-                "limit": 1,
-            },
+        searched = self._member_search(
+            connection_id=connection_id,
+            channel="#deployments",
+            start_time=START,
+            end_time=END,
+            query="no-match",
+            limit=1,
         )
-        self.assertFalse(searched.is_error, searched)
-        result = self.payload(searched)
-        self.assertEqual(result["messages"], [])
-        self.assertEqual(result["match_count"], 0)
+        self.assertEqual(searched["messages"], [])
+        self.assertEqual(searched["match_count"], 0)
 
     async def test_upstream_limit_malformed_and_oversize_fail_before_save(self) -> None:
         connection_id = await self._register()
         arguments = {
-            "connection_id": connection_id,
             "name": "bounded.md",
             "channel": "#deployments",
             "start_time": START,
@@ -333,15 +306,13 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
         before = self.service.list_artifacts("tenant-a", actor="member-a")
-        too_many = await self._member_call("slack_save", arguments)
-        self.assertTrue(too_many.is_error)
-        self.assertIn("more messages than requested", too_many.content[0].text)
+        with self.assertRaisesRegex(FolioError, "more messages than requested"):
+            self._member_save(connection_id=connection_id, **arguments)
         self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)
 
         self.transport.response_override = {"messages": [{"id": "broken"}]}
-        malformed = await self._member_call("slack_save", arguments)
-        self.assertTrue(malformed.is_error)
-        self.assertIn("Slack message channel is invalid", malformed.content[0].text)
+        with self.assertRaisesRegex(FolioError, "Slack message channel is invalid"):
+            self._member_save(connection_id=connection_id, **arguments)
         self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)
 
         self.transport.response_override = {
@@ -354,9 +325,8 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
                 }
             ]
         }
-        oversized = await self._member_call("slack_save", arguments)
-        self.assertTrue(oversized.is_error)
-        self.assertIn("exceeds the allowed size", oversized.content[0].text)
+        with self.assertRaisesRegex(FolioError, "exceeds the allowed size"):
+            self._member_save(connection_id=connection_id, **arguments)
         self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)
 
     async def test_upstream_credential_echo_is_rejected_before_save(self) -> None:
@@ -371,8 +341,7 @@ class ApprovedSlackContractTests(unittest.IsolatedAsyncioTestCase):
             "query": "secret",
         }
         before = self.service.list_artifacts("tenant-a", actor="member-a")
-        echoed = await self._member_call("slack_save", arguments)
-        self.assertTrue(echoed.is_error)
-        self.assertIn("credential material", echoed.content[0].text)
-        self.assertNotIn(SECRET, echoed.content[0].text)
+        with self.assertRaisesRegex(FolioError, "credential material") as raised:
+            self._member_save(**arguments)
+        self.assertNotIn(SECRET, str(raised.exception))
         self.assertEqual(self.service.list_artifacts("tenant-a", actor="member-a"), before)

@@ -1,3 +1,5 @@
+"""Optional Slack edge adapter; core MCP tools remain provider-neutral."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

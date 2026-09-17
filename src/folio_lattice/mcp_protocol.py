@@ -12,7 +12,6 @@ from pydantic import Field
 from .auth import get_request_principal
 from .external_mcp import ExternalMcpBroker
 from .service import FolioError, FolioLattice
-from .slack import ApprovedSlackConsumer
 
 MAX_ID_LENGTH = 255
 MAX_BASE64_LENGTH = 12 * 1024 * 1024
@@ -34,8 +33,6 @@ TOOL_SCOPES = {
     "artifact_share": "artifact:share",
     "artifact_revoke": "artifact:share",
     "artifact_acl": "artifact:share",
-    "slack_search": "artifact:search",
-    "slack_save": "artifact:write",
     "external_mcp_connection_register": EXTERNAL_MCP_ADMIN_SCOPE,
     "external_mcp_connection_list": EXTERNAL_MCP_ADMIN_SCOPE,
     "external_mcp_connection_status": EXTERNAL_MCP_ADMIN_SCOPE,
@@ -100,8 +97,6 @@ def build_mcp_server(
         concurrency_limit=external_concurrency_limit,
         concurrency_per_key=external_concurrency_per_key,
     )
-    slack = ApprovedSlackConsumer(service, broker)
-
     server = MCPServer(
         "folio-lattice",
         version="0.1.0",
@@ -366,70 +361,6 @@ def build_mcp_server(
                 artifact_id,
                 actor=request_actor,
                 authorization_actor=policy_actor(request_actor),
-            )
-        )
-
-    @server.tool(
-        description=(
-            "Search one tenant-admin-approved seeded Slack connection. This is a bounded "
-            "channel and time-range search using only the approved slack.search tool; it "
-            "is not a general network proxy. Results include source and message provenance."
-        )
-    )
-    def slack_search(
-        connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
-        channel: Annotated[str, Field(min_length=1, max_length=255)],
-        start_time: Annotated[str, Field(min_length=1, max_length=64)],
-        end_time: Annotated[str, Field(min_length=1, max_length=64)],
-        query: Annotated[str, Field(min_length=1, max_length=500)],
-        limit: Annotated[int, Field(ge=1, le=50)] = 20,
-    ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["slack_search"])
-        return _tool_errors(
-            lambda: slack.search(
-                tenant_id=request_tenant,
-                actor=request_actor,
-                connection_id=connection_id,
-                channel=channel,
-                start_time=start_time,
-                end_time=end_time,
-                query=query,
-                limit=limit,
-            )
-        )
-
-    @server.tool(
-        description=(
-            "Save a bounded search from one tenant-admin-approved seeded Slack connection "
-            "as an immutable Markdown artifact. The version records actor, connection, "
-            "channel, time range, query, and source message IDs; revoked connections fail."
-        )
-    )
-    def slack_save(
-        connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
-        name: Annotated[str, Field(min_length=1, max_length=255)],
-        channel: Annotated[str, Field(min_length=1, max_length=255)],
-        start_time: Annotated[str, Field(min_length=1, max_length=64)],
-        end_time: Annotated[str, Field(min_length=1, max_length=64)],
-        query: Annotated[str, Field(min_length=1, max_length=500)],
-        limit: Annotated[int, Field(ge=1, le=50)] = 20,
-        reason: Annotated[str, Field(min_length=1, max_length=2_000)] = (
-            "saved approved Slack search"
-        ),
-    ) -> dict[str, Any]:
-        request_tenant, request_actor = identity(TOOL_SCOPES["slack_save"])
-        return _tool_errors(
-            lambda: slack.save(
-                tenant_id=request_tenant,
-                actor=request_actor,
-                connection_id=connection_id,
-                name=name,
-                channel=channel,
-                start_time=start_time,
-                end_time=end_time,
-                query=query,
-                limit=limit,
-                reason=reason,
             )
         )
 
