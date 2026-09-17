@@ -337,8 +337,9 @@ class HttpExternalMcpTransport:
             backend_base = httpcore.AsyncNetworkBackend
             auto_backend = httpcore.AutoBackend
         except AttributeError:
-            backend_base = import_module("httpcore._backends.base").AsyncNetworkBackend
-            auto_backend = import_module("httpcore._backends.auto").AutoBackend
+            module_name = httpcore.__name__
+            backend_base = import_module(f"{module_name}._backends.base").AsyncNetworkBackend
+            auto_backend = import_module(f"{module_name}._backends.auto").AutoBackend
 
         class PinnedBackend(backend_base):  # type: ignore[misc, valid-type]
             def __init__(self) -> None:
