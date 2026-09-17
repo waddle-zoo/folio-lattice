@@ -16,6 +16,7 @@ from .backup_ops import (
     UnavailableBackupStore,
     UnavailableKeyCustody,
 )
+from .deployment import DeploymentError, rollback_deployment, transactional_upgrade
 from .service import FolioLattice, utc_now
 
 
@@ -58,6 +59,25 @@ def _parser() -> argparse.ArgumentParser:
     dr_restore.add_argument("--blobs")
     dr_restore.add_argument("--key-id")
     dr_restore.add_argument("--tenant-id", action="append", dest="tenant_ids")
+
+    deployment = commands.add_parser("deployment")
+    deployment_subcommands = deployment.add_subparsers(dest="deployment_command", required=True)
+    upgrade = deployment_subcommands.add_parser(
+        "upgrade", help="upgrade verified state and retain a rollback snapshot"
+    )
+    upgrade.add_argument("--current-version", required=True)
+    upgrade.add_argument("--target-version", required=True)
+    upgrade.add_argument("--db")
+    upgrade.add_argument("--blobs")
+    upgrade.add_argument("--state")
+    rollback = deployment_subcommands.add_parser(
+        "rollback", help="switch to a previously verified rollback snapshot"
+    )
+    rollback.add_argument("--snapshot", required=True)
+    rollback.add_argument("--target-version", required=True)
+    rollback.add_argument("--db")
+    rollback.add_argument("--blobs")
+    rollback.add_argument("--state")
 
     audit = commands.add_parser("audit")
     audit_subcommands = audit.add_subparsers(dest="audit_command", required=True)
@@ -105,6 +125,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 expected_key_id=args.key_id,
                 expected_tenant_scope=set(args.tenant_ids) if args.tenant_ids is not None else None,
             )
+        elif args.command == "deployment" and args.deployment_command == "upgrade":
+            result = transactional_upgrade(
+                _path(args.db, "FOLIO_DB_PATH", ".data/folio.db"),
+                _path(args.blobs, "FOLIO_BLOB_ROOT", ".data/blobs"),
+                current_version=args.current_version,
+                target_version=args.target_version,
+                state_path=args.state,
+            )
+        elif args.command == "deployment" and args.deployment_command == "rollback":
+            result = rollback_deployment(
+                _path(args.db, "FOLIO_DB_PATH", ".data/folio.db"),
+                _path(args.blobs, "FOLIO_BLOB_ROOT", ".data/blobs"),
+                snapshot_path=args.snapshot,
+                target_version=args.target_version,
+                state_path=args.state,
+            )
         elif args.command == "audit" and args.audit_command == "purge":
             service = FolioLattice(
                 _path(args.db, "FOLIO_DB_PATH", ".data/folio.db"),
@@ -118,7 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         else:
             raise BackupError("unsupported operations command")
-    except BackupError as exc:
+    except (BackupError, DeploymentError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}), file=sys.stderr)
         return 2
     print(json.dumps(result, sort_keys=True))

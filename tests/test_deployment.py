@@ -31,9 +31,16 @@ from folio_lattice.backup_ops import (
     KeyCustodyStatus,
     StoredBackup,
 )
+from folio_lattice.deployment import (
+    DeploymentError,
+    initialize_deployment_state,
+    rollback_deployment,
+    transactional_upgrade,
+)
 from folio_lattice.renderer import RendererApp
 from folio_lattice.server import FolioHttpApp, Settings
 from folio_lattice.service import FolioLattice
+from folio_lattice.tls import TlsCertificateMonitor
 
 
 async def unused_app(scope, receive, send) -> None:
@@ -248,6 +255,130 @@ class DeploymentTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "HTTPS FOLIO_MCP_URL"):
                     Settings.from_env()
+
+    def test_tls_certificate_monitor_emits_expiry_and_rotation_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cert, _ = write_certificate(root)
+            now = datetime.now(UTC)
+            monitor = TlsCertificateMonitor(cert, warning_seconds=2 * 24 * 60 * 60)
+            expiring = monitor.status(now)
+            self.assertTrue(expiring["ready"])
+            self.assertIn("tls_certificate_expiring", expiring["alerts"])
+            self.assertEqual(expiring["metrics"]["tls_certificate_rotation_total"], 0)
+
+            rotated_root = root / "rotated"
+            rotated_root.mkdir()
+            rotated, _ = write_certificate(rotated_root)
+            shutil.copyfile(rotated, cert)
+            rotated_status = monitor.status(now)
+            self.assertTrue(rotated_status["ready"])
+            self.assertIn("tls_certificate_rotated", rotated_status["alerts"])
+            self.assertEqual(rotated_status["metrics"]["tls_certificate_rotation_total"], 1)
+
+            expired = monitor.status(now + timedelta(days=2))
+            self.assertFalse(expired["ready"])
+            self.assertIn("tls_certificate_expired", expired["alerts"])
+
+    def test_tls_certificate_dependency_fails_readiness_when_expired(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cert, _ = write_certificate(root)
+            service = FolioLattice(root / "folio.db", root / "blobs")
+            app = FolioHttpApp(
+                unused_app,
+                service,
+                unused_app,
+                deployment_mode="local",
+                tls_certificate=TlsCertificateMonitor(cert),
+            )
+            app.tls_certificate.status = lambda now=None: {
+                "ready": False,
+                "alerts": ["tls_certificate_expired"],
+                "metrics": {"tls_certificate_ready": 0},
+            }
+            status, _, body = asyncio.run(call(app, "/readyz"))
+            self.assertEqual(status, 503)
+            self.assertFalse(json.loads(body)["dependencies"]["tls_certificate"]["ready"])
+
+    def test_versioned_upgrade_verifies_state_and_rolls_back_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "folio.db"
+            blobs = root / "blobs"
+            service = FolioLattice(database, blobs)
+            created = service.create_artifact(
+                tenant_id="upgrade",
+                name="rollback.txt",
+                data=b"upgrade-safe content",
+                media_type="text/plain",
+            )
+            state_path = root / "deployment.json"
+            initialize_deployment_state(database, blobs, "v1", state_path=state_path)
+
+            upgraded = transactional_upgrade(
+                database,
+                blobs,
+                current_version="v1",
+                target_version="v2",
+                state_path=state_path,
+                migrate=lambda _db, _blobs: None,
+            )
+            self.assertTrue(upgraded["before"]["ready"])
+            self.assertTrue(upgraded["after"]["ready"])
+            self.assertEqual(json.loads(state_path.read_text())["active_version"], "v2")
+
+            snapshot_manifest = Path(upgraded["rollback_snapshot"]) / "manifest.json"
+            manifest = json.loads(snapshot_manifest.read_text())
+            snapshot_manifest.write_text(
+                json.dumps(
+                    {**manifest, "state": {**manifest["state"], "database_sha256": "0" * 64}}
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(DeploymentError):
+                rollback_deployment(
+                    database,
+                    blobs,
+                    snapshot_path=upgraded["rollback_snapshot"],
+                    target_version="v1",
+                    state_path=state_path,
+                )
+            self.assertEqual(json.loads(state_path.read_text())["active_version"], "v2")
+            snapshot_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+
+            rolled_back = rollback_deployment(
+                database,
+                blobs,
+                snapshot_path=upgraded["rollback_snapshot"],
+                target_version="v1",
+                state_path=state_path,
+            )
+            self.assertEqual(rolled_back["to_version"], "v1")
+            self.assertEqual(json.loads(state_path.read_text())["active_version"], "v1")
+            self.assertEqual(
+                FolioLattice(database, blobs).read_artifact("upgrade", created["artifact"]["id"])[
+                    "text"
+                ],
+                "upgrade-safe content",
+            )
+
+            def hostile_migration(db: str | Path, blob_root: str | Path) -> None:
+                Path(blob_root, "unsafe-marker").write_text("partial", encoding="utf-8")
+                raise RuntimeError("migration rejected")
+
+            with self.assertRaises(DeploymentError):
+                transactional_upgrade(
+                    database,
+                    blobs,
+                    current_version="v1",
+                    target_version="v3",
+                    state_path=state_path,
+                    migrate=hostile_migration,
+                )
+            self.assertFalse((blobs / "unsafe-marker").exists())
+            self.assertEqual(json.loads(state_path.read_text())["active_version"], "v1")
+            self.assertTrue(FolioLattice(database, blobs, read_only=True).readiness()["ready"])
 
     def test_readiness_separates_liveness_and_durable_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

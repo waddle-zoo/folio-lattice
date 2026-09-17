@@ -72,6 +72,7 @@ from .sessions import (
     SESSION_COOKIE_PATH,
     SessionStore,
 )
+from .tls import TlsCertificateMonitor
 
 DEFAULT_MAX_REQUEST_BYTES = 13 * 1024 * 1024
 PUBLIC_MCP_RATE_LIMIT = 600
@@ -629,6 +630,7 @@ class FolioHttpApp:
         local_tenant_id: str | None = None,
         local_actor_id: str | None = None,
         backup_operations: BackupOperationsMonitor | None = None,
+        tls_certificate: TlsCertificateMonitor | None = None,
         principal_relay: TrustedPrincipalRelay | SignedPrincipalRelay | None = None,
     ):
         if max_request_bytes < 1:
@@ -658,6 +660,7 @@ class FolioHttpApp:
         self.local_tenant_id = local_tenant_id
         self.local_actor_id = local_actor_id
         self.backup_operations = backup_operations
+        self.tls_certificate = tls_certificate
         self.principal_relay = principal_relay
         self.audit_logger = audit_logger or logging.getLogger("folio_lattice.audit")
         self.audit_logger.setLevel(logging.INFO)
@@ -774,6 +777,16 @@ class FolioHttpApp:
                             "backup_age_seconds": -1,
                             "backup_store_ready": 0,
                             "backup_key_custody_ready": 0,
+                        }
+                    )
+            if self.tls_certificate is not None:
+                try:
+                    metrics.update(self.tls_certificate.metrics())
+                except Exception:
+                    metrics.update(
+                        {
+                            "tls_certificate_ready": 0,
+                            "tls_certificate_expiry_seconds": -1,
                         }
                     )
             await JSONResponse(metrics, headers={"Cache-Control": "no-store"})(
@@ -1063,6 +1076,21 @@ class FolioHttpApp:
                         "required": True,
                         "reason": "hosted backup operations check failed",
                     }
+        if self.tls_certificate is not None:
+            try:
+                tls_status = self.tls_certificate.status()
+                dependencies["tls_certificate"] = {
+                    "ready": tls_status["ready"],
+                    "required": True,
+                    "alerts": tls_status["alerts"],
+                    "metrics": tls_status["metrics"],
+                }
+            except Exception:
+                dependencies["tls_certificate"] = {
+                    "ready": False,
+                    "required": True,
+                    "reason": "TLS certificate check failed",
+                }
         readiness["dependencies"] = dependencies
         readiness["ready"] = all(
             isinstance(dependency, dict) and dependency.get("ready") is True
@@ -1772,6 +1800,9 @@ def run_http(host: str, port: int) -> None:
     settings = Settings.from_env()
     service, mcp, authenticator = build_runtime(settings)
     backup_operations = build_backup_operations() if settings.deployment_mode == "hosted" else None
+    tls_certificate = (
+        TlsCertificateMonitor(settings.tls_certfile) if settings.tls_certfile is not None else None
+    )
     session_store = None
     identity_adapter = None
     auth_redirect_uri = None
@@ -1866,6 +1897,7 @@ def run_http(host: str, port: int) -> None:
             local_tenant_id=settings.tenant_id if settings.deployment_mode == "local" else None,
             local_actor_id=settings.actor if settings.deployment_mode == "local" else None,
             backup_operations=backup_operations,
+            tls_certificate=tls_certificate,
             principal_relay=principal_relay,
         ),
         host=host,
