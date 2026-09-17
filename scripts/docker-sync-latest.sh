@@ -98,7 +98,7 @@ sync_once() {
   fi
 
   log "building Docker services for ${target:0:12}"
-  if ! docker compose up -d --build; then
+  if ! VCS_REF="$target" docker compose up -d --build; then
     log "Docker build or startup failed; will retry"
     return 1
   fi

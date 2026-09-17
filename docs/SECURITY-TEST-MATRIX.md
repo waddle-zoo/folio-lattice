@@ -41,11 +41,12 @@ make check
 make browser-test
 make docker-build
 FOLIO_HOST_PORT=18010 FOLIO_RENDER_HOST_PORT=18011 \
+VCS_REF="$(git rev-parse HEAD)" \
   docker compose -p fl-enterprise-validation up -d --build
 FOLIO_BASE_URL=http://127.0.0.1:18010 \
 FOLIO_RENDER_URL=http://127.0.0.1:18011 \
   uv run python tests/test_docker_e2e.py
-docker compose -p fl-enterprise-validation down -v
+VCS_REF="$(git rev-parse HEAD)" docker compose -p fl-enterprise-validation down -v
 ```
 
 Run the local check/browser gates twice. Run Docker from a newly removed named

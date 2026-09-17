@@ -12,6 +12,55 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SupplyChainPolicyTests(unittest.TestCase):
+    def test_release_input_verifier_rejects_untracked_source(self) -> None:
+        verifier_source = ROOT / "scripts/verify-release-inputs.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_root = Path(directory)
+            scripts = fixture_root / "scripts"
+            workflows = fixture_root / ".github" / "workflows"
+            scripts.mkdir()
+            workflows.mkdir(parents=True)
+            verifier = scripts / verifier_source.name
+            verifier.write_text(verifier_source.read_text())
+            verifier.chmod(0o755)
+            (workflows / "release.yml").write_text(
+                "uses: actions/checkout@" + "a" * 40 + "\n", encoding="utf-8"
+            )
+            (fixture_root / "Dockerfile").write_text(
+                "FROM python:3.12-slim@sha256:" + "b" * 64 + "\n", encoding="utf-8"
+            )
+            for required in ("pyproject.toml", "uv.lock"):
+                (fixture_root / required).write_text("fixture\n", encoding="utf-8")
+            self._run_git(fixture_root, "init", "-q")
+            self._run_git(fixture_root, "config", "user.email", "qa@example.invalid")
+            self._run_git(fixture_root, "config", "user.name", "QA fixture")
+            self._run_git(fixture_root, "add", ".")
+            self._run_git(fixture_root, "commit", "-qm", "fixture")
+            source_sha = self._run_git(fixture_root, "rev-parse", "HEAD")
+            environment = {**os.environ, "SOURCE_SHA": source_sha}
+
+            passed = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(passed.returncode, 0, passed.stderr)
+            self.assertEqual(json.loads(passed.stdout)["untracked_inputs"], "clean")
+
+            (fixture_root / "src" / "untracked.py").parent.mkdir()
+            (fixture_root / "src" / "untracked.py").write_text("source\n", encoding="utf-8")
+            rejected = subprocess.run(
+                ["bash", str(verifier)],
+                cwd=fixture_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("untracked source or build inputs", rejected.stderr)
+
     def test_dependency_policy_is_green_for_checked_in_inputs(self) -> None:
         result = subprocess.run(
             [sys.executable, "scripts/verify_dependency_policy.py"],
@@ -66,6 +115,10 @@ class SupplyChainPolicyTests(unittest.TestCase):
         base_images = re.findall(r"^FROM\s+(?:--[^\s]+\s+)*([^\s]+)", dockerfile, re.MULTILINE)
         self.assertGreater(len(base_images), 0)
         self.assertTrue(all(re.search(r"@sha256:[0-9a-f]{64}$", image) for image in base_images))
+        compose = (ROOT / "docker-compose.yml").read_text()
+        self.assertIn("VCS_REF: ${VCS_REF:?", compose)
+        makefile = (ROOT / "Makefile").read_text()
+        self.assertIn("build --build-arg VCS_REF", makefile)
 
     def test_supply_chain_verifier_rejects_tampered_provenance(self) -> None:
         verifier_source = ROOT / "scripts/verify-supply-chain.sh"

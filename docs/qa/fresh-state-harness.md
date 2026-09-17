@@ -17,7 +17,9 @@ Each run also receives a unique `COMPOSE_PROJECT_NAME` and
 Compose readiness before the gate command, bind-checks the caller-supplied
 `FOLIO_FRESH_STATE_PORT_BASE`, and removes that exact project with volumes
 after each run; it fails if labeled containers or volumes remain. Gate
-commands must honor these variables; hard-coded Compose project names are
+commands must honor these variables. The documented `make docker-test` gate
+builds and starts that project with `VCS_REF`, then consumes the harness's
+`FOLIO_BASE_URL` and `FOLIO_RENDER_URL`; hard-coded Compose project names are
 outside this harness contract. A non-Docker command may opt into
 `FOLIO_FRESH_STATE_MODE=non-docker`; that mode is explicitly recorded and the
 command must not create Docker resources. `non-release` is the only mode in

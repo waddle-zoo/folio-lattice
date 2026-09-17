@@ -147,9 +147,16 @@ curl --fail-with-body "$API_URL/readyz"
 curl --fail-with-body "$API_URL/metrics"
 docker compose -f deploy/compose/hosted.yml config --quiet
 docker compose -f deploy/compose/hosted.yml run --rm folio migrate check
-docker compose -f deploy/compose/hosted.yml run --rm folio backup create --output /evidence/backup
-docker compose -f deploy/compose/hosted.yml run --rm folio backup verify --input /evidence/backup
-docker compose -f deploy/compose/hosted.yml run --rm folio dr restore --input /evidence/backup
+docker compose -f deploy/compose/hosted.yml run --rm folio backup create \
+  --output /evidence/backup \
+  --backup-key-ref "$BACKUP_KEY_REF" \
+  --recovery-key-ref "$RECOVERY_KEY_REF"
+docker compose -f deploy/compose/hosted.yml run --rm folio backup verify \
+  --input /evidence/backup \
+  --key-id "$RECOVERY_KEY_REF"
+docker compose -f deploy/compose/hosted.yml run --rm folio dr restore \
+  --input /evidence/backup \
+  --key-id "$RECOVERY_KEY_REF"
 ```
 
 ### Hyperset hosted-auth consumer gate (`fl-urj.5.2`)

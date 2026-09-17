@@ -11,6 +11,8 @@ fail() {
 [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]] || fail "source SHA does not match checkout"
 git diff --quiet || fail "tracked checkout has unstaged changes"
 git diff --cached --quiet || fail "tracked checkout has staged changes"
+untracked_inputs="$(git ls-files --others --exclude-standard)"
+[[ -z "$untracked_inputs" ]] || fail "checkout has untracked source or build inputs: $untracked_inputs"
 
 action_count=0
 while IFS= read -r action_ref; do
@@ -41,4 +43,4 @@ jq -n \
   --argjson base_image_count "$base_image_count" \
   '{status: "pass", source_sha: $source_sha, action_count: $action_count,
     base_image_count: $base_image_count, immutable_refs: true,
-    tracked_checkout: "clean"}'
+    tracked_checkout: "clean", untracked_inputs: "clean"}'

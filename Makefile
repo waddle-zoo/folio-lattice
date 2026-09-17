@@ -1,5 +1,8 @@
 .PHONY: install format lint typecheck test test-unit test-e2e conformance hosted-conformance hosted-e2e hosted-auth-adversarial hosted-auth-e2e browser-test check docker-build docker-up docker-test docker-down docker-sync docker-sync-once
 
+VCS_REF ?= $(shell git rev-parse HEAD)
+COMPOSE_PROJECT_ARGS = $(if $(FOLIO_COMPOSE_PROJECT),-p $(FOLIO_COMPOSE_PROJECT),)
+
 install:
 	uv sync --dev
 
@@ -50,16 +53,21 @@ browser-test:
 check: lint typecheck test
 
 docker-build:
-	docker compose build
+	VCS_REF="$(VCS_REF)" docker compose $(COMPOSE_PROJECT_ARGS) build --build-arg VCS_REF="$(VCS_REF)"
 
 docker-up:
-	docker compose up -d
+	VCS_REF="$(VCS_REF)" docker compose $(COMPOSE_PROJECT_ARGS) up -d --build
 
 docker-test:
+	VCS_REF="$(VCS_REF)" docker compose $(COMPOSE_PROJECT_ARGS) build --build-arg VCS_REF="$(VCS_REF)"
+	VCS_REF="$(VCS_REF)" docker compose $(COMPOSE_PROJECT_ARGS) up -d
+	FOLIO_BASE_URL="$${FOLIO_BASE_URL:-http://127.0.0.1:$${FOLIO_HOST_PORT:-8000}}" \
+	FOLIO_RENDER_URL="$${FOLIO_RENDER_URL:-http://127.0.0.1:$${FOLIO_RENDER_HOST_PORT:-8001}}" \
+	FOLIO_COMPOSE_PROJECT="$${FOLIO_COMPOSE_PROJECT:-$${COMPOSE_PROJECT_NAME:-}}" \
 	uv run python tests/test_docker_e2e.py
 
 docker-down:
-	docker compose down
+	VCS_REF="$(VCS_REF)" docker compose $(COMPOSE_PROJECT_ARGS) down
 
 docker-sync:
 	./scripts/docker-sync-latest.sh

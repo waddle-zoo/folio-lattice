@@ -26,6 +26,8 @@ fi
 [[ "$SOURCE_SHA" == "$(git rev-parse HEAD)" ]] || fail "source SHA does not match checkout"
 git diff --quiet || fail "tracked checkout has unstaged changes"
 git diff --cached --quiet || fail "tracked checkout has staged changes"
+untracked_inputs="$(git ls-files --others --exclude-standard | awk '$0 != "evidence" && $0 !~ /^evidence\//')"
+[[ -z "$untracked_inputs" ]] || fail "checkout has untracked source or build inputs: $untracked_inputs"
 [[ "$IMAGE_REF" =~ @sha256:[0-9a-f]{64}$ ]] || fail "image is not pinned to a digest"
 
 [[ -s "$SBOM_PATH" ]] || fail "SBOM is missing"

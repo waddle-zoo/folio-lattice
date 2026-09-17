@@ -9,6 +9,37 @@ from pathlib import Path
 
 
 class FreshStateIsolationTests(unittest.TestCase):
+    def test_docker_test_starts_pinned_compose_and_uses_selected_urls(self) -> None:
+        root = Path(__file__).parents[1]
+        result = subprocess.run(
+            [
+                "make",
+                "-n",
+                "VCS_REF=1f9fb0164f1902981801aa11e9205d6e4d07beaf",
+                "FOLIO_COMPOSE_PROJECT=folio-fresh-test",
+                "FOLIO_HOST_PORT=19001",
+                "FOLIO_RENDER_HOST_PORT=19101",
+                "docker-test",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            'build --build-arg VCS_REF="1f9fb0164f1902981801aa11e9205d6e4d07beaf"', result.stdout
+        )
+        self.assertIn("docker compose -p folio-fresh-test up -d", result.stdout)
+        self.assertIn(
+            'FOLIO_BASE_URL="${FOLIO_BASE_URL:-http://127.0.0.1:${FOLIO_HOST_PORT:-8000}}"',
+            result.stdout,
+        )
+        self.assertIn(
+            'FOLIO_RENDER_URL="${FOLIO_RENDER_URL:-http://127.0.0.1:${FOLIO_RENDER_HOST_PORT:-8001}}"',
+            result.stdout,
+        )
+
     def test_runner_records_unique_project_volume_ports_and_identity(self) -> None:
         root = Path(__file__).parents[1]
         candidate = subprocess.check_output(
@@ -30,7 +61,16 @@ class FreshStateIsolationTests(unittest.TestCase):
                 "FOLIO_FRESH_STATE_MODE": "non-docker",
             }
             result = subprocess.run(
-                [str(script), "--", "sh", "-c", 'test "$FOLIO_TENANT_ID" != hyperset-v0'],
+                [
+                    str(script),
+                    "--",
+                    "sh",
+                    "-c",
+                    'test "$FOLIO_TENANT_ID" != hyperset-v0 && '
+                    'test "$FOLIO_BASE_URL" = "http://127.0.0.1:$((19000 + FOLIO_FRESH_STATE_RUN))" && '
+                    'test "$FOLIO_RENDER_URL" = "http://127.0.0.1:$((19100 + FOLIO_FRESH_STATE_RUN))" && '
+                    'test "$VCS_REF" = "$FOLIO_RELEASE_CANDIDATE_SHA"',
+                ],
                 cwd=root,
                 env=environment,
                 capture_output=True,

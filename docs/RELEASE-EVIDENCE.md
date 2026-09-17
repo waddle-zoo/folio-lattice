@@ -36,7 +36,8 @@ itself.
 
 Use the exact commands in [`SECURITY-TEST-MATRIX.md`](SECURITY-TEST-MATRIX.md).
 The Docker project name and host ports are intentionally isolated. Remove that
-project with `docker compose -p fl-enterprise-validation down -v` after each
+project with `VCS_REF="$(git rev-parse HEAD)" docker compose -p
+fl-enterprise-validation down -v` after each
 run; do not target other Compose projects or volumes.
 
 The Docker flow must create its fixtures with an official MCP client, operate

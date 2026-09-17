@@ -1,6 +1,9 @@
 services:
   folio:
-    build: .
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:?VCS_REF is required for an immutable image revision}
     user: "10001:10001"
     ports:
       - "127.0.0.1:${FOLIO_HOST_PORT:-8000}:8000"
@@ -30,7 +33,10 @@ services:
       start_period: 3s
 
   renderer:
-    build: .
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:?VCS_REF is required for an immutable image revision}
     user: "10001:10001"
     command: ["python", "-m", "folio_lattice.server", "--transport", "renderer", "--host", "0.0.0.0", "--port", "8001"]
     ports:

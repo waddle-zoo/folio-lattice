@@ -138,6 +138,9 @@ for run in $(seq 1 "$runs"); do
     export FOLIO_ACTOR="$actor_id"
     export FOLIO_HOST_PORT="$control_port"
     export FOLIO_RENDER_HOST_PORT="$renderer_port"
+    export FOLIO_BASE_URL="http://127.0.0.1:${control_port}"
+    export FOLIO_RENDER_URL="http://127.0.0.1:${renderer_port}"
+    export VCS_REF="$candidate_sha"
     "$@"
   ) >"$run_evidence/stdout.log" 2>"$run_evidence/stderr.log"
   exit_code=$?
@@ -146,7 +149,7 @@ for run in $(seq 1 "$runs"); do
   cleanup_status="not_applicable"
   if [[ "$mode" != non-docker ]]; then
     cleanup_status="pass"
-    if ! docker compose -p "$compose_project" down -v --remove-orphans \
+    if ! VCS_REF="$candidate_sha" docker compose -p "$compose_project" down -v --remove-orphans \
       >"$run_evidence/compose-cleanup.log" 2>&1; then
       cleanup_status="fail"
     fi
