@@ -301,6 +301,22 @@ class ExternalMcpPublicContractTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertFalse(healthy.is_error, healthy)
             self.assertEqual(self.payload(healthy)["health_status"], "healthy")
+            allowed_tool = await client.call_tool(
+                "external_mcp_tool_call",
+                {
+                    "connection_id": connection_id,
+                    "tool_name": TOOL,
+                    "arguments": {"limit": 5},
+                },
+            )
+            self.assertFalse(allowed_tool.is_error, allowed_tool)
+            self.assertEqual(self.payload(allowed_tool)["tool"], TOOL)
+            allowed_resource = await client.call_tool(
+                "external_mcp_resource_read",
+                {"connection_id": connection_id, "resource_uri": RESOURCE},
+            )
+            self.assertFalse(allowed_resource.is_error, allowed_resource)
+            self.assertEqual(self.payload(allowed_resource)["resource"], RESOURCE)
             denied = await client.call_tool(
                 "external_mcp_tool_call",
                 {

@@ -423,31 +423,35 @@ def build_mcp_server(
         connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         tool_name: Annotated[str, Field(min_length=1, max_length=2_048)],
         arguments: dict[str, Any] | None = None,
-    ) -> Any:
+    ) -> dict[str, Any]:
         request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_tool_call"])
         return _tool_errors(
-            lambda: broker.call_tool(
-                tenant_id=request_tenant,
-                actor=request_actor,
-                connection_id=connection_id,
-                tool_name=tool_name,
-                arguments=arguments or {},
-            )
+            lambda: {
+                "result": broker.call_tool(
+                    tenant_id=request_tenant,
+                    actor=request_actor,
+                    connection_id=connection_id,
+                    tool_name=tool_name,
+                    arguments=arguments or {},
+                )
+            }
         )
 
     @server.tool(description="Read one exact resource on one approved external MCP connection.")
     def external_mcp_resource_read(
         connection_id: Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)],
         resource_uri: Annotated[str, Field(min_length=1, max_length=2_048)],
-    ) -> Any:
+    ) -> dict[str, Any]:
         request_tenant, request_actor = identity(TOOL_SCOPES["external_mcp_resource_read"])
         return _tool_errors(
-            lambda: broker.read_resource(
-                tenant_id=request_tenant,
-                actor=request_actor,
-                connection_id=connection_id,
-                resource_uri=resource_uri,
-            )
+            lambda: {
+                "result": broker.read_resource(
+                    tenant_id=request_tenant,
+                    actor=request_actor,
+                    connection_id=connection_id,
+                    resource_uri=resource_uri,
+                )
+            }
         )
 
     return server
