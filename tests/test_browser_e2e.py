@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
+from uuid import uuid4
 
 from mcp import Client
 from websockets.sync.client import connect
@@ -29,6 +30,10 @@ def free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return int(listener.getsockname()[1])
+
+
+def disposable_tenant(label: str) -> str:
+    return f"{label}-{uuid4().hex}"
 
 
 def browser_path() -> str | None:
@@ -592,7 +597,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 **os.environ,
                 "FOLIO_DB_PATH": str(root / "folio.db"),
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                "FOLIO_TENANT_ID": "browser-connections",
+                "FOLIO_TENANT_ID": disposable_tenant("browser-connections"),
                 "FOLIO_ACTOR": "browser-admin",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": control_origin,
@@ -751,7 +756,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 **os.environ,
                 "FOLIO_DB_PATH": str(root / "folio.db"),
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                "FOLIO_TENANT_ID": "browser-test",
+                "FOLIO_TENANT_ID": disposable_tenant("browser-test"),
                 "FOLIO_CONTROL_ORIGIN": harness_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
                 "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
@@ -860,7 +865,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 **os.environ,
                 "FOLIO_DB_PATH": str(root / "folio.db"),
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                "FOLIO_TENANT_ID": "browser-graph",
+                "FOLIO_TENANT_ID": disposable_tenant("browser-graph"),
                 "FOLIO_ACTOR": "browser-persona",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
@@ -909,6 +914,13 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 self.assertIn("1 linked item", graph_card_text)
                 self.assertNotIn("edge_count", graph_card_text)
                 self.assertNotIn("graph_edges", graph_card_text)
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#main').getAttribute('tabindex')"),
+                    "-1",
+                )
+                chrome.evaluate("document.querySelector('.skip-link').focus()")
+                chrome.key("Enter", "Enter", 13)
+                chrome.wait("document.activeElement?.id === 'main'")
                 self.assertFalse(
                     chrome.evaluate("Boolean(document.querySelector('#recent-artifacts'))")
                 )
@@ -924,6 +936,13 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 )
                 chrome.wait("document.querySelector('#title')?.textContent === 'notes/decision.md'")
                 chrome.wait("Boolean(document.querySelector('#artifact-tree details'))")
+                chrome.evaluate("document.querySelector('#edit-entry').click()")
+                chrome.wait("!document.querySelector('#update').hidden")
+                chrome.wait("document.activeElement?.id === 'human-content'")
+                chrome.evaluate("document.querySelector('#human-cancel').click()")
+                chrome.wait(
+                    "document.querySelector('#update').hidden && document.activeElement?.id === 'edit-entry'"
+                )
                 self.assertIn(
                     "site",
                     chrome.evaluate("document.querySelector('#artifact-tree').textContent"),
@@ -985,10 +1004,14 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     site["artifact"]["id"],
                 )
                 self.assertIn(
-                    "Graph: notes/decision.md / site/index.html",
+                    "In this graph",
                     chrome.evaluate(
                         "document.querySelector('#workspace-search-results').innerText"
                     ),
+                )
+                self.assertIn(
+                    "Graph: notes/decision.md / site/index.html",
+                    chrome.evaluate("document.querySelector('#workspace-search-results').innerText"),
                 )
                 scoped_context = chrome.evaluate(
                     "[...document.querySelectorAll('#workspace-search-results .result-context')].map((node) => node.textContent)"
@@ -1002,9 +1025,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 )
                 self.assertNotIn(
                     "links",
-                    chrome.evaluate(
-                        "document.querySelector('#workspace-search-results').innerText"
-                    ),
+                    chrome.evaluate("document.querySelector('#workspace-search-results').innerText"),
                 )
                 workspace_search_text = chrome.evaluate(
                     "document.querySelector('#workspace-search-results').innerText"
@@ -1129,7 +1150,7 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 **os.environ,
                 "FOLIO_DB_PATH": str(root / "folio.db"),
                 "FOLIO_BLOB_ROOT": str(root / "blobs"),
-                "FOLIO_TENANT_ID": "browser-ui",
+                "FOLIO_TENANT_ID": disposable_tenant("browser-ui"),
                 "FOLIO_ACTOR": "browser-persona",
                 "FOLIO_CONTROL_ORIGIN": control_origin,
                 "FOLIO_RENDER_ORIGIN": render_origin,
@@ -1141,34 +1162,35 @@ class BrowserSandboxE2ETests(unittest.TestCase):
             bridge_exercised = False
             try:
                 wait_ready(control_origin, control)
+                body_marker = "library body marker"
                 target = create(
                     control_origin,
                     "decision.md",
-                    b"# Decision\n\n- browser target",
+                    f"# Decision\n\n- browser target\n\n{body_marker}".encode(),
                     "text/markdown",
                 )
                 duplicate_one = create(
                     control_origin,
                     "same-name.md",
-                    b"duplicate library marker one",
+                    f"duplicate library marker one\n{body_marker}".encode(),
                     "text/markdown",
                 )
                 duplicate_two = create(
                     control_origin,
                     "same-name.md",
-                    b"duplicate library marker two",
+                    f"duplicate library marker two\n{body_marker}".encode(),
                     "text/markdown",
                 )
                 javascript = create(
                     control_origin,
                     "browser.js",
-                    b"document.body.dataset.browserJavascript='ran'",
+                    f"document.body.dataset.browserJavascript='ran'; // {body_marker}".encode(),
                     "application/javascript",
                 )
                 stylesheet = create(
                     control_origin,
                     "browser.css",
-                    b"body { color: rgb(3, 4, 5); }",
+                    f"body {{ color: rgb(3, 4, 5); }} /* {body_marker} */".encode(),
                     "text/css",
                 )
                 source = b"""<!doctype html><body>browsermarker human-first<script>
@@ -1180,7 +1202,10 @@ addEventListener('message', (event) => {
 parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-lattice',tool:'artifact_search',arguments:{query:'browsermarker'}}, '*');
 </script></body>"""
                 typed_html = create(
-                    control_origin, "searchable.html", b"<h1>typed media</h1>", "text/html"
+                    control_origin,
+                    "searchable.html",
+                    f"<h1>typed media</h1><p>{body_marker}</p>".encode(),
+                    "text/html",
                 )
                 upload = root / "browser-note.html"
                 upload.write_bytes(source)
@@ -1200,8 +1225,123 @@ parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-
                     "[...document.querySelectorAll('#artifact-library button')].map((button) => button.textContent).filter((text) => text.startsWith('same-name.md'))"
                 )
                 self.assertEqual(len(duplicate_labels), 2)
-                self.assertTrue(all(" · " in label for label in duplicate_labels))
+                self.assertEqual(
+                    set(duplicate_labels),
+                    {"same-name.md · Copy 1 of 2", "same-name.md · Copy 2 of 2"},
+                )
+                self.assertEqual(
+                    set(
+                        chrome.evaluate(
+                            "[...document.querySelectorAll('#artifact-library button[data-artifact-id]')].filter((button) => button.textContent.startsWith('same-name.md')).map((button) => button.dataset.artifactId)"
+                        )
+                    ),
+                    {duplicate_one["artifact"]["id"], duplicate_two["artifact"]["id"]},
+                )
 
+                chrome.evaluate("document.querySelector('#find').open = true")
+                chrome.evaluate(f"""
+document.querySelector('#search-query').value = {json.dumps(body_marker)};
+document.querySelector('#search').requestSubmit();
+""")
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 6"
+                )
+                marker_result_ids = chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.artifactId)"
+                )
+                self.assertEqual(
+                    set(marker_result_ids),
+                    {
+                        target["artifact"]["id"],
+                        duplicate_one["artifact"]["id"],
+                        duplicate_two["artifact"]["id"],
+                        javascript["artifact"]["id"],
+                        stylesheet["artifact"]["id"],
+                        typed_html["artifact"]["id"],
+                    },
+                )
+                self.assertEqual(
+                    set(
+                        chrome.evaluate(
+                            "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.mediaType)"
+                        )
+                    ),
+                    {"text/markdown", "text/html", "application/javascript", "text/css"},
+                )
+                self.assertEqual(
+                    set(
+                        chrome.evaluate(
+                            "[...document.querySelectorAll('#results .result-group-heading h3')].map((heading) => heading.textContent)"
+                        )
+                    ),
+                    {"Markdown", "HTML", "JavaScript", "CSS"},
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#search-result-summary').textContent"),
+                    "6 results across 4 file types.",
+                )
+                self.assertNotIn(
+                    "art_",
+                    chrome.evaluate("document.querySelector('#results').innerText"),
+                )
+                chrome.evaluate(
+                    "document.querySelector('#search-type-filter').value = 'text/markdown'; "
+                    "document.querySelector('#search-type-filter').dispatchEvent(new Event('change', {bubbles:true}))"
+                )
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 3"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#search-result-summary').textContent"),
+                    "3 markdown results.",
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.mediaType)"
+                    ),
+                    ["text/markdown", "text/markdown", "text/markdown"],
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('#results .result-group-heading h3')].map((heading) => heading.textContent)"
+                    ),
+                    ["Markdown"],
+                )
+                chrome.evaluate(
+                    "document.querySelector('#search-type-filter').value = 'all'; "
+                    "document.querySelector('#search-type-filter').dispatchEvent(new Event('change', {bubbles:true}))"
+                )
+                chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')]"
+                    f".find((button) => button.dataset.artifactId === {json.dumps(target['artifact']['id'])}).click()"
+                )
+                chrome.wait(f"location.pathname === '/workspace/{target['artifact']['id']}'")
+                chrome.wait("document.querySelector('#title')?.textContent === 'decision.md'")
+                self.assertFalse(chrome.evaluate("document.querySelector('#reader').hidden"))
+                self.assertIn(
+                    "Decision",
+                    chrome.evaluate("document.querySelector('#readable-content').textContent"),
+                )
+                chrome.command("Page.navigate", {"url": control_origin})
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
+                chrome.evaluate("document.querySelector('#find').open = true")
+                chrome.evaluate(f"""
+document.querySelector('#search-query').value = {json.dumps(body_marker)};
+document.querySelector('#search').requestSubmit();
+""")
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 6"
+                )
+                chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')]"
+                    f".find((button) => button.dataset.artifactId === {json.dumps(typed_html['artifact']['id'])}).click()"
+                )
+                chrome.wait(f"location.pathname === '/workspace/{typed_html['artifact']['id']}'")
+                chrome.wait("document.querySelector('#title')?.textContent === 'searchable.html'")
+                self.assertFalse(chrome.evaluate("document.querySelector('#preview-card').hidden"))
+                self.assertTrue(chrome.evaluate("document.querySelector('#reader').hidden"))
+                chrome.command("Page.navigate", {"url": control_origin})
+                chrome.wait("document.querySelector('#status')?.textContent === 'Library ready.'")
                 chrome.evaluate("document.querySelector('#find').open = true")
                 chrome.evaluate("""
 window.__folioSearchCalls = [];
@@ -1274,7 +1414,22 @@ document.querySelector('#search').requestSubmit();
                     },
                 )
                 result_text = chrome.evaluate("document.querySelector('#results').innerText")
-                self.assertTrue(all(artifact_id in result_text for artifact_id in duplicate_ids))
+                result_labels = chrome.evaluate(
+                    "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.textContent)"
+                )
+                self.assertEqual(
+                    set(result_labels), {"same-name.md · Copy 1 of 2", "same-name.md · Copy 2 of 2"}
+                )
+                self.assertTrue(
+                    all(artifact_id not in result_text for artifact_id in duplicate_ids)
+                )
+                self.assertNotIn("links", result_text)
+                self.assertEqual(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('#results button[data-artifact-id]')].map((button) => button.dataset.graphPath)"
+                    ),
+                    ["", ""],
+                )
                 library_context = chrome.evaluate(
                     "[...document.querySelectorAll('#results .result-context')].map((node) => node.textContent)"
                 )
@@ -1325,12 +1480,12 @@ document.querySelector('#search').requestSubmit();
                     chrome.evaluate("document.querySelector('#results button').dataset.versionId"),
                     typed_html["artifact"]["current_version_id"],
                 )
-                self.assertNotIn(
-                    "links", chrome.evaluate("document.querySelector('#results').innerText")
-                )
                 self.assertIn(
                     "media_type",
                     chrome.evaluate("document.querySelector('#results button').dataset.matchKind"),
+                )
+                self.assertNotIn(
+                    "links", chrome.evaluate("document.querySelector('#results').innerText")
                 )
                 type_context = chrome.evaluate(
                     "[...document.querySelectorAll('#results .result-context')].map((node) => node.textContent)"
@@ -1589,6 +1744,10 @@ document.querySelector('#share').requestSubmit();
                     "Can view, Can edit",
                     chrome.evaluate("document.querySelector('#revoke-role').textContent"),
                 )
+                chrome.evaluate("document.querySelector('#revoke-cancel').click()")
+                chrome.wait("document.activeElement?.matches('#people-with-access .access-action')")
+                chrome.evaluate("document.querySelector('#people-with-access button').click()")
+                chrome.wait("document.querySelector('#revoke-access')?.open === true")
                 chrome.evaluate("document.querySelector('#revoke-confirm').click()")
                 chrome.wait(
                     "document.querySelector('#status').textContent.includes('Removed access for browser-reader')"

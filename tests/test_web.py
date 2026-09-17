@@ -353,6 +353,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"Choose a graph", page)
         self.assertIn(b"New graph or artifact", page)
         self.assertIn(b"Search documents and files", page)
+        self.assertIn(b'id="search-type-filter"', page)
+        self.assertIn(b"All file types", page)
         self.assertIn(b"GRAPH PICKER", page)
         for narration in (
             b"Search across the text you have indexed",
@@ -374,6 +376,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"graph_edges", script)
         self.assertNotIn(b"Graph: Graph path:", script)
         self.assertIn(b"dataset.artifactId", script)
+        self.assertIn(b"mediaTypeLabel", script)
+        self.assertIn(b"renderLibrarySearch", script)
+        self.assertIn(b"result-group-heading", script)
         self.assertIn(b"request count", script)
 
         status, _, css = await call(self.inspection, "GET", "/ui.css")
@@ -437,6 +442,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="human-viewer"',
             b'id="human-document"',
             b'id="human-preview"',
+            b'<main id="main" class="page" tabindex="-1"',
         ):
             self.assertIn(marker, human_page)
         for forbidden in (
@@ -471,6 +477,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="graph-context"',
             b'id="revoke-access"',
             b"Approved person identifier",
+            b'<main id="main" class="page" tabindex="-1"',
         ):
             self.assertIn(marker, workspace_page)
         self.assertNotIn(b'id="human-viewer"', workspace_page)
@@ -502,6 +509,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b"markdownNoteName",
             b"graph_traverse",
             b"renderArtifactTree",
+            b"stableArtifactLabel",
+            b"revokeTrigger",
             b"setWorkspaceMode",
             b"workspacePath",
             b"/render/",
