@@ -1,0 +1,248 @@
+name: Supply chain
+
+on:
+  pull_request:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish and sign the exact tagged release
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  pr-gates:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Install locked development environment
+        run: uv sync --locked --dev
+
+      - name: Verify lock and dependency policy
+        run: |
+          uv lock --check
+          python scripts/verify_dependency_policy.py
+
+      - name: Validate workflow YAML
+        run: >-
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.yml"].each {
+          |path| YAML.load_file(path); puts "yaml-ok #{path}" }'
+
+      - name: Run project checks
+        run: make check
+
+  release:
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish == true &&
+      startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      COSIGN_OIDC_ISSUER: https://token.actions.githubusercontent.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Verify locked release inputs
+        run: |
+          uv lock --check
+          python scripts/verify_dependency_policy.py
+
+      - name: Set release identity
+        id: identity
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_SHA: ${{ github.sha }}
+          GH_WORKFLOW_REF: ${{ github.workflow_ref }}
+          GH_SERVER_URL: ${{ github.server_url }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          repository="${GH_REPOSITORY,,}"
+          image_ref="ghcr.io/${repository}:sha-${GH_SHA}"
+          source_repository="${GH_SERVER_URL}/${repository}"
+          builder_id="${GH_SERVER_URL}/${repository}/.github/workflows/supply-chain.yml@${GH_WORKFLOW_REF##*@}"
+          {
+            printf 'SOURCE_SHA=%s\n' "$GH_SHA"
+            printf 'SOURCE_REPOSITORY=%s\n' "$source_repository"
+            printf 'WORKFLOW_REF=%s\n' "$GH_WORKFLOW_REF"
+            printf 'BUILDER_ID=%s\n' "$builder_id"
+            printf 'IMAGE_REF=%s\n' "$image_ref"
+          } >> "$GITHUB_ENV"
+          printf 'image_ref=%s\n' "$image_ref" >> "$GITHUB_OUTPUT"
+          printf 'source_repository=%s\n' "$source_repository" >> "$GITHUB_OUTPUT"
+          printf 'builder_id=%s\n' "$builder_id" >> "$GITHUB_OUTPUT"
+          mkdir -p evidence
+
+      - name: Verify release inputs before publishing
+        run: bash scripts/verify-release-inputs.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish digest-pinned image
+        id: image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.identity.outputs.image_ref }}
+          build-args: VCS_REF=${{ github.sha }}
+          sbom: true
+          provenance: mode=max
+
+      - name: Record immutable image digest
+        id: image-digest
+        env:
+          BUILD_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image_digest_ref="${IMAGE_REF}@${BUILD_DIGEST}"
+          printf 'IMAGE_DIGEST_REF=%s\n' "$image_digest_ref" >> "$GITHUB_ENV"
+          printf 'image_ref=%s\n' "$image_digest_ref" >> "$GITHUB_OUTPUT"
+          jq -n --arg image "$image_digest_ref" --arg source "$SOURCE_SHA" \
+            '{status: "pass", source_sha: $source, image_ref: $image,
+              promotion: "digest-pinned"}' > evidence/image-digest.json
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ steps.image-digest.outputs.image_ref }}
+          format: cyclonedx-json
+          output-file: evidence/sbom.cdx.json
+          upload-artifact: false
+          dependency-snapshot: false
+
+      - name: Record redacted license inventory
+        run: |
+          jq '{components: [(.components // [])[] |
+            {"bom-ref": ."bom-ref", name, version, licenses}]}' \
+            evidence/sbom.cdx.json > evidence/licenses.json
+
+      - name: Scan image for vulnerabilities
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ steps.image-digest.outputs.image_ref }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+          output-file: evidence/vulnerability.sarif
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@fb28c2b6339dcd94da6e4cbcbc5e888961f6f8c3 # v3.9.0
+
+      - name: Create source-bound provenance
+        run: |
+          set -euo pipefail
+          image_name="${IMAGE_DIGEST_REF%@*}"
+          image_digest="${IMAGE_DIGEST_REF##*@}"
+          jq -n \
+            --arg image "$image_name" \
+            --arg digest "${image_digest#sha256:}" \
+            --arg repository "$SOURCE_REPOSITORY" \
+            --arg source "$SOURCE_SHA" \
+            --arg workflow "$WORKFLOW_REF" \
+            --arg builder "$BUILDER_ID" \
+            --arg invocation "${GITHUB_RUN_ID}" \
+            '{_type: "https://in-toto.io/Statement/v1",
+              subject: [{name: $image, digest: {sha256: $digest}}],
+              predicateType: "https://slsa.dev/provenance/v1",
+              predicate: {buildDefinition: {
+                buildType: "https://slsa.dev/provenance/v1",
+                externalParameters: {
+                  source: {uri: $repository, digest: {sha1: $source}},
+                  workflow: {ref: $workflow}},
+                resolvedDependencies: [{uri: $repository,
+                  digest: {sha1: $source}}]},
+                runDetails: {builder: {id: $builder},
+                  metadata: {invocationId: $invocation}}}}' \
+            > evidence/provenance.json
+
+      - name: Verify inputs before signing
+        env:
+          REQUIRE_SIGNATURE: "0"
+          IMAGE_REF: ${{ steps.image-digest.outputs.image_ref }}
+          SBOM_PATH: evidence/sbom.cdx.json
+          LICENSE_PATH: evidence/licenses.json
+          VULNERABILITY_PATH: evidence/vulnerability.sarif
+          PROVENANCE_PATH: evidence/provenance.json
+        run: |
+          set -o pipefail
+          bash scripts/verify-supply-chain.sh | tee evidence/pre-sign-verification.json
+
+      - name: Sign image and attest provenance
+        env:
+          COSIGN_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/supply-chain.yml@${{ github.ref }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes --oidc-issuer "$COSIGN_OIDC_ISSUER" \
+            "$IMAGE_DIGEST_REF"
+          cosign attest --yes --oidc-issuer "$COSIGN_OIDC_ISSUER" \
+            --predicate evidence/provenance.json --type slsaprovenance \
+            "$IMAGE_DIGEST_REF"
+          cosign verify "$IMAGE_DIGEST_REF" \
+            --certificate-identity "$COSIGN_IDENTITY" \
+            --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+            > evidence/signature-verification.json
+          cosign verify-attestation "$IMAGE_DIGEST_REF" \
+            --type slsaprovenance \
+            --certificate-identity "$COSIGN_IDENTITY" \
+            --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+            > evidence/attestation-verification.json
+          jq -s -e '.[0].payload' evidence/attestation-verification.json \
+            | base64 --decode > evidence/provenance.statement.json
+
+      - name: Verify signed release inputs
+        env:
+          SBOM_PATH: evidence/sbom.cdx.json
+          LICENSE_PATH: evidence/licenses.json
+          VULNERABILITY_PATH: evidence/vulnerability.sarif
+          PROVENANCE_PATH: evidence/provenance.statement.json
+          SIGNATURE_PATH: evidence/signature-verification.json
+          ATTESTATION_PATH: evidence/attestation-verification.json
+        run: |
+          set -o pipefail
+          bash scripts/verify-supply-chain.sh | tee evidence/verification.json
+
+      - name: Upload redacted supply-chain evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: supply-chain-${{ github.run_id }}
+          path: evidence
+          retention-days: 90
+          if-no-files-found: ignore
