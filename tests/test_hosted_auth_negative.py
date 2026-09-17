@@ -250,8 +250,26 @@ def _public_error_key(response: HttpResponse, *secrets: str) -> tuple[int, str, 
         code = "mcp_tool_denied"
         public_status = 403
     else:
-        assert set(payload) <= {"error", "code", "request_id"}
-        error = payload.get("error", "")
+        assert set(payload) <= {
+            "error",
+            "message",
+            "code",
+            "request_id",
+            "retryable",
+            "reauthenticate",
+        }
+        if "message" in payload:
+            assert set(payload) == {
+                "message",
+                "code",
+                "request_id",
+                "retryable",
+                "reauthenticate",
+            }
+            assert isinstance(payload["request_id"], str) and payload["request_id"]
+            assert isinstance(payload["retryable"], bool)
+            assert isinstance(payload["reauthenticate"], bool)
+        error = payload.get("message", payload.get("error", ""))
         code = payload.get("code", "")
         public_status = response.status
     assert isinstance(error, str) and isinstance(code, str)
@@ -290,6 +308,13 @@ def _seed_private_graph(mcp: PublicMcpHttpClient, token_a: str) -> dict[str, Any
             token=token_a,
         )
     )
+    source_read = _result(
+        mcp.call_tool(
+            "artifact_read",
+            {"artifact_id": source["artifact"]["id"]},
+            token=token_a,
+        )
+    )
     target = _result(
         mcp.call_tool(
             "artifact_create",
@@ -316,7 +341,7 @@ def _seed_private_graph(mcp: PublicMcpHttpClient, token_a: str) -> dict[str, Any
     return {
         "artifact_id": source["artifact"]["id"],
         "version_id": source["version"]["id"],
-        "chunk_id": source["chunks"][0]["id"],
+        "chunk_id": source_read["chunks"][0]["id"],
         "target_id": target["artifact"]["id"],
     }
 

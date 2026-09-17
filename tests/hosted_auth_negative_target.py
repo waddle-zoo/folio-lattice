@@ -13,7 +13,6 @@ import socket
 import tempfile
 import threading
 import time
-import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,6 @@ import pytest
 import uvicorn
 from cryptography.hazmat.primitives import serialization
 from starlette.responses import JSONResponse
-from starlette.types import Receive, Scope, Send
 
 from folio_lattice.auth import (
     JwksClient,
@@ -189,44 +187,6 @@ class _FixtureMembershipStore(MembershipStore):
         return super().lookup(issuer, subject)
 
 
-class _PublicContractApp:
-    """Constrain production boundary errors to the negative-test public shape."""
-
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path") != "/mcp":
-            await self.app(scope, receive, send)
-            return
-        messages: list[dict[str, Any]] = []
-
-        async def capture(message: dict[str, Any]) -> None:
-            messages.append(message)
-
-        await self.app(scope, receive, capture)
-        start = next(item for item in messages if item["type"] == "http.response.start")
-        if start["status"] != 401:
-            for message in messages:
-                await send(message)
-            return
-        body = b"".join(
-            item.get("body", b"") for item in messages if item["type"] == "http.response.body"
-        )
-        request_id = uuid.uuid4().hex
-        try:
-            payload = json.loads(body)
-            if isinstance(payload, dict) and isinstance(payload.get("request_id"), str):
-                request_id = payload["request_id"]
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            pass
-        await JSONResponse(
-            {"error": "unauthorized", "code": "authentication_required", "request_id": request_id},
-            status_code=401,
-            headers={"Cache-Control": "no-store", "WWW-Authenticate": "Bearer"},
-        )(scope, receive, send)
-
-
 class _HttpServer:
     def __init__(self, app: Any) -> None:
         with socket.socket() as listener:
@@ -331,7 +291,7 @@ class HostedAuthNegativeTarget:
             control_origin="https://folio.test",
         )
         try:
-            self.server = _HttpServer(_PublicContractApp(inner))
+            self.server = _HttpServer(inner)
         except PermissionError as exc:
             self.directory.cleanup()
             pytest.skip(f"environment disallows loopback HTTP sockets: {exc}")
@@ -383,12 +343,25 @@ class HostedAuthNegativeTarget:
         payload.update(claims or {})
         token_headers: dict[str, object] = {"kid": self.provider.active_kid, "typ": "JWT"}
         token_headers.update(headers or {})
+        requested_algorithm = token_headers.get("alg", OIDC_ALGORITHM)
+        signing_headers = {**token_headers, "alg": OIDC_ALGORITHM}
         token = jwt.encode(
             payload,
             self.provider.keys[self.provider.active_kid],
             algorithm=OIDC_ALGORITHM,
-            headers=token_headers,
+            headers=signing_headers,
         )
+        if requested_algorithm != OIDC_ALGORITHM:
+            parts = token.split(".")
+            assert len(parts) == 3
+            parts[0] = jwt.utils.base64url_encode(
+                json.dumps(
+                    {**token_headers, "alg": requested_algorithm},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).decode()
+            token = ".".join(parts)
         if signature is None:
             return token
         parts = token.split(".")

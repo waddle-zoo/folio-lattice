@@ -28,6 +28,7 @@ hosted-e2e:
 	uv run python tests/hyperset_hosted_consumer.py
 
 hosted-auth-adversarial:
+	uv run pytest -q tests/adversarial/test_hosted_auth.py
 	FOLIO_HOSTED_AUTH_TEST_TARGET=tests.hosted_auth_negative_target:factory \
 	uv run pytest -q tests/test_hosted_auth_negative.py
 
