@@ -1029,7 +1029,7 @@ document.querySelector('#create').requestSubmit();
                     "Open full screen",
                     "People with access",
                     "Private",
-                    "Share",
+                    "Share access",
                 ):
                     self.assertIn(expected_name, artifact_names)
                 self.assertIn(
@@ -1078,12 +1078,28 @@ document.querySelector('#share').requestSubmit();
                     "Can view",
                     chrome.evaluate("document.querySelector('#people-with-access').textContent"),
                 )
+                chrome.evaluate(
+                    "document.querySelector('#share-role').value = 'write'; document.querySelector('#share').requestSubmit()"
+                )
+                chrome.wait(
+                    "document.querySelector('#people-with-access').textContent.includes('Can edit')"
+                )
                 chrome.evaluate("document.querySelector('#people-with-access button').click()")
+                chrome.wait("document.querySelector('#revoke-access')?.open === true")
+                self.assertIn(
+                    "Can view, Can edit",
+                    chrome.evaluate("document.querySelector('#revoke-role').textContent"),
+                )
+                chrome.evaluate("document.querySelector('#revoke-confirm').click()")
                 chrome.wait(
                     "document.querySelector('#status').textContent.includes('Removed access for browser-reader')"
                 )
                 chrome.wait(
                     "document.querySelector('#people-with-access').textContent.includes('No one else has access')"
+                )
+                self.assertIn(
+                    "Revoked access history",
+                    chrome.evaluate("document.querySelector('#access-history-panel').textContent"),
                 )
 
                 chrome.evaluate("""

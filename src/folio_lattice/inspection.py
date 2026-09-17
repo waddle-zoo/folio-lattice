@@ -1495,6 +1495,54 @@ body.workspace-route .graph-card .graph-node {
   min-height: 44px;
   border-radius: 6px;
 }
+/* Access administration: keep privacy, grant state, and destructive effects visible. */
+.access-card .card-heading,
+.connection-card .card-heading { margin-bottom: .65rem; }
+.access-summary { margin: 0 0 1rem; color: var(--muted); font-size: .8rem; line-height: 1.55; }
+.access-list { margin: .9rem 0 1rem; }
+.access-row { align-items: flex-start; padding: .8rem 0; }
+.access-person { display: grid; min-width: 0; gap: .2rem; }
+.access-person strong { overflow-wrap: anywhere; font-size: .86rem; }
+.access-meta { color: var(--muted); font-size: .74rem; }
+.access-badges { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .15rem; }
+.access-badge { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: .2rem .45rem; color: var(--muted); font-size: .68rem; font-weight: 800; }
+.access-badge.owner { border-color: var(--line-strong); color: var(--ink); }
+.access-revoked { opacity: .78; }
+.access-revoked .access-badge { border-color: #e2baba; background: #fff7f7; color: #8f4141; }
+.access-action { flex: 0 0 auto; min-height: 44px; border: 1px solid var(--line-strong); border-radius: 7px; padding: .55rem .7rem; background: var(--surface); color: var(--ink); font-size: .76rem; font-weight: 800; }
+.access-action:hover { border-color: #d28c8c; background: #fff7f7; color: #8f2323; }
+.access-history { margin: 1rem 0; border-top: 1px solid var(--line); padding-top: .85rem; }
+.access-history summary { cursor: pointer; color: var(--muted); font-size: .76rem; font-weight: 800; }
+.access-history-list { margin-top: .45rem; }
+.access-history-list .resource-item { display: grid; gap: .2rem; }
+.access-loading { color: var(--muted); font-size: .8rem; }
+.access-unavailable { border: 1px solid var(--line); border-radius: 7px; padding: .7rem .75rem; background: var(--canvas); color: var(--muted); font-size: .78rem; }
+.access-form-help { margin: -.25rem 0 0; color: var(--muted); font-size: .74rem; line-height: 1.5; }
+.revoke-dialog { width: min(430px, calc(100% - 2rem)); border: 1px solid var(--line); border-radius: 12px; padding: 1.25rem; background: var(--surface); color: var(--ink); box-shadow: 0 20px 56px rgb(24 30 22 / 18%); }
+.revoke-dialog::backdrop { background: rgb(19 23 18 / 24%); }
+.revoke-dialog h2 { margin-bottom: .55rem; }
+.revoke-dialog p { color: var(--muted); font-size: .84rem; line-height: 1.55; }
+.revoke-dialog strong { color: var(--ink); }
+.revoke-actions { display: flex; justify-content: flex-end; gap: .55rem; margin-top: 1rem; }
+.revoke-actions button { min-height: 44px; border-radius: 7px; padding: .58rem .8rem; font-weight: 800; }
+.revoke-actions .button-danger { border: 1px solid #c56a6a; background: #a83434; color: white; }
+.revoke-actions .button-danger:hover:not(:disabled) { background: #8f2323; }
+.connection-card { padding: 1.25rem; }
+.connection-copy { margin: 0 0 1rem; color: var(--muted); font-size: .8rem; line-height: 1.55; }
+.connection-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: start; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: .85rem 0; }
+.connection-name { display: grid; gap: .2rem; min-width: 0; }
+.connection-name strong { overflow-wrap: anywhere; font-size: .86rem; }
+.connection-meta { color: var(--muted); font-size: .74rem; }
+.connection-capabilities { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .65rem; }
+.connection-status { min-height: 2.3rem; margin: .75rem 0 0; border-radius: 7px; padding: .55rem .65rem; background: var(--canvas); color: var(--muted); font-size: .76rem; }
+.state-pill.state-blocked { background: #fff0f0; color: #8f2323; }
+@media (max-width: 640px) {
+  .connection-row { grid-template-columns: 1fr; }
+  .access-row { gap: .55rem; }
+  .access-action { width: 100%; }
+  .revoke-actions { flex-direction: column-reverse; }
+  .revoke-actions button { width: 100%; }
+}
 @media (max-width: 640px) {
   body.workspace-route .graph-card .graph-map { padding: 20px 16px; }
   body.workspace-route .graph-card .graph-links { grid-template-columns: 1fr; }
@@ -1517,6 +1565,8 @@ let activeRequests = 0;
 let workspaceWeb = false;
 let workspaceEditMode = false;
 let authRedirectStarted = false;
+let accessGrants = [];
+let pendingRevoke = null;
 
 function artifactPath(id) {
   const prefix = debugMode ? 'inspect' : workspaceMode ? 'workspace' : 'artifacts';
@@ -1565,6 +1615,7 @@ function hideProtectedView() {
   byId('results')?.replaceChildren();
   byId('recent-artifacts')?.replaceChildren();
   byId('artifact-tree')?.replaceChildren();
+  byId('access-history')?.replaceChildren();
   byId('preview')?.removeAttribute('src');
   byId('human-preview')?.removeAttribute('src');
 }
@@ -2068,6 +2119,158 @@ function showHumanRead(read) {
   } else if (markdown) documentBody.append(renderMarkdown(read.text));
   else documentBody.textContent = read.text ?? '';
 }
+function accessRole(action) {
+  return {read: 'Can view', write: 'Can edit', share: 'Can manage'}[action] || 'Access';
+}
+function setConnectionState(state, message) {
+  const pill = byId('connection-state');
+  if (pill) {
+    pill.textContent = state === 'blocked' ? 'Blocked' : state === 'connected' ? 'Connected' : 'Ready';
+    pill.classList.toggle('state-blocked', state === 'blocked');
+  }
+  const statusNode = byId('connection-admin-status');
+  if (statusNode) statusNode.textContent = message;
+}
+function appendAccessRow(target, person, actions, {owner = false, revoked = false} = {}) {
+  const li = document.createElement('li'); li.className = `resource-item access-row${revoked ? ' access-revoked' : ''}`;
+  const details = document.createElement('span'); details.className = 'access-person';
+  const name = document.createElement('strong'); name.textContent = person; details.append(name);
+  const badges = document.createElement('span'); badges.className = 'access-badges';
+  if (owner) {
+    const badge = document.createElement('span'); badge.className = 'access-badge owner'; badge.textContent = 'Owner'; badges.append(badge);
+  }
+  actions.forEach((action) => {
+    const badge = document.createElement('span'); badge.className = 'access-badge'; badge.textContent = accessRole(action); badges.append(badge);
+  });
+  details.append(badges); li.append(details);
+  return li;
+}
+function renderAccess(grants) {
+  accessGrants = Array.isArray(grants) ? grants : [];
+  const target = byId('people-with-access');
+  if (!target) return;
+  target.replaceChildren();
+  const active = accessGrants.filter((grant) => grant.status === 'active');
+  const owner = active.find((grant) => grant.reason === 'artifact owner');
+  const shared = new Map();
+  active.filter((grant) => grant.reason !== 'artifact owner').forEach((grant) => {
+    const key = `${grant.subject_type || 'actor'}:${grant.subject_id}`;
+    const row = shared.get(key) || {person: grant.subject_id, actions: [], grants: []};
+    if (!row.actions.includes(grant.action)) row.actions.push(grant.action);
+    row.grants.push(grant);
+    shared.set(key, row);
+  });
+  if (owner) target.append(appendAccessRow(target, owner.subject_id, ['share'], {owner: true}));
+  shared.forEach((row) => {
+    const item = appendAccessRow(target, row.person, row.actions);
+    const meta = document.createElement('span'); meta.className = 'access-meta';
+    meta.textContent = `Added ${formatDate(row.grants[0].created_at)} · No expiry set`;
+    item.querySelector('.access-person')?.append(meta);
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'access-action';
+    remove.textContent = 'Remove access'; remove.setAttribute('aria-label', `Remove access for ${row.person}`);
+    remove.addEventListener('click', () => openRevokeDialog(row.person, row.actions, row.grants));
+    item.append(remove); target.append(item);
+  });
+  if (!shared.size) {
+    const empty = document.createElement('li'); empty.className = 'muted';
+    empty.textContent = 'No one else has access.'; target.append(empty);
+  }
+  const privacy = shared.size ? 'Shared' : 'Private';
+  document.querySelectorAll('[data-privacy-status]').forEach((node) => { node.textContent = privacy; });
+  document.querySelectorAll('[data-privacy-copy]').forEach((node) => {
+    node.textContent = shared.size
+      ? 'Only the people listed here can open this artifact.'
+      : 'Only you and people you choose can open this artifact.';
+  });
+  const history = byId('access-history');
+  if (history) {
+    history.replaceChildren();
+    const revoked = accessGrants.filter((grant) => grant.status === 'revoked');
+    if (revoked.length) {
+      const listNode = document.createElement('ul'); listNode.className = 'access-history-list';
+      revoked.forEach((grant) => {
+        const item = appendAccessRow(listNode, grant.subject_id, [grant.action], {revoked: true});
+        const meta = document.createElement('span'); meta.className = 'access-meta';
+        meta.textContent = `Revoked ${formatDate(grant.revoked_at)}${grant.revocation_reason ? ` · ${grant.revocation_reason}` : ''}`;
+        item.querySelector('.access-person')?.append(meta); listNode.append(item);
+      });
+      history.append(listNode);
+    }
+    history.parentElement?.toggleAttribute('hidden', !revoked.length);
+  }
+  const form = byId('share'); if (form) form.hidden = false;
+}
+function renderAccessLoading() {
+  const target = byId('people-with-access');
+  if (target) target.innerHTML = '<li class="access-loading">Loading access…</li>';
+}
+function renderAccessUnavailable(message) {
+  const target = byId('people-with-access');
+  if (!target) return;
+  target.replaceChildren();
+  const item = document.createElement('li'); item.className = 'access-unavailable'; item.textContent = message;
+  target.append(item); byId('share')?.setAttribute('hidden', '');
+}
+async function loadAccess() {
+  if (!byId('people-with-access')) return false;
+  renderAccessLoading();
+  try {
+    const grants = await call('artifact_acl', {artifact_id: artifactId});
+    byId('sharing')?.removeAttribute('hidden');
+    renderAccess(grants); return true;
+  } catch (error) {
+    if (error.status === 403 || error.status === 404) {
+      if (debugMode) byId('sharing')?.setAttribute('hidden', '');
+      else renderAccessUnavailable('Access details are not available for this document.');
+      return false;
+    }
+    throw error;
+  }
+}
+function closeRevokeDialog() {
+  const dialog = byId('revoke-access');
+  if (!dialog) return;
+  if (typeof dialog.close === 'function' && dialog.open) dialog.close();
+  else dialog.removeAttribute('open');
+  pendingRevoke = null;
+}
+function openRevokeDialog(person, actions, grants) {
+  const dialog = byId('revoke-access');
+  if (!dialog) return;
+  pendingRevoke = {person, actions, grants};
+  byId('revoke-person').textContent = person;
+  byId('revoke-role').textContent = actions.map(accessRole).join(', ');
+  byId('revoke-artifact').textContent = byId('title')?.textContent || 'this artifact';
+  if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', '');
+  setTimeout(() => byId('revoke-cancel')?.focus(), 0);
+}
+byId('revoke-cancel')?.addEventListener('click', closeRevokeDialog);
+byId('revoke-access')?.addEventListener('cancel', closeRevokeDialog);
+byId('revoke-confirm')?.addEventListener('click', async () => {
+  if (!pendingRevoke) return;
+  const {person, grants} = pendingRevoke;
+  const button = byId('revoke-confirm');
+  button.disabled = true;
+  let revokedCount = 0;
+  try {
+    status(`Removing access for ${person}…`);
+    for (const grant of grants) {
+      await call('artifact_revoke', {artifact_id: artifactId, grant_id: grant.id,
+        reason: 'removed in access administration UI'});
+      revokedCount += 1;
+    }
+    closeRevokeDialog();
+    await loadAccess();
+    status(`Removed access for ${person}. They can no longer open this artifact.`);
+  } catch (error) {
+    closeRevokeDialog();
+    await loadAccess().catch(() => false);
+    if (revokedCount > 0) {
+      failure(`Access update incomplete for ${person}. Review the access list and try again.`);
+    } else handleFailure(error);
+  }
+  finally { button.disabled = false; }
+});
 async function togglePreviewFullscreen() {
   const panel = byId('preview-card');
   try {
@@ -2132,27 +2335,7 @@ async function loadArtifact(versionId = null) {
     renderGraphMap(graph, workspaceMode ? tree : undefined);
   }
   if (debugMode) {
-    try {
-      const grants = await call('artifact_acl', {artifact_id: artifactId});
-      byId('sharing').hidden = false;
-      list('people-with-access', grants.filter((grant) =>
-        grant.status === 'active' && grant.reason !== 'artifact owner'), (grant) => {
-        const li = document.createElement('li'); li.className = 'resource-item access-row';
-        const role = grant.action === 'read' ? 'Can view' : grant.action === 'write' ? 'Can edit' : 'Can manage';
-        const label = document.createElement('span'); label.textContent = `${grant.subject_id} — ${role}`;
-        const remove = button('Remove access', async () => {
-          try {
-            await call('artifact_revoke', {artifact_id: artifactId, grant_id: grant.id,
-              reason: 'removed in inspection UI'});
-            await loadArtifact(); status(`Removed access for ${grant.subject_id}.`);
-          } catch (error) { handleFailure(error); }
-        });
-        li.append(label, remove); return li;
-      }, 'No one else has access.');
-    } catch (error) {
-      if (error.status === 403 || error.status === 404) byId('sharing').hidden = true;
-      else throw error;
-    }
+    await loadAccess();
   }
   status(new URLSearchParams(location.search).has('created')
     ? `Created ${read.artifact.name}. Version 1 saved.`
@@ -2372,6 +2555,7 @@ byId('edit-entry')?.addEventListener('click', (event) => {
 byId('share-entry')?.addEventListener('click', (event) => {
   event.preventDefault();
   openWorkspacePanel('workspace-share', 'share-entry');
+  loadAccess().catch(handleFailure);
 });
 byId('new-note-entry')?.addEventListener('click', (event) => {
   event.preventDefault();
@@ -2460,11 +2644,17 @@ byId('share')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     const subject = byId('share-recipient').value.trim();
+    const action = byId('share-role').value;
+    const existing = accessGrants.find((grant) => grant.status === 'active'
+      && grant.subject_id === subject && grant.action === action);
     await call('artifact_share', {artifact_id: artifactId, subject_actor_id: subject,
-      action: byId('share-role').value, reason: 'shared in inspection UI'});
+      action, reason: 'shared in access administration UI'});
     byId('share-recipient').value = '';
-    closeWorkspacePanel('workspace-share');
-    await loadArtifact(); status(`Shared with ${subject}.`);
+    await loadAccess();
+    if (workspaceMode) closeWorkspacePanel('workspace-share');
+    status(existing
+      ? `${subject} already has ${accessRole(action).toLowerCase()} access.`
+      : `Shared with ${subject}: ${accessRole(action)}. They can now open this artifact.`);
   } catch (error) { handleFailure(error); }
 });
 addEventListener('message', async (event) => {
@@ -2481,6 +2671,7 @@ addEventListener('message', async (event) => {
       attachment: value.attachment, tool: value.tool, arguments: value.arguments}, '/api/bridge');
     source.postMessage({type: 'folio.mcp.response', id: value.id, ok: true, result: response.result}, '*');
     if (byId('bridge-status')) byId('bridge-status').textContent = `Allowed attached tool ${value.tool}.`;
+    setConnectionState('connected', `Last request allowed: ${value.tool}.`);
   } catch (error) {
     const message = error.status === 401
       ? (wasAuthenticated ? 'Your session expired. Sign in again.' : 'Sign-in required. Sign in to continue.')
@@ -2488,6 +2679,7 @@ addEventListener('message', async (event) => {
     if (error.status === 401) handleFailure(error);
     source.postMessage({type: 'folio.mcp.response', id: value.id, ok: false, error: message}, '*');
     if (byId('bridge-status')) byId('bridge-status').textContent = 'Attached request did not run.';
+    setConnectionState('blocked', 'The approved connection blocked this request.');
   }
 });
 
@@ -2635,16 +2827,30 @@ def ui_html(
         else ""
     )
     debug_access = (
-        '<section id="sharing" class="surface access-card" aria-labelledby="sharing-title">'
+        '<section id="sharing" class="surface access-card" aria-labelledby="sharing-title" hidden>'
         '<div class="card-heading"><div><p class="eyebrow">ACCESS</p><h2 id="sharing-title">'
-        'People with access</h2></div><span id="privacy-status" class="state-pill">Private</span></div>'
-        '<p class="privacy-line">Only people you add can open this artifact.</p>'
+        'People with access</h2></div><span id="privacy-status" data-privacy-status class="state-pill">Private</span></div>'
+        '<p class="access-summary" data-privacy-copy>Only you and people you choose can open this artifact.</p>'
         '<ul id="people-with-access" class="access-list"><li class="muted">Loading access…</li></ul>'
-        '<form id="share" class="link-form"><label for="share-recipient">Person identifier'
-        '<input id="share-recipient" required maxlength="255" placeholder="person-id"></label>'
-        '<label for="share-role">Access<select id="share-role"><option value="read">Can view</option>'
-        '<option value="write">Can edit</option></select></label><button type="submit">Share</button>'
+        '<details id="access-history-panel" class="access-history" hidden><summary>Revoked access history</summary><div id="access-history"></div></details>'
+        '<form id="share" class="link-form"><label for="share-recipient">Approved person identifier'
+        '<input id="share-recipient" required maxlength="255" placeholder="member-id"></label>'
+        '<p class="access-form-help">The service checks that this person is an active member of the current organization.</p>'
+        '<label for="share-role">Access level<select id="share-role"><option value="read">Can view</option>'
+        '<option value="write">Can edit</option></select></label><button type="submit">Share access</button>'
         "</form></section>"
+        if debug
+        else ""
+    )
+    debug_connection = (
+        '<section id="connection-admin" class="surface connection-card" aria-labelledby="connection-title">'
+        '<div class="card-heading"><div><p class="eyebrow">CONNECTION</p><h2 id="connection-title">Approved connection</h2></div>'
+        '<span id="connection-state" class="state-pill">Ready</span></div>'
+        '<p class="connection-copy">Sandboxed previews can use only this first-party connection. Credentials stay outside the browser.</p>'
+        '<div class="connection-row"><div class="connection-name"><strong>Folio Lattice</strong><span class="connection-meta">First-party MCP · read-only bridge</span>'
+        '<span class="connection-capabilities"><span class="capability">Read</span><span class="capability">Indexed search</span><span class="capability">Outgoing traversal</span></span></div>'
+        '<span class="access-badge">Approved</span></div>'
+        '<p id="connection-admin-status" class="connection-status" role="status" aria-live="polite">No preview request yet. The connection is ready.</p></section>'
         if debug
         else ""
     )
@@ -2703,12 +2909,24 @@ def ui_html(
         '<dialog id="workspace-share" class="surface access-card" aria-labelledby="workspace-share-title">'
         '<div class="card-heading"><div><p class="eyebrow">SHARE</p><h2 id="workspace-share-title">Share this artifact</h2></div>'
         '<button id="close-share" class="panel-close" type="button" aria-label="Close sharing">×</button></div>'
-        '<p class="privacy-line"><span class="state-pill">Private by default</span> Only people you add can open this artifact.</p>'
-        '<form id="share" class="link-form"><label for="share-recipient">Person identifier'
-        '<input id="share-recipient" required maxlength="255" placeholder="person-id"></label>'
-        '<label for="share-role">Access<select id="share-role"><option value="read">Can view</option>'
-        '<option value="write">Can edit</option></select></label><button type="submit">Share</button></form></dialog>'
+        '<p class="privacy-line"><span data-privacy-status class="state-pill">Private</span> <span data-privacy-copy>Only you and people you choose can open this artifact.</span></p>'
+        '<ul id="people-with-access" class="access-list"><li class="access-loading">Loading access…</li></ul>'
+        '<details id="access-history-panel" class="access-history" hidden><summary>Revoked access history</summary><div id="access-history"></div></details>'
+        '<form id="share" class="link-form"><label for="share-recipient">Approved person identifier'
+        '<input id="share-recipient" required maxlength="255" placeholder="member-id"></label>'
+        '<p class="access-form-help">Only an active member of this organization can receive access.</p>'
+        '<label for="share-role">Access level<select id="share-role"><option value="read">Can view</option>'
+        '<option value="write">Can edit</option></select></label><button type="submit">Share access</button></form></dialog>'
         if workspace
+        else ""
+    )
+    revoke_dialog = (
+        '<dialog id="revoke-access" class="revoke-dialog" aria-labelledby="revoke-title">'
+        '<h2 id="revoke-title">Remove access?</h2>'
+        '<p><strong id="revoke-person"></strong> will lose <span id="revoke-role"></span> access to <strong id="revoke-artifact"></strong> now. Copies they already downloaded cannot be recalled.</p>'
+        '<div class="revoke-actions"><button id="revoke-cancel" class="button-secondary" type="button">Keep access</button>'
+        '<button id="revoke-confirm" class="button-danger" type="button">Remove access</button></div></dialog>'
+        if debug or workspace
         else ""
     )
     debug_create_fields = (
@@ -2845,9 +3063,11 @@ def ui_html(
       {debug_editor}
       {human_editor}
       {human_share}
+      {revoke_dialog}
       {debug_details}
     </div><aside class="secondary-column">
       {debug_access}
+      {debug_connection}
       {debug_graph}
       {human_graph}
     </aside></div>

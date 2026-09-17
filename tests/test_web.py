@@ -213,6 +213,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b"Unauthenticated local development",
             b'id="artifact-id"',
             b'id="sharing"',
+            b'id="connection-admin"',
+            b'id="revoke-access"',
             b'id="bridge-status"',
             b'id="fullscreen-preview"',
         ):
@@ -300,6 +302,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="artifact-details"',
             b'id="graph"',
             b'id="sharing"',
+            b'id="connection-admin"',
+            b"Approved connection",
+            b'id="revoke-access"',
             b'id="bridge-status"',
             b'id="fullscreen-preview"',
             b'id="content"',
@@ -366,6 +371,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b'id="new-note-entry"',
             b'id="human-edit"',
             b'id="graph-context"',
+            b'id="revoke-access"',
+            b"Approved person identifier",
         ):
             self.assertIn(marker, workspace_page)
         self.assertNotIn(b'id="human-viewer"', workspace_page)
@@ -390,6 +397,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             b"artifact_share",
             b"artifact_revoke",
             b"artifact_acl",
+            b"renderAccess",
+            b"Access update incomplete",
             b"graph_link",
             b"graph note create",
             b"markdownNoteName",
