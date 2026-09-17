@@ -1784,6 +1784,10 @@ class FolioLattice:
         tool_name: str | None = None,
         resource_uri: str | None = None,
     ) -> None:
+        # Resource URIs are caller-controlled and may carry query credentials
+        # or content identifiers. The connection and action are sufficient for
+        # the decision audit; never persist the raw URI.
+        resource_uri = None
         db.execute(
             """
             INSERT INTO external_mcp_audit(

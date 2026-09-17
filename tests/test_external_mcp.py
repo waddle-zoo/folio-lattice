@@ -220,6 +220,18 @@ class ExternalMcpServiceTests(unittest.TestCase):
         self.assertTrue(audit)
         self.assertNotIn(SECRET_REF, repr([tuple(row) for row in audit]))
 
+        with self.assertRaisesRegex(FolioError, "resource is not approved"):
+            self.service.authorize_external_resource(
+                "acme", record["id"], f"{RESOURCE}?token=should-not-persist", actor="admin"
+            )
+        with self.service.connect() as db:
+            latest = db.execute(
+                "SELECT resource_uri FROM external_mcp_audit WHERE connection_id = ? "
+                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                (record["id"],),
+            ).fetchone()[0]
+        self.assertIsNone(latest)
+
     def test_exact_allowlists_fail_closed_and_revoke_is_immediate(self) -> None:
         record = self.register()
         connection_id = record["id"]
