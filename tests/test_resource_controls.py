@@ -179,7 +179,10 @@ class HumanGatewayResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 413)
         self.assertEqual(headers["retry-after"], "0")
         self.assertEqual(headers["cache-control"], "no-store")
-        self.assertTrue(json.loads(response)["request_id"])
+        error = json.loads(response)
+        self.assertEqual(error["code"], "request_too_large")
+        self.assertEqual(error["error"], "request body too large")
+        self.assertTrue(error["request_id"])
         self.assertEqual(caller.calls, 0)
 
     async def test_rate_is_tenant_isolated_and_retryable(self) -> None:

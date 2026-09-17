@@ -3536,15 +3536,16 @@ class InspectionApp:
         except OverflowError:
             if bridge:
                 self.bridge.audit_rejection("oversized_body")
-            await JSONResponse(
-                {
-                    "code": "request_too_large",
-                    "error": "request body too large",
-                    "request_id": request_id,
-                },
+            await self._api_error(
+                scope,
+                receive,
+                send,
                 status_code=413,
-                headers={**CONTROL_HEADERS, "Retry-After": "0"},
-            )(scope, receive, send)
+                code="request_too_large",
+                message="request body too large",
+                request_id=request_id,
+                retry_after=0,
+            )
         except _ArgumentLimitExceeded:
             await self._api_error(
                 scope,

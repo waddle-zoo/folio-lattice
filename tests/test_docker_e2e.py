@@ -65,11 +65,33 @@ def wait_ready(base_url: str) -> dict[str, Any]:
     raise RuntimeError("Folio Docker service did not become ready")
 
 
+def assert_oversized_human_gateway_recovers(base_url: str) -> None:
+    request = Request(
+        f"{base_url}/api/mcp",
+        data=b"x" * (13 * 1024 * 1024 + 1),
+        headers={"Content-Type": "application/json", "Origin": base_url},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=10):
+            raise AssertionError("human gateway accepted oversized request")
+    except HTTPError as error:
+        assert error.code == 413
+        assert error.headers["Retry-After"] == "0"
+        assert error.headers["Cache-Control"] == "no-store"
+        response = json.loads(error.read())
+    assert response["code"] == "request_too_large"
+    assert response["error"] == "request body too large"
+    assert response["request_id"]
+    assert wait_ready(base_url)["ready"] is True
+
+
 def main() -> None:
     base_url = os.environ.get("FOLIO_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
     render_url = os.environ.get("FOLIO_RENDER_URL", "http://127.0.0.1:8001").rstrip("/")
     readiness = wait_ready(base_url)
     renderer_readiness = wait_ready(render_url)
+    assert_oversized_human_gateway_recovers(base_url)
     assert readiness["dependencies"]["database"]["ready"] is True
     assert readiness["dependencies"]["blob"]["ready"] is True
     assert readiness["dependencies"]["migration"]["ready"] is True
