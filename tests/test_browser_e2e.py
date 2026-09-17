@@ -802,6 +802,25 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                     ),
                 )
                 chrome.evaluate(
+                    "document.querySelector('#workspace-search-query').value = 'site/index.html'; "
+                    "document.querySelector('#workspace-search').requestSubmit()"
+                )
+                chrome.wait(
+                    "document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]').length === 1"
+                )
+                self.assertEqual(
+                    chrome.evaluate(
+                        "document.querySelector('#workspace-search-results-list button').dataset.artifactId"
+                    ),
+                    site["artifact"]["id"],
+                )
+                self.assertIn(
+                    "In this graph",
+                    chrome.evaluate(
+                        "document.querySelector('#workspace-search-results').innerText"
+                    ),
+                )
+                chrome.evaluate(
                     "[...document.querySelectorAll('#workspace-search-results-list button[data-artifact-id]')]"
                     f".find((button) => button.dataset.artifactId === {json.dumps(site['artifact']['id'])}).click()"
                 )
@@ -962,6 +981,9 @@ addEventListener('message', (event) => {
 });
 parent.postMessage({type:'folio.mcp.request',id:'bridgeAllow',attachment:'folio-lattice',tool:'artifact_search',arguments:{query:'browsermarker'}}, '*');
 </script></body>"""
+                typed_html = create(
+                    control_origin, "searchable.html", b"<h1>typed media</h1>", "text/html"
+                )
                 upload = root / "browser-note.html"
                 upload.write_bytes(source)
                 renderer = start_server(
@@ -1012,13 +1034,14 @@ window.__folioSearchCalls = [];
 document.querySelector('#search-query').value = 'same-name.md';
 document.querySelector('#search').requestSubmit();
 """)
-                chrome.wait("window.__folioSearchCalls.length === 2")
+                chrome.wait("window.__folioSearchCalls.length === 3")
                 self.assertEqual(
-                    chrome.evaluate("window.__folioSearchCalls.map((call) => call.tool)"),
-                    ["artifact_search", "artifact_list"],
+                    chrome.evaluate("window.__folioSearchCalls[0].tool"), "artifact_search"
                 )
                 self.assertEqual(
-                    chrome.evaluate("window.__folioSearchCalls[1].arguments.name"),
+                    chrome.evaluate(
+                        "window.__folioSearchCalls.find((call) => call.arguments.name)?.arguments.name"
+                    ),
                     "same-name.md",
                 )
                 chrome.wait(
@@ -1034,6 +1057,26 @@ document.querySelector('#search').requestSubmit();
                 )
                 result_text = chrome.evaluate("document.querySelector('#results').innerText")
                 self.assertTrue(all(artifact_id in result_text for artifact_id in duplicate_ids))
+                chrome.evaluate("""
+window.__folioSearchCalls = [];
+document.querySelector('#search-query').value = 'text/html';
+document.querySelector('#search').requestSubmit();
+""")
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 1"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#results button').dataset.artifactId"),
+                    typed_html["artifact"]["id"],
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#results button').dataset.mediaType"),
+                    "text/html",
+                )
+                self.assertIn(
+                    "media_type",
+                    chrome.evaluate("document.querySelector('#results button').dataset.matchKind"),
+                )
                 chrome.evaluate(
                     "[...document.querySelectorAll('#results button[data-artifact-id]')]"
                     f".find((button) => button.dataset.artifactId === {json.dumps(duplicate_two['artifact']['id'])}).click()"

@@ -223,7 +223,13 @@ h3 { margin-bottom: .3rem; font-size: .94rem; }
 .results-wrap { margin-top: 1.15rem; }
 .results-label { margin-bottom: .5rem; color: var(--muted); font-size: .77rem; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; }
 .results-list { border-top: 1px solid var(--line); }
-.result-item { display: flex; align-items: baseline; gap: .55rem; border-bottom: 1px solid var(--line); padding: .75rem .2rem; color: var(--muted); font-size: .84rem; }
+.result-item { display: grid; gap: .25rem; border-bottom: 1px solid var(--line); padding: .75rem .2rem; color: var(--muted); font-size: .84rem; }
+.result-heading { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
+.result-meta { display: flex; gap: .45rem; flex-wrap: wrap; color: var(--muted); font-size: .72rem; }
+.result-meta span { overflow-wrap: anywhere; }
+.result-match { color: var(--blue); font-weight: 800; }
+.result-context { color: var(--soft); }
+.result-snippet { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.45; }
 .inline-action { border: 0; padding: .1rem 0; background: transparent; color: var(--blue); font-weight: 700; text-align: left; }
 .inline-action:hover { color: var(--blue-dark); text-decoration: underline; }
 .workspace { margin-top: 1.8rem; }
@@ -1594,6 +1600,7 @@ let wasAuthenticated = document.body.dataset.authState === 'authenticated';
 let activeRequests = 0;
 let workspaceWeb = false;
 let workspaceEditMode = false;
+let workspaceComponent = [];
 let authRedirectStarted = false;
 let accessGrants = [];
 let pendingRevoke = null;
@@ -1646,6 +1653,7 @@ function hideProtectedView() {
   byId('workspace-search-results-list')?.replaceChildren();
   byId('recent-artifacts')?.replaceChildren();
   byId('artifact-tree')?.replaceChildren();
+  workspaceComponent = [];
   byId('access-history')?.replaceChildren();
   byId('preview')?.removeAttribute('src');
   byId('human-preview')?.removeAttribute('src');
@@ -2361,6 +2369,7 @@ async function loadArtifact(versionId = null) {
   ]);
   byId('workspace').hidden = false; showRead(read);
   if (workspaceMode) {
+    workspaceComponent = tree;
     renderArtifactTree(tree);
     renderGraphMap(graph, tree);
     setWorkspaceMode(new URLSearchParams(location.search).get('view') === 'graph' ? 'graph' : 'read', false);
@@ -2410,7 +2419,9 @@ async function loadLibrary() {
         action.textContent = 'Open site ↗'; li.append(open, action);
       } else li.append(open);
       const meta = document.createElement('span'); meta.className = 'library-meta';
-      meta.textContent = `Updated ${formatDate(artifact.updated_at)}`;
+      const type = artifact.media_type || 'unknown type';
+      const path = artifact.path || artifact.name || 'library';
+      meta.textContent = `${type} · ${path} · Updated ${formatDate(artifact.updated_at)}`;
       li.append(meta); return li;
     };
     const renderGraphCard = (artifact) => {
@@ -2533,24 +2544,117 @@ byId('create')?.addEventListener('submit', async (event) => {
     location.assign(`${createdPath}?created=1`);
   } catch (error) { handleFailure(error); }
 });
+function resultKindLabel(kind) {
+  return {
+    body: 'Body match', literal: 'Literal match', name: 'Filename match',
+    media_type: 'Media type match', metadata: 'Metadata match',
+  }[kind] || kind;
+}
+function metadataMatch(artifact, matchKind) {
+  return {
+    artifact_id: artifact.id,
+    artifact_name: artifact.name,
+    media_type: artifact.media_type,
+    version_id: artifact.version_id || '',
+    match_kind: matchKind,
+    snippet: matchKind === 'name'
+      ? `Filename match: ${artifact.name}`
+      : `Media type match: ${artifact.media_type}`,
+    graph_path: workspaceMode ? `In this graph / ${artifact.name}` : artifact.name,
+  };
+}
+async function exactMetadataResults(query) {
+  const [names, mediaTypes] = await Promise.all([
+    call('artifact_list', {name: query, limit: 20}),
+    call('artifact_list', {media_type: query, limit: 20}),
+  ]);
+  const componentIds = workspaceMode ? new Set(workspaceComponent.map((item) => item.id)) : null;
+  return [
+    ...names.filter((artifact) => !componentIds || componentIds.has(artifact.id))
+      .map((artifact) => metadataMatch(artifact, 'name')),
+    ...mediaTypes.filter((artifact) => !componentIds || componentIds.has(artifact.id))
+      .map((artifact) => metadataMatch(artifact, 'media_type')),
+  ];
+}
+function searchResultShape(result) {
+  const graph = result.graph_context || result.graph || result.graph_root || '';
+  const graphName = typeof graph === 'string' ? graph
+    : graph?.name || graph?.artifact_name || graph?.id
+      || (graph?.root_artifact_id
+        ? `Graph ${graph.root_artifact_id}${graph.edge_count == null ? '' : ` · ${graph.edge_count} links`}`
+        : '');
+  const path = result.path || result.graph_path || result.artifact_path || (typeof graph === 'object' ? graph.path || '' : '');
+  const kinds = Array.isArray(result.match_kinds)
+    ? result.match_kinds
+    : result.match_kind ? [result.match_kind] : [];
+  return {
+    ...result,
+    artifact_id: result.artifact_id || result.id || '',
+    artifact_name: result.artifact_name || result.name || 'Open artifact',
+    media_type: result.media_type || result.version_media_type || '',
+    version_id: result.version_id || '',
+    match_kinds: kinds.filter(Boolean).map((kind) => String(kind)),
+    snippet: result.snippet || result.content || '',
+    path: String(path || result.artifact_name || result.name || ''),
+    graph_context: String(graphName || (workspaceMode ? 'In this graph' : '')),
+  };
+}
+function mergeSearchResults(results) {
+  const merged = new Map();
+  results.map(searchResultShape).forEach((result) => {
+    if (!result.artifact_id) return;
+    const existing = merged.get(result.artifact_id);
+    if (!existing) { merged.set(result.artifact_id, result); return; }
+    existing.match_kinds = [...new Set([...existing.match_kinds, ...result.match_kinds])];
+    if (!existing.version_id && result.version_id) existing.version_id = result.version_id;
+    if (!existing.media_type && result.media_type) existing.media_type = result.media_type;
+    if (!existing.path && result.path) existing.path = result.path;
+    if (!existing.graph_context && result.graph_context) existing.graph_context = result.graph_context;
+    if (!existing.snippet && result.snippet) existing.snippet = result.snippet;
+  });
+  return [...merged.values()];
+}
 function renderResults(target, results, names) {
-  list(target, results, (result) => {
+  list(target, results, (rawResult) => {
+    const result = searchResultShape(rawResult);
     const li = document.createElement('li'); li.className = 'result-item';
-    const excerpt = result.snippet || result.content || result.media_type || '';
+    const heading = document.createElement('div'); heading.className = 'result-heading';
     const duplicateName = result.artifact_name && names.get(result.artifact_name) > 1;
     const resultLabel = debugMode && result.artifact_name
       ? `${result.artifact_id} — ${result.artifact_name}`
       : duplicateName
         ? `${result.artifact_name} — ${result.artifact_id}`
-        : result.artifact_name || 'Open artifact';
+        : result.artifact_name;
     const resultButton = button(resultLabel, () => location.assign(
       workspaceMode ? workspacePath(result.artifact_id) : artifactPath(result.artifact_id)
     ));
     resultButton.dataset.artifactId = result.artifact_id;
-    li.append(resultButton);
-    const span = document.createElement('span'); span.append(document.createTextNode(' — '));
-    appendInlineMarkdown(span, excerpt.slice(0, 240));
-    li.append(span); return li;
+    resultButton.dataset.versionId = result.version_id;
+    resultButton.dataset.mediaType = result.media_type;
+    resultButton.dataset.matchKind = result.match_kinds.join(',');
+    resultButton.dataset.path = result.path;
+    resultButton.dataset.graphContext = result.graph_context;
+    heading.append(resultButton);
+    const meta = document.createElement('div'); meta.className = 'result-meta';
+    if (result.media_type) {
+      const type = document.createElement('span'); type.textContent = result.media_type; meta.append(type);
+    }
+    if (result.match_kinds.length) {
+      const match = document.createElement('span'); match.className = 'result-match';
+      match.textContent = result.match_kinds.map(resultKindLabel).join(' + '); meta.append(match);
+    }
+    const context = [result.path, result.graph_context ? `Graph: ${result.graph_context}` : '']
+      .filter(Boolean).join(' · ');
+    if (context) {
+      const location = document.createElement('span'); location.className = 'result-context';
+      location.textContent = context; meta.append(location);
+    }
+    heading.append(meta); li.append(heading);
+    if (result.snippet) {
+      const excerpt = document.createElement('p'); excerpt.className = 'result-snippet';
+      appendInlineMarkdown(excerpt, String(result.snippet).slice(0, 240)); li.append(excerpt);
+    }
+    return li;
   }, 'No results.');
 }
 async function discover(tool, field, inputId, resultsTarget) {
@@ -2562,21 +2666,17 @@ async function discover(tool, field, inputId, resultsTarget) {
       status('');
       return;
     }
-    status(tool === 'artifact_search' ? 'Searching indexed content…' : 'Running literal grep…');
+    status(tool === 'artifact_search' ? 'Searching names, types, and content…' : 'Running literal grep…');
     const args = {[field]: query, limit: 20};
     if (workspaceMode && tool === 'artifact_search') args.graph_root_artifact_id = artifactId;
     let rawResults = await call(tool, args);
-    if (!workspaceMode && !debugMode && tool === 'artifact_search') {
-      const exactNames = await call('artifact_list', {name: query, limit: 20});
-      rawResults = rawResults.concat(exactNames.map((artifact) => ({
-        artifact_id: artifact.id, artifact_name: artifact.name, media_type: artifact.media_type,
-      })));
+    if (!debugMode && tool === 'artifact_search') {
+      // Keep name/type discovery available while older servers roll forward to
+      // unified artifact_search results. Stable IDs are merged below so a
+      // metadata hit and a body hit render as one artifact with both kinds.
+      rawResults = (await exactMetadataResults(query)).concat(rawResults);
     }
-    const seenArtifacts = new Set();
-    const results = rawResults.filter((result) => {
-      if (!result.artifact_id || seenArtifacts.has(result.artifact_id)) return false;
-      seenArtifacts.add(result.artifact_id); return true;
-    });
+    const results = mergeSearchResults(rawResults);
     const names = new Map();
     results.forEach((result) => {
       if (result.artifact_name) {
@@ -3032,7 +3132,7 @@ def ui_html(
             '<a id="edit-entry" href="#update" aria-expanded="false" aria-controls="update">Edit</a></div>'
             '<a id="standalone-link" class="workspace-option" href="#" target="_blank" rel="noreferrer" hidden>Open site ↗</a>'
             '<form id="workspace-search" class="workspace-search" role="search"><label class="sr-only" for="workspace-search-query">Search this graph</label>'
-            '<input id="workspace-search-query" type="search" maxlength="500" placeholder="Search graph"><button type="submit" aria-label="Search graph">⌕</button></form>'
+            '<input id="workspace-search-query" type="search" maxlength="500" placeholder="Search name, type, or content"><button type="submit" aria-label="Search this graph by name, type, or content">⌕</button></form>'
             if workspace
             else '<a href="#reader">Read</a><a href="#preview-card">Preview</a><a href="#graph-context">Graph</a>'
         )
@@ -3068,7 +3168,7 @@ def ui_html(
         '<label for="create-text">Or paste content<textarea id="create-text" placeholder="Start writing…"></textarea></label>'
         f'{debug_create_fields}<button type="submit">Create artifact</button></form></details>'
         '<details id="find" class="surface create-card"><summary><span>Search library</span></summary><div class="stacked-form"><div class="search-grid">'
-        '<form id="search" class="search-form" role="search" aria-label="Search library"><label for="search-query">Search documents and files<input id="search-query" type="search" required maxlength="500" placeholder="Phrase, keyword, or exact filename"></label><button type="submit">Search</button></form>'
+        '<form id="search" class="search-form" role="search" aria-label="Search library"><label for="search-query">Search documents and files by name, type, or content<input id="search-query" type="search" required maxlength="500" placeholder="Name, media type, body text, or filename"></label><button type="submit">Search</button></form>'
         + (
             '<form id="grep" class="search-form"><label for="grep-pattern">Exact text<input id="grep-pattern" required maxlength="500" placeholder="Exact text"></label><button type="submit">Find exact text</button></form>'
             if debug
