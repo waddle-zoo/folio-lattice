@@ -33,6 +33,8 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--output", required=True)
     create.add_argument("--db")
     create.add_argument("--blobs")
+    create.add_argument("--backup-key-ref", required=True)
+    create.add_argument("--recovery-key-ref", required=True)
     verify = backup_subcommands.add_parser("verify")
     verify.add_argument("--input", required=True)
     verify.add_argument("--key-id")
@@ -69,6 +71,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _path(args.db, "FOLIO_DB_PATH", ".data/folio.db"),
                 _path(args.blobs, "FOLIO_BLOB_ROOT", ".data/blobs"),
                 args.output,
+                backup_key_ref=args.backup_key_ref,
+                recovery_key_ref=args.recovery_key_ref,
             )
         elif args.command == "backup" and args.backup_command == "verify":
             result = verify_backup(
