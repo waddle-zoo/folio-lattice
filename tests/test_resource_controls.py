@@ -172,10 +172,13 @@ class HumanGatewayResourceTests(unittest.IsolatedAsyncioTestCase):
             max_request_bytes=100,
             rate_limits={"tenant": 100, "actor": 100, "ip": 100},
         )
-        status, headers, response = await invoke(
-            app,
-            "/api/mcp",
-            body=b"x" * 101,
+        status, headers, response = await asyncio.wait_for(
+            invoke(
+                app,
+                "/api/mcp",
+                body=b"x" * 101,
+            ),
+            timeout=1,
         )
         self.assertEqual(status, 413)
         self.assertEqual(headers["retry-after"], "0")
@@ -185,6 +188,8 @@ class HumanGatewayResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error["error"], "request body too large")
         self.assertTrue(error["request_id"])
         self.assertEqual(caller.calls, 0)
+        self.assertEqual(app._concurrency_limiter._total, 0)
+        self.assertEqual(app._concurrency_limiter._active, {})
 
     async def test_rate_is_tenant_isolated_and_retryable(self) -> None:
         caller_a = CountingCaller({"ok": "a"})
