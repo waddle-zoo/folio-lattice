@@ -1,0 +1,91 @@
+{
+  "gate": "fl-urj.22",
+  "reviewed_at": "2026-09-19T22:11:31Z",
+  "protected_head": "070d5de9dcfe8343b3e4e5aeede16cd140708108",
+  "parent": "2630dfc5c77a4fe294b2446499de4801356e9736",
+  "runtime_probe": {
+    "command": "uv run python docs/qa/fl-urj.22_audit_runtime_probe.py",
+    "probe_id": "fl22-9ccc00024de2",
+    "source_sha": "070d5de9dcfe8343b3e4e5aeede16cd140708108",
+    "script_sha256": "3b3f408a1594ec7395ea9ac7294de522ce4d81f36980b01c77a84ef51711b4a4",
+    "transport": "real TCP local-mode subprocess",
+    "cleanup": true,
+    "migration_ledger": {
+      "ready": true,
+      "versions": [1, 2, 3, 4, 5, 6, 7],
+      "versions_exact": true,
+      "latest_name": "audit_trace_context",
+      "checksums_64_hex": true
+    },
+    "audit": {
+      "export_schema_version": "audit-v2",
+      "export_schema_version_expected": true,
+      "required_fields": true,
+      "trace_id_32_hex": true,
+      "span_id_16_hex": true,
+      "total_ordering": true,
+      "event_count": 5,
+      "checksum": true,
+      "integrity_hashes_verified": true,
+      "authorized_export": true,
+      "cross_tenant_denial": true,
+      "content_token_credential_exclusion": true,
+      "rejected_secret_input": true,
+      "retention_purged_unheld": true,
+      "legal_hold_retained": true
+    },
+    "readiness": {
+      "initial_ready": true,
+      "liveness_initial": true,
+      "missing_db_fails_ready": true,
+      "missing_db_stays_live": true,
+      "restored_db_recovers_ready": true,
+      "second_process_ready": true,
+      "second_process_live": true,
+      "recovered_health": true
+    },
+    "metrics": {
+      "status": 200,
+      "audit_keys_present": true,
+      "readiness_counters_present": {
+        "failures": true,
+        "recoveries": true
+      },
+      "tenant_free": true
+    },
+    "observability": {
+      "request_correlation_persisted": true,
+      "structured_log_correlation": true,
+      "trace_span_persistence_and_log_correlation": {
+        "status": "PROVEN",
+        "request_events_have_log_ids": true,
+        "trace_id_width": 32,
+        "span_id_width": 16
+      },
+      "readiness_transition_signal": {
+        "status": "PROVEN",
+        "failed_counter": true,
+        "recovered_counter": true,
+        "failed_log": true,
+        "recovered_log": true,
+        "sanitized_log_fields": true
+      },
+      "alert_delivery": {
+        "status": "PROVEN_SIGNAL_EXTERNAL_SINK_OPEN",
+        "signal": "readiness_transition logs and failure/recovery counters",
+        "external_sink": false,
+        "reason": "No external alert sink or notification delivery exists in checked runtime."
+      }
+    }
+  },
+  "full_make_check": {
+    "status": "PASS",
+    "command": "make check",
+    "result": "exit 0; 253 passed, 8 skipped; coverage 81.20%; Ruff, format, and mypy passed",
+    "duration": "78.07s"
+  },
+  "closure": {
+    "status": "OPEN",
+    "reason": "Runtime trace/span and explicit readiness signals are proven; no external alert sink exists, pending Mayor integration/CI."
+  }
+}
