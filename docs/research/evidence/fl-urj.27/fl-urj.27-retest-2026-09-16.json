@@ -1,0 +1,49 @@
+{
+  "date_local": "2026-09-16",
+  "target": {
+    "ref": "origin/main",
+    "sha": "75ff7769b102ad1e8458f3eeec4006ee0a0e12fc",
+    "subject": "fix(release): normalize compose project names"
+  },
+  "result": "blocked_gate_open",
+  "worker_checkout": "206325f9304b106e6e00e49e92923102068cb9",
+  "product_ux_changes_by_worker": false,
+  "evidence": {
+    "compileall": "pass",
+    "cached_contract_tests": "32 passed, 9 subtests passed",
+    "ruff_check": "pass",
+    "ruff_format_check": "38 files already formatted",
+    "browser_e2e": {
+      "result": "blocked_before_product_assertions",
+      "summary": "2 failed, 3 deselected",
+      "cause": "PermissionError [Errno 1] binding 127.0.0.1 in free_port()"
+    },
+    "make_check": {
+      "result": "blocked_before_checks",
+      "cause": "offline dependency resolution could not download pycparser==3.0"
+    },
+    "manual_keyboard_screen_reader_mobile": "not_run; browser/AT surface unavailable"
+  },
+  "scope": {
+    "library_graph_tree": "static_pass_live_unverified",
+    "markdown_reader": "static_pass_live_unverified",
+    "html_preview": "static_pass_live_unverified",
+    "create_upload_edit_share": "static_pass_live_unverified",
+    "recoverable_errors": "source_pass_live_unverified",
+    "keyboard_accessible_names": "partial_fail",
+    "duplicate_filenames": "fail",
+    "responsive_mobile": "source_coverage_live_unverified",
+    "standalone_back": "fail",
+    "admin_discoverability": "fail_dependency",
+    "connection_discoverability": "fail_dependency"
+  },
+  "defects": [
+    {"id": "UX-27-R1", "severity": "P1", "title": "Skip link does not move focus to main"},
+    {"id": "UX-27-R2", "severity": "P1", "title": "Duplicate filenames remain ambiguous in primary navigation"},
+    {"id": "UX-27-R3", "severity": "P1", "title": "Standalone preview has no return navigation"},
+    {"id": "UX-27-R4", "severity": "P2", "title": "Closing Edit or Remove-access loses keyboard focus"},
+    {"id": "UX-27-R5", "severity": "P2", "title": "Share recipient still requires an opaque identifier"},
+    {"id": "UX-27-R6", "severity": "P1", "title": "Admin and connection management remain absent", "dependency": true}
+  ],
+  "mayor_decision": "Keep gate open. Retest exact release build after UX defects and fl-urj.6.2/fl-urj.7.7 plus declared dependencies land; no product UX self-fix."
+}

@@ -1,0 +1,114 @@
+{
+  "schema": "fl-urj.7.7",
+  "run_id": "2026-09-09T03:14:11Z-current-main-worker",
+  "baseline_commit": "861eda6d1e3536c6791dbe1d6e1022ad1c0f5106",
+  "tested_commit": "861eda6d1e3536c6791dbe1d6e1022ad1c0f5106",
+  "result": "blocked",
+  "environment": {
+    "os": "macOS 15.7.3 arm64",
+    "python": "3.12.10",
+    "browser": "Google Chrome 152.0.7977.83 (present; loopback bind blocked)",
+    "assistive_technology": "unavailable in worker",
+    "viewport_css_px": [320, 375, 768, 1280],
+    "docker": "unavailable: Docker daemon socket denied"
+  },
+  "commands": [
+    {
+      "command": "make check",
+      "exit_code": 2,
+      "evidence": "fl-urj.7.7-current-main-worker-blocked"
+    },
+    {
+      "command": "make test-e2e",
+      "exit_code": 2,
+      "evidence": "fl-urj.7.7-current-main-worker-blocked"
+    },
+    {
+      "command": "FOLIO_BROWSER=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" uv run pytest -q tests/test_browser_e2e.py -k 'test_auth_states_are_accessible_safe_and_preserve_input or test_real_ui_upload_search_grep_chunk_graph_versions_conflict_and_bridge'",
+      "exit_code": null,
+      "evidence": "fl-urj.7.7-current-main-host-required"
+    },
+    {
+      "command": "FOLIO_BROWSER=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" make browser-test",
+      "exit_code": 2,
+      "evidence": "fl-urj.7.7-current-main-worker-blocked"
+    },
+    {
+      "command": "make docker-build",
+      "exit_code": 2,
+      "evidence": "fl-urj.7.7-current-main-worker-blocked"
+    },
+    {
+      "command": "make docker-up",
+      "exit_code": 2,
+      "evidence": "fl-urj.7.7-current-main-worker-blocked"
+    },
+    {
+      "command": "FOLIO_BASE_URL=http://127.0.0.1:8000 FOLIO_RENDER_URL=http://127.0.0.1:8001 make docker-test",
+      "exit_code": null,
+      "evidence": "fl-urj.7.7-current-main-host-required"
+    },
+    {
+      "command": "make docker-down",
+      "exit_code": 2,
+      "evidence": "fl-urj.7.7-current-main-worker-blocked"
+    }
+  ],
+  "regressions": {
+    "viewer_reader_precedes_editor": "fail",
+    "search_result_has_artifact_name": "fail",
+    "punctuation_search_returns_result": "fail",
+    "skip_link_moves_focus_to_main": "fail",
+    "named_banner_main_regions": "fail",
+    "keyboard_error_recovery_preserves_input": "fail",
+    "no_positive_tabindex_or_trap": "fail",
+    "responsive_no_horizontal_overflow": "fail",
+    "private_share_revoke_baseline": "pass",
+    "direct_renderer_top_level_safety": "fail",
+    "attached_bridge_allow_deny": "fail"
+  },
+  "adversarial_follow_up": {
+    "production_debug_route_split": {
+      "status": "pass",
+      "evidence": "test_production_ui_route_surface_has_no_debug_aliases",
+      "result": "13 web tests passed against clean 861 source"
+    },
+    "keyboard_focus": {
+      "status": "defined_host_required",
+      "evidence": "test_auth_states_are_accessible_safe_and_preserve_input"
+    },
+    "responsive_viewports": {
+      "status": "defined_host_required",
+      "viewports_css_px": [320, 375, 768, 1280]
+    },
+    "safe_rendering": {
+      "status": "static_pass_browser_host_required",
+      "evidence": "test_renderer_denies_top_level_render_navigation_but_allows_iframe"
+    },
+    "admin_share_recovery": {
+      "status": "defined_host_required",
+      "requirements": [
+        "403 focuses alert",
+        "recipient remains denied-reader",
+        "submit controls re-enable",
+        "Return home is reachable by Tab and Enter"
+      ]
+    }
+  },
+  "manual": {
+    "keyboard_only_core_flow": "not_run",
+    "screen_reader_core_flow": "not_run",
+    "nontechnical_search_task": "help"
+  },
+  "defects": [],
+  "artifacts": [
+    {"kind": "manual-notes", "path": "docs/research/evidence/fl-urj.6/fl-urj.6.5-current-main-2026-09-09.md"},
+    {"kind": "manual-notes", "path": "<host-retained>/private/tmp/fl-urj.7.7-acl.log"},
+    {"kind": "docker-log", "path": "<host-retained>/private/tmp/fl-urj.6.2-docker-*.log"}
+  ],
+  "review": {
+    "ux": "UX/usability crew",
+    "qa": "pending Mayor/rig host run",
+    "mayor_decision": "Private/share/revoke unit baseline: 4 passed. Current 861 admin console is explicitly not counted as progress. Browser, Docker, and AT evidence remain host-gated; no enterprise readiness claim."
+  }
+}

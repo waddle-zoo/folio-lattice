@@ -1,0 +1,189 @@
+{
+  "schema": "fl-urj.27",
+  "run_id": "2026-09-17T03:01:20Z-current-origin-main",
+  "baseline_commit": "861eda6d1e3536c6791dbe1d6e1022ad1c0f5106",
+  "tested_commit": "861eda6d1e3536c6791dbe1d6e1022ad1c0f5106",
+  "worker_checkout": "206325f9304b106e6e00e49e92923102068fdcb9",
+  "result": "blocked",
+  "environment": {
+    "os": "macOS 15.7.3 arm64",
+    "python": "3.12.10 for cached checks; system python 3.10.9",
+    "browser": "Google Chrome present; version probe timed out",
+    "assistive_technology": "unavailable",
+    "docker": "Docker 20.10.17 client; daemon socket denied",
+    "host": "sandboxed worker"
+  },
+  "commands": [
+    {
+      "command": "python3 -m compileall -q src tests",
+      "exit_code": 0,
+      "evidence": "compile-2026-09-16"
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_web.py",
+      "exit_code": 0,
+      "summary": "11 passed",
+      "evidence": "web-contract-11-pass"
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_acl.py tests/test_service.py",
+      "exit_code": 0,
+      "summary": "10 passed",
+      "evidence": "acl-service-10-pass"
+    },
+    {
+      "command": "python3 -m ruff check src tests && python3 -m ruff format --check src tests",
+      "exit_code": 0,
+      "summary": "All checks passed; 24 files already formatted",
+      "evidence": "ruff-2026-09-16"
+    },
+    {
+      "command": "FOLIO_BROWSER=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome python3 -m pytest -q tests/test_browser_e2e.py -k 'test_auth_states_are_accessible_safe_and_preserve_input or test_real_ui_upload_search_grep_chunk_graph_versions_conflict_and_bridge'",
+      "exit_code": 1,
+      "summary": "2 failed before browser assertions: Chrome probe timeout and loopback bind PermissionError",
+      "evidence": "browser-host-blocked-2026-09-16"
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_e2e.py",
+      "exit_code": 1,
+      "summary": "6 failed before live flows from loopback bind restriction; stdio child lacked uvicorn in reconstructed cache path",
+      "evidence": "http-e2e-host-blocked-2026-09-16"
+    },
+    {
+      "command": "make check",
+      "exit_code": 2,
+      "summary": "uv could not resolve uncached mcp-types==2.1.1 with network disabled",
+      "evidence": "make-check-dependency-blocked-2026-09-16"
+    },
+    {
+      "command": "docker compose build",
+      "exit_code": 1,
+      "summary": "Docker daemon socket operation not permitted",
+      "evidence": "docker-daemon-blocked-2026-09-16"
+    }
+  ],
+  "flows": {
+    "nontechnical_create_open": "host_not_run",
+    "search_grep_read_chunk": "host_not_run",
+    "write_version_conflict": "host_not_run",
+    "graph_link_navigation": "host_not_run",
+    "preview_and_attached_capabilities": "host_not_run",
+    "duplicate_name_navigation": "source_defect_confirmed",
+    "admin_discoverability": "gap_confirmed",
+    "share_discoverability": "source_defect_confirmed",
+    "connection_discoverability": "gap_confirmed"
+  },
+  "accessibility": {
+    "heading_landmarks": "static_partial_live_not_run",
+    "accessible_names": "static_partial_live_not_run",
+    "keyboard_only": "not_run",
+    "skip_link_focus": "fail_source_confirmed",
+    "focus_visible_and_ordered": "not_run",
+    "no_positive_tabindex_or_trap": "static_check_only",
+    "busy_status_alerts": "static_check_only",
+    "screen_reader_manual": "not_run"
+  },
+  "responsive": {
+    "viewports_css_px": [320, 375, 768, 1280],
+    "horizontal_overflow": "not_run",
+    "control_reflow": "css_hooks_present_live_not_run",
+    "preview_reachable": "not_run"
+  },
+  "defects": [
+    {
+      "id": "UX-27-01",
+      "severity": "P1",
+      "status": "open",
+      "title": "Skip link target is not focusable",
+      "evidence": "src/folio_lattice/inspection.py:624,633-634",
+      "repro": "On /, Tab to Skip to content, press Enter, inspect focus; main has no tabindex=-1."
+    },
+    {
+      "id": "UX-27-02",
+      "severity": "P1",
+      "status": "open",
+      "title": "Duplicate-name and graph navigation are opaque and ID-first",
+      "evidence": "src/folio_lattice/inspection.py:629,461-474,518-529,660-661",
+      "repro": "Create two same-named artifacts, search identical content, and inspect graph target labels; only opaque IDs reliably disambiguate."
+    },
+    {
+      "id": "UX-27-03",
+      "severity": "P2",
+      "status": "open",
+      "title": "Create form lacks type-detection, binary, and size guidance",
+      "evidence": "src/folio_lattice/inspection.py:640-645",
+      "repro": "First visit, tab through Name, Type, File, Content, Reason; no explanatory help appears."
+    },
+    {
+      "id": "UX-27-04",
+      "severity": "P2",
+      "status": "open",
+      "title": "Search modes lack plain-language distinction",
+      "evidence": "src/folio_lattice/inspection.py:648-651,518-530",
+      "repro": "Compare Search documents and files with Exact text; indexed syntax and literal/non-regex behavior are not explained."
+    },
+    {
+      "id": "UX-27-05",
+      "severity": "P2",
+      "status": "open",
+      "title": "Version and chunk controls lack human context",
+      "evidence": "src/folio_lattice/inspection.py:418-427,461-465",
+      "repro": "On a multi-version artifact, tab through Versions and Chunks; labels omit version ordinals and offset units."
+    },
+    {
+      "id": "UX-27-06",
+      "severity": "P1",
+      "status": "open",
+      "title": "Authenticated artifact view is hardcoded as Local workspace",
+      "evidence": "src/folio_lattice/inspection.py:606-618,653",
+      "repro": "Render ui_html with authenticated state and active account; header still contains Local workspace."
+    },
+    {
+      "id": "UX-27-07",
+      "severity": "P1",
+      "status": "dependency",
+      "title": "Admin controls have no discoverable UI",
+      "evidence": "src/folio_lattice/inspection.py:628,660-664,741-772",
+      "repro": "From /, inspect navigation and try /admin; only Workspace/Find and artifact-scoped controls exist."
+    },
+    {
+      "id": "UX-27-08",
+      "severity": "P1",
+      "status": "dependency",
+      "title": "Connection management has no UI entry point",
+      "evidence": "generated page and src/folio_lattice/inspection.py:741-772",
+      "repro": "From /, search navigation, sections, and routes for connection/connector management; none exists."
+    },
+    {
+      "id": "UX-27-09",
+      "severity": "P2",
+      "status": "open",
+      "title": "Share control uses opaque person IDs and is artifact-context-only",
+      "evidence": "src/folio_lattice/inspection.py:660",
+      "repro": "Open an artifact and tab to People with access; recipient is a raw person-id with no member/group or scope guidance."
+    }
+  ],
+  "dependencies": [
+    "fl-urj.6.2",
+    "fl-urj.7.7",
+    "host Chrome/browser execution",
+    "Docker daemon",
+    "manual keyboard and screen-reader pass",
+    "declared UX/admin/connection follow-up work"
+  ],
+  "review": {
+    "ux_reviewer": "UX/usability crew",
+    "qa_reviewer": "pending host run",
+    "mayor_decision": "Keep gate open. Retest exact release build after fl-urj.6.2/.7.7 and declared dependencies land; no closure or enterprise-readiness claim."
+  },
+  "artifacts": [
+    {
+      "kind": "manual-notes",
+      "path": "docs/research/evidence/fl-urj.27/fl-urj.27-baseline-2026-09-16.md"
+    },
+    {
+      "kind": "structured-evidence",
+      "path": "docs/research/evidence/fl-urj.27/fl-urj.27-baseline-2026-09-16.json"
+    }
+  ]
+}

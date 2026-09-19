@@ -1,0 +1,103 @@
+{
+  "schema": "fl-urj.6.2",
+  "run_id": "2026-09-09T03:14:11Z-current-main-worker",
+  "baseline_commit": "861eda6d1e3536c6791dbe1d6e1022ad1c0f5106",
+  "tested_commit": "861eda6d1e3536c6791dbe1d6e1022ad1c0f5106",
+  "result": "blocked",
+  "environment": {
+    "os": "macOS 15.7.3 arm64",
+    "python": "3.12.10",
+    "browser": "Google Chrome 152.0.7977.83 (present; loopback bind blocked)",
+    "assistive_technology": "unavailable in worker",
+    "docker": "unavailable: Docker daemon socket denied",
+    "host": "sandboxed worker"
+  },
+  "commands": [
+    {
+      "command": "make check",
+      "exit_code": 2,
+      "summary": "blocked before checks: make: uv: No such file or directory"
+    },
+    {
+      "command": "make test-e2e",
+      "exit_code": 2,
+      "summary": "blocked before tests: make: uv: No such file or directory"
+    },
+    {
+      "command": "FOLIO_BROWSER=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" make browser-test",
+      "exit_code": 2,
+      "summary": "blocked before browser test: make: uv: No such file or directory"
+    },
+    {
+      "command": "make docker-build",
+      "exit_code": 2,
+      "summary": "blocked: Docker daemon socket operation not permitted"
+    },
+    {
+      "command": "make docker-up",
+      "exit_code": 2,
+      "summary": "blocked: Docker daemon socket operation not permitted"
+    },
+    {
+      "command": "make docker-test",
+      "exit_code": 2,
+      "summary": "blocked before smoke test: make: uv: No such file or directory"
+    },
+    {
+      "command": "make docker-down",
+      "exit_code": 2,
+      "summary": "blocked: Docker daemon socket operation not permitted"
+    }
+  ],
+  "flows": {
+    "create_upload": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "open_read_full": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "search": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "literal_grep": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "read_chunk": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "write_new_version": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "version_history": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "graph_link_navigation": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "preview_html_css_js": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "attached_mcp_allow_deny": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "direct_renderer_top_level_safety": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "binary_metadata_only": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"},
+    "missing_unavailable_conflict_recovery": {"status": "fail", "evidence": "fl-urj.6.2-current-main-worker-blocked"}
+  },
+  "accessibility": {
+    "heading_landmarks": "fail",
+    "accessible_names": "fail",
+    "keyboard_only": "fail",
+    "keyboard_recovery_after_error": "fail",
+    "focus_visible_and_ordered": "fail",
+    "named_landmarks": "fail",
+    "no_positive_tabindex_or_trap": "fail",
+    "busy_status_alerts": "fail",
+    "screen_reader_manual": "not_run"
+  },
+  "responsive": {
+    "viewports_css_px": [320, 375, 768, 1280],
+    "horizontal_overflow": "fail",
+    "control_reflow": "fail",
+    "preview_reachable": "fail"
+  },
+  "security_disclosures": {
+    "local_unauthenticated_banner": "fail",
+    "hosted_auth_limit_visible": "not_applicable",
+    "preview_untrusted_and_isolated": "fail",
+    "direct_renderer_top_navigation_blocked": "fail",
+    "bridge_denial_means_not_run": "fail",
+    "no_stack_paths_credentials_or_content_leak": "fail"
+  },
+  "defects": [],
+  "artifacts": [
+    {"kind": "manual-notes", "path": "docs/research/evidence/fl-urj.6/fl-urj.6.5-current-main-2026-09-09.md"},
+    {"kind": "docker-log", "path": "<host-retained>/private/tmp/fl-urj.6.2-docker-*.log"},
+    {"kind": "manual-notes", "path": "<host-retained>/private/tmp/fl-urj.6.2-browser-e2e.log"}
+  ],
+  "review": {
+    "ux_reviewer": "UX/usability crew",
+    "qa_reviewer": "pending Mayor/rig host run",
+    "mayor_decision": "Worker result blocked by uv, loopback, Docker, and assistive-technology capabilities; no enterprise readiness claim. Per-flow fail means gate not satisfied, not a product defect assertion."
+  }
+}
