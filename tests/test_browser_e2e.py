@@ -1712,6 +1712,47 @@ labels;
                     )
                 )
                 chrome.command("Emulation.clearDeviceMetricsOverride")
+                chrome.command(
+                    "Emulation.setDeviceMetricsOverride",
+                    {"width": 360, "height": 800, "deviceScaleFactor": 1, "mobile": False},
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+                    )
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "[...document.querySelectorAll('button, input, select, textarea')].every((control) => control.getBoundingClientRect().right <= window.innerWidth)"
+                    )
+                )
+                chrome.evaluate(
+                    "document.querySelector('#find').open = true; "
+                    "document.querySelector('#search-query').focus()"
+                )
+                chrome.wait(
+                    "document.querySelector('#find').open && "
+                    "document.activeElement?.id === 'search-query'"
+                )
+                chrome.evaluate(
+                    "window.__folioFetch = window.fetch; "
+                    "window.fetch = (...args) => new Promise((resolve) => "
+                    "setTimeout(() => resolve(window.__folioFetch(...args)), 150)); "
+                    f"document.querySelector('#search-query').value = {json.dumps(body_marker)}; "
+                    "document.querySelector('#search').requestSubmit()"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#main').getAttribute('aria-busy')"),
+                    "true",
+                )
+                chrome.wait(
+                    "document.querySelectorAll('#results button[data-artifact-id]').length === 6"
+                )
+                self.assertEqual(
+                    chrome.evaluate("document.querySelector('#main').getAttribute('aria-busy')"),
+                    "false",
+                )
+                chrome.command("Emulation.clearDeviceMetricsOverride")
                 chrome.evaluate("document.querySelector('#create').closest('details').open = true")
                 chrome.set_file("#create-file", upload)
                 chrome.evaluate("""
