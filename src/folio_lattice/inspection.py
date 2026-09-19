@@ -3638,6 +3638,7 @@ class InspectionApp:
             )
             return
         try:
+            body_reading = [False]
             try:
                 async with asyncio.timeout(self.timeout_seconds):
                     await self._api_request(
@@ -3647,18 +3648,31 @@ class InspectionApp:
                         bridge=bridge,
                         request_id=request_id,
                         admin=admin,
+                        body_reading=body_reading,
                     )
             except TimeoutError:
-                await self._api_error(
-                    scope,
-                    receive,
-                    send,
-                    status_code=504,
-                    code="resource_timeout",
-                    message="Request timed out. Try again later.",
-                    request_id=request_id,
-                    retry_after=1,
-                )
+                if body_reading[0]:
+                    await self._api_error(
+                        scope,
+                        receive,
+                        send,
+                        status_code=408,
+                        code="request_body_timeout",
+                        message="Request body timed out. Try again later.",
+                        request_id=request_id,
+                        retry_after=1,
+                    )
+                else:
+                    await self._api_error(
+                        scope,
+                        receive,
+                        send,
+                        status_code=504,
+                        code="resource_timeout",
+                        message="Request timed out. Try again later.",
+                        request_id=request_id,
+                        retry_after=1,
+                    )
         finally:
             self._concurrency_limiter.release(concurrency_key)
 
@@ -3671,6 +3685,7 @@ class InspectionApp:
         bridge: bool,
         request_id: str,
         admin: bool = False,
+        body_reading: list[bool],
     ) -> None:
         headers = {key.lower(): value for key, value in scope["headers"]}
         origin = headers.get(b"origin", b"").decode("latin-1")
@@ -3721,7 +3736,9 @@ class InspectionApp:
                         raise OverflowError
                 except ValueError as exc:
                     raise PublicMcpError("Content-Length must be an integer") from exc
+            body_reading[0] = True
             raw = await _body(receive, maximum)
+            body_reading[0] = False
             try:
                 payload = json.loads(raw)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:

@@ -37,11 +37,19 @@ async def invoke(
     client: tuple[str, int] = ("127.0.0.1", 1),
     fetch_dest: str | None = None,
     content_length: int | None = None,
+    incomplete_body: bool = False,
 ) -> tuple[int, dict[str, str], bytes]:
     sent: list[dict[str, Any]] = []
     request = {"type": "http.request", "body": body, "more_body": False}
+    first_body = True
 
     async def receive() -> dict[str, Any]:
+        nonlocal first_body
+        if incomplete_body:
+            if first_body:
+                first_body = False
+                return {"type": "http.request", "body": body, "more_body": True}
+            await asyncio.Event().wait()
         return request
 
     async def send(message: dict[str, Any]) -> None:
@@ -190,6 +198,36 @@ class HumanGatewayResourceTests(unittest.IsolatedAsyncioTestCase):
         error = json.loads(response)
         self.assertEqual(error["code"], "request_too_large")
         self.assertEqual(error["error"], "request body too large")
+        self.assertTrue(error["request_id"])
+        self.assertEqual(caller.calls, 0)
+        self.assertEqual(app._concurrency_limiter._total, 0)
+        self.assertEqual(app._concurrency_limiter._active, {})
+
+    async def test_incomplete_body_times_out_as_408_and_releases_slot(self) -> None:
+        caller = CountingCaller({"ok": True})
+        app = InspectionApp(
+            caller,
+            control_origin=CONTROL_ORIGIN,
+            render_origin=RENDER_ORIGIN,
+            max_request_bytes=100,
+            timeout_seconds=0.01,
+            rate_limits={"tenant": 100, "actor": 100, "ip": 100},
+        )
+        status, headers, response = await asyncio.wait_for(
+            invoke(
+                app,
+                "/api/mcp",
+                body=b"{",
+                content_length=100,
+                incomplete_body=True,
+            ),
+            timeout=1,
+        )
+        self.assertEqual(status, 408)
+        self.assertEqual(headers["retry-after"], "1")
+        self.assertEqual(headers["cache-control"], "no-store")
+        error = json.loads(response)
+        self.assertEqual(error["code"], "request_body_timeout")
         self.assertTrue(error["request_id"])
         self.assertEqual(caller.calls, 0)
         self.assertEqual(app._concurrency_limiter._total, 0)
