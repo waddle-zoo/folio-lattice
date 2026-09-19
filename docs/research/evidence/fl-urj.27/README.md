@@ -1,51 +1,157 @@
-# fl-urj.27 / G7 exact-head UX evidence
+# fl-urj.27 manual accessibility and usability evidence
 
-Status: automated browser and static UX checks pass; G7 remains blocked on
-independent manual assistive-technology and nontechnical review.
+Status: **OPEN / BLOCKED**
+
+This register is a ready-to-run protocol, not a completed witness result.
+No approved human VoiceOver/screen-reader reviewer or nontechnical participant
+session is available in this workspace. Automation cannot satisfy this gate;
+do not fill the result fields from browser automation or self-review.
+
+## Retained historical automated evidence
 
 The retained run records are:
 
 - [`20260917T0716Z-176a2ce-browser.json`](20260917T0716Z-176a2ce-browser.json),
-  the initial exact-head library, graph, rendering, sharing, bridge, keyboard,
-  focus, status, error, and responsive-layout evidence.
+  initial library, graph, rendering, sharing, bridge, keyboard, focus, status,
+  error, and responsive-layout evidence.
 - [`20260917T0731Z-dbfc3da-admin-browser.json`](20260917T0731Z-dbfc3da-admin-browser.json),
-  the approved-connection admin browser evidence and async form-reset fix.
+  approved-connection admin browser evidence and async form-reset fix.
+- `fl-urj.27-baseline-2026-09-16.*` and `fl-urj.27-retest-2026-09-16.*`,
+  retained baseline/retest records.
 
-## Automated exact-head evidence
+Historical exact-head runs passed the initial browser suite twice (**5 passed**
+each) and the admin-integrated suite twice (**6 passed** each). The admin
+scenario covers pointer registration, live status and busy-state restoration,
+keyboard revoke-dialog activation and focus return, pointer revoke, bounded
+loopback rejection, form recovery, accessible names, and secret-free UI.
+These records are automated evidence only; they do not close manual review.
 
-The initial `176a2ce` browser suite passed twice: **5 passed, 0 failed, 0
-skipped** in 39.09s and 37.31s. `tests/test_web.py` passed **16 tests + 9
-subtests**; the focused static UX/admin subset passed **6 tests** with 10
-deselected.
+The retained real-browser repair found an async UI defect: after an awaited
+admin request, `event.currentTarget` was null, so the form reset raised and the
+connection list did not refresh. The fix resets the stable
+`#connection-register` element directly; the focused scenario passed after the
+fix.
 
-On canonical base `dbfc3da`, implementation commit `c161d65` added a real
-browser scenario for `/settings/connections` and `/api/admin/mcp`. The full
-browser suite then passed twice: **6 passed, 0 failed, 0 skipped** in 41.24s
-and 40.24s. The focused scenario passed **1 test** with 5 deselected; the web
-and static suites remained green. Ruff, formatting, Python compilation, and
-`git diff --check` passed.
+## Exact-build binding
 
-The admin scenario covers pointer registration, live status and busy-state
-restoration, keyboard Enter activation of the revoke dialog, cancel-focus
-restoration, pointer confirmation/revocation, bounded loopback rejection,
-form recovery, accessible names, and absence of `credential_ref` or bearer
-values in rendered UI.
+Run from a clean checkout of the exact release candidate and record values
+before each session:
 
-## Fix found by the real browser
+| Field | Required value |
+| --- | --- |
+| Source commit | `0f852ac16b3ff8333e991f9d5e66c5b0494b2345` |
+| Source tree | `git status --short` must be empty |
+| Hosted image digest | Record exact `sha256:...`; do not substitute a local image |
+| Hosted URL | Record origin, tenant fixture, and cache-busting URL |
+| Session date/time | ISO-8601 with timezone |
+| Evidence folder | `YYYY-MM-DD-<approved-run-id>/` under this directory |
+| Screenshots/video | Store only redacted files; record SHA-256 hashes |
 
-Registration exposed a genuine async UI defect: after awaiting the public
-admin request, `event.currentTarget` was null, so the form reset raised and
-the connection list never refreshed. `c161d65` resets the stable
-`#connection-register` element directly. The focused scenario failed before
-the fix and passes after it.
+Raw recordings, consent forms, account addresses, tokens, and private document
+content stay in approved restricted research storage. Git receives only
+redacted notes, safe screenshots, and hashes.
 
-## Open G7 blocker
+## Current exact-build automated refresh
 
-These packages are automated evidence, not an independent accessibility
-review. No manual screen-reader/assistive-technology run, reviewer matrix, or
-nontechnical participant review is attached. Both structured records are
-therefore marked `result: blocked`; keep `fl-urj.27` and G7 open and make no
-enterprise-readiness claim.
+Source: `0f852ac16b3ff8333e991f9d5e66c5b0494b2345`.
+
+Portable exact command from a clean candidate worktree on 2026-09-19:
+
+```text
+FOLIO_BROWSER="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" uv run pytest -q tests/test_browser_e2e.py -rA
+```
+
+Result: **6 passed in 34.93s**. The first portable invocation had 5 passed and
+one Chrome teardown timeout after product assertions completed; the affected
+test passed in isolation, then the repeated full command passed 6/6. This is
+automated evidence only and does not satisfy the manual witness gate.
+
+## Witness record — complete before execution
+
+Copy this section into the run folder's `README.md`; replace every `REQUIRED`
+field. An empty field is a blocker, not a pass.
+
+```text
+approved_screen_reader_reviewer: REQUIRED approved pseudonym/role
+approved_nontechnical_participant: REQUIRED approved pseudonym/role
+moderator: REQUIRED approved pseudonym/role
+consent_record_reference: REQUIRED restricted-storage reference
+consent_for_recording: yes/no/not recorded
+session_date_time: REQUIRED ISO-8601 timezone
+hardware: REQUIRED model or approved hardware class
+os_version: REQUIRED exact version
+browser_version: REQUIRED exact browser/version
+assistive_technology: REQUIRED VoiceOver/version, or "none" for participant
+zoom_and_viewport: REQUIRED zoom; desktop/mobile viewport
+source_commit: 0f852ac16b3ff8333e991f9d5e66c5b0494b2345
+hosted_image_digest: REQUIRED sha256
+hosted_url: REQUIRED redacted origin/fixture reference
+screenshots_sha256: REQUIRED hashes or "none"
+recording_sha256: REQUIRED restricted-storage hash or "not retained"
+redaction_review: REQUIRED reviewer/date
+```
+
+## VoiceOver / screen-reader traversal
+
+Use a real unlocked macOS session with Accessibility permission. Start
+VoiceOver with `Command-F5` (or `Fn-Command-F5`), use `Control-Option` as the
+VoiceOver modifier, and do not use DevTools accessibility output as a
+replacement. Read prompts verbatim. Record the first announcement, focus
+target, completion, wrong turn, help, and defect for each task.
+
+| # | Prompt | Required observation |
+| --- | --- | --- |
+| V1 | “Sign in and tell me which organization and account are active.” | Identity context is announced; no tenant/token internals exposed. |
+| V2 | “Find the private document and open it.” | Main/heading/document name, privacy state, and usable focus are announced. |
+| V3 | “Search for the phrase `launch notes`, open a result, and read one chunk.” | Search label, result name, no-match/status state, and chunk action are understandable. |
+| V4 | “Open the linked HTML preview, then return to the document.” | Preview title, untrusted boundary, Back/Library navigation, and focus recovery are clear. |
+| V5 | “Edit the Markdown and save a new version.” | Editor label, save action, busy state, success/error announcement, and version result are clear. |
+| V6 | “Share with Alex as view-only, then remove Alex’s access.” | Recipient, role, confirmation effect, revoke result, and revoked history are announced. |
+| V7 | “As Alex, try to open the revoked document.” | Denied state is understandable and does not disclose document metadata. |
+| V8 | “As an administrator, register an approved connection and revoke it.” | Form labels, exact allowlist language, credential non-disclosure, dialog focus, status, and audit result are clear. |
+| V9 | “Open audit history and export it.” | Audit control and result are identified without developer vocabulary. |
+| V10 | “Recover from an expired session and an unavailable service.” | Alert/status gives next action; focus lands on recovery control; entered work is preserved. |
+
+Required manual checks: headings/landmarks, form labels, button names,
+status versus alert announcements, dialog focus trap and return focus, no
+positive `tabindex`, no keyboard trap, 200% zoom/reflow, and no privacy or
+authorization misunderstanding. Record defects verbatim and assign severity;
+do not silently repair the notes after the session.
+
+## Nontechnical-user witness
+
+Use an approved participant who does not work with databases, MCP, OAuth, or
+access-control implementation. Read each prompt exactly. Do not explain
+internal terms before the participant attempts the task. Record completion as
+`success`, `success with help`, or `failed`, plus duration, first action, wrong
+turns, help, participant wording, and severity.
+
+| # | Say this | Pass signal |
+| --- | --- | --- |
+| N1 | “Sign in and tell me whose documents you are about to see.” | Correct account/organization understood. |
+| N2 | “Create a private document named `Q3 planning notes`.” | Private state and who can open it understood. |
+| N3 | “Find the document by searching for `planning`, then open it.” | Search and result navigation completed without IDs. |
+| N4 | “Give Alex permission to view this document.” | Correct recipient/role and confirmation effect understood. |
+| N5 | “As Alex, try to edit it.” | Viewer understands edit is unavailable; no version is created. |
+| N6 | “As the owner, remove Alex’s access.” | Correct person/effect confirmed before revoke. |
+| N7 | “Open the old link as Alex.” | Revoked/unavailable state understood; no private metadata shown. |
+| N8 | “Register the team calendar connection with only the listed tool, then check its status.” | Admin understands exact allowlist and credential boundary. |
+| N9 | “Revoke that connection and find the audit record.” | Immediate future block and audit result understood. |
+| N10 | “A save failed. What would you do next?” | Participant finds a clear retry/recovery action without guessing success. |
+
+Suggested acceptance: at least 8/10 independent tasks per participant, no
+privacy or authorization misunderstanding in N2–N7, and no critical
+screen-reader or keyboard blocker. These are thresholds to evaluate, not a
+claim that this register has passed them.
+
+## Blocker and handoff
+
+Current blocker: no approved witness identity, consent record, unlocked
+macOS/Accessibility-permitted session, or scheduled nontechnical participant
+is supplied to this agent. Therefore `.27` must remain open. A human owner must
+schedule/approve both sessions, run this protocol on the exact source/image,
+redact the results, and commit the run folder. Do not close the gate from this
+checklist or from the existing automated Chrome 6/6 evidence.
 
 ## What remains for fl-urj.28
 
@@ -56,4 +162,3 @@ connections, TLS/readiness/rollback, audit/observability, and final manual
 browser/accessibility review. Each run needs exact commands, redacted output,
 structured result, hash, reviewer, and timestamps; skips, failures, and the
 manual-AT blocker must remain visible.
-
