@@ -233,6 +233,79 @@ class DeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "FOLIO_RENDERER_RELAY_AUDIENCE"):
                 _renderer_relay_audience(settings, "https://127.0.0.1:8000/mcp")
 
+    def test_hosted_compose_passes_resource_controls_to_both_containers(self) -> None:
+        compose_path = Path(__file__).parents[1] / "deploy/compose/hosted.yml"
+        compose = compose_path.read_text()
+        expected = (
+            ("FOLIO_TENANT_RATE_LIMIT", "600"),
+            ("FOLIO_ACTOR_RATE_LIMIT", "600"),
+            ("FOLIO_IP_RATE_LIMIT", "600"),
+            ("FOLIO_RATE_LIMIT_WINDOW_SECONDS", "60"),
+            ("FOLIO_RESOURCE_CONCURRENCY_LIMIT", "32"),
+            ("FOLIO_RESOURCE_CONCURRENCY_PER_KEY", "8"),
+            ("FOLIO_RESOURCE_TIMEOUT_SECONDS", "30"),
+            ("FOLIO_RESOURCE_MAX_RESPONSE_BYTES", "1048576"),
+        )
+        folio = compose.split("  folio:\n", 1)[1].split("\n  renderer:\n", 1)[0]
+        renderer = compose.split("  renderer:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+        for service in (folio, renderer):
+            for key, default in expected:
+                self.assertIn(f"      {key}: ${{{key}:-{default}}}", service)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            memberships = root / "memberships.json"
+            cert = root / "tls.pem"
+            key = root / "tls-key.pem"
+            memberships.write_text("{}", encoding="utf-8")
+            cert.write_text("certificate", encoding="utf-8")
+            key.write_text("key", encoding="utf-8")
+            environment = {
+                **os.environ,
+                "VCS_REF": "compose-regression",
+                "FOLIO_HOST_PORT": "18000",
+                "FOLIO_CONTROL_ORIGIN": "https://control.example",
+                "FOLIO_RENDER_ORIGIN": "https://render.example",
+                "FOLIO_OIDC_ISSUER": "https://issuer.example",
+                "FOLIO_OIDC_AUDIENCE": "folio-api",
+                "FOLIO_OIDC_JWKS_URL": "https://issuer.example/jwks.json",
+                "FOLIO_OIDC_MEMBERSHIPS_FILE": str(memberships),
+                "FOLIO_TLS_CERTFILE": str(cert),
+                "FOLIO_TLS_KEYFILE": str(key),
+                "FOLIO_BACKUP_INTERVAL_SECONDS": "60",
+                "FOLIO_BACKUP_RPO_SECONDS": "60",
+                "FOLIO_BACKUP_MAX_AGE_SECONDS": "60",
+                "FOLIO_BACKUP_KEY_ADAPTER": "external-kms",
+                "FOLIO_BACKUP_STORE_ADAPTER": "external-worm",
+                "FOLIO_BACKUP_KEY_VERSION": "v1",
+                "FOLIO_RECOVERY_KEY_VERSION": "v1",
+                "FOLIO_BACKUP_ADAPTER_FACTORY": "tests.factory:make",
+                "FOLIO_RENDERER_CAPABILITY_SECRET": "compose-regression-secret-32-characters",
+                "FOLIO_RENDERER_TENANT_ID": "renderer-tenant",
+                "FOLIO_RENDERER_ACTOR": "renderer-actor",
+                "FOLIO_TENANT_RATE_LIMIT": "7",
+                "FOLIO_ACTOR_RATE_LIMIT": "8",
+                "FOLIO_IP_RATE_LIMIT": "9",
+                "FOLIO_RATE_LIMIT_WINDOW_SECONDS": "11",
+                "FOLIO_RESOURCE_CONCURRENCY_LIMIT": "13",
+                "FOLIO_RESOURCE_CONCURRENCY_PER_KEY": "3",
+                "FOLIO_RESOURCE_TIMEOUT_SECONDS": "0.25",
+                "FOLIO_RESOURCE_MAX_RESPONSE_BYTES": "4096",
+            }
+            rendered = subprocess.run(
+                ["docker", "compose", "-f", str(compose_path), "config", "--format", "json"],
+                cwd=compose_path.parents[1],
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            services = json.loads(rendered.stdout)["services"]
+            for service_name in ("folio", "renderer"):
+                service_environment = services[service_name]["environment"]
+                for key, value in ((name, environment[name]) for name, _default in expected):
+                    self.assertEqual(service_environment[key], value)
+
     def test_hostile_configuration_fails_closed(self) -> None:
         cases = (
             {"FOLIO_DB_PATH": ""},
