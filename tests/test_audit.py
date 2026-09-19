@@ -15,7 +15,7 @@ from folio_lattice.auth import Principal, reset_request_principal, set_request_p
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.ops import main as ops_main
 from folio_lattice.server import FolioHttpApp
-from folio_lattice.service import FolioError, FolioLattice
+from folio_lattice.service import SCHEMA_MIGRATIONS, FolioError, FolioLattice
 
 
 async def unused_app(scope: Any, receive: Any, send: Any) -> None:
@@ -288,8 +288,17 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
                 (expired["expires_at"], expired["integrity_hash"], event["id"]),
             )
             db.execute("DROP TABLE audit_exports")
+            db.execute("DROP TABLE schema_migrations")
         self.service.initialize()
         self.assertTrue(self.service.readiness()["dependencies"]["audit"]["ready"])
+        with self.service.connect() as db:
+            ledger = db.execute(
+                "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        self.assertEqual(
+            [(row["version"], row["name"]) for row in ledger],
+            [(version, name) for version, name, _ in SCHEMA_MIGRATIONS],
+        )
         self.assertEqual(
             ops_main(
                 [
@@ -308,6 +317,27 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
         retained = self.service.list_audit_events("tenant-a", actor="auditor")
         self.assertNotIn(event["id"], {item["id"] for item in retained})
         self.assertTrue(any(item["action"] == "audit_retention_purge" for item in retained))
+
+    def test_schema_migration_ledger_is_numbered_and_fail_closed(self) -> None:
+        with self.service.connect() as db:
+            ledger = db.execute(
+                "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        self.assertEqual(
+            [(row["version"], row["name"]) for row in ledger],
+            [(version, name) for version, name, _ in SCHEMA_MIGRATIONS],
+        )
+        self.assertTrue(all(len(row["checksum"]) == 64 for row in ledger))
+        self.assertTrue(self.service.readiness()["dependencies"]["migration"]["ready"])
+
+        with self.service.connect() as db:
+            db.execute(
+                "UPDATE schema_migrations SET checksum = ? WHERE version = 1",
+                ("0" * 64,),
+            )
+        self.assertFalse(self.service.readiness()["dependencies"]["migration"]["ready"])
+        with self.assertRaisesRegex(FolioError, "schema migration ledger checksum mismatch"):
+            self.service.initialize()
 
     def test_legal_hold_and_purge_events_are_atomic(self) -> None:
         held = self.service.record_audit_event(

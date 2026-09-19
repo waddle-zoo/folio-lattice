@@ -65,6 +65,14 @@ MAX_EXTERNAL_ITEM_LENGTH = 2_048
 MAX_EXTERNAL_ARGUMENT_BYTES = 64 * 1024
 MAX_EXTERNAL_URI_DECODE_PASSES = 2
 EXTERNAL_SQLITE_BUSY_TIMEOUT_SECONDS = 35.0
+SCHEMA_MIGRATIONS = (
+    (1, "base_schema", "artifact graph, ACL, and external MCP tables"),
+    (2, "acl_revocation_reason", "revocation reason on ACL grants"),
+    (3, "external_policy", "policy JSON on external MCP connections"),
+    (4, "external_audit_reason", "reason on external MCP audit rows"),
+    (5, "artifact_owner_and_current_version", "artifact owner and current version columns"),
+    (6, "audit_lifecycle", "audit events, exports, retention, and legal holds"),
+)
 _EXTERNAL_POLICY_KEYS = frozenset({"slack"})
 _EXTERNAL_POLICY_PUBLIC_KEYS = frozenset({"channels", "max_time_range_seconds"})
 _EXTERNAL_PUBLIC_FIELDS = (
@@ -104,6 +112,7 @@ REQUIRED_SCHEMA_OBJECTS = frozenset(
         "external_mcp_audit",
         "audit_events",
         "audit_exports",
+        "schema_migrations",
     }
 )
 REQUIRED_SCHEMA_INDEXES = frozenset(
@@ -118,6 +127,7 @@ REQUIRED_SCHEMA_INDEXES = frozenset(
         "external_mcp_audit_lookup_idx",
         "audit_events_lookup_idx",
         "audit_exports_lookup_idx",
+        "schema_migrations_name_idx",
     }
 )
 REQUIRED_SCHEMA_COLUMNS = {
@@ -162,6 +172,7 @@ REQUIRED_SCHEMA_COLUMNS = {
     "audit_exports": frozenset(
         {"id", "tenant_id", "requested_by", "checksum", "schema_version", "expires_at"}
     ),
+    "schema_migrations": frozenset({"version", "name", "checksum", "applied_at"}),
 }
 
 
@@ -460,6 +471,14 @@ class FolioLattice:
                 );
                 CREATE INDEX IF NOT EXISTS audit_exports_lookup_idx
                     ON audit_exports(tenant_id, created_at, id);
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    checksum TEXT NOT NULL,
+                    applied_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS schema_migrations_name_idx
+                    ON schema_migrations(name);
                 """
             )
             db.execute(
@@ -552,6 +571,49 @@ class FolioLattice:
                             OWNER_GRANT_REASON,
                         ),
                     )
+            self._ensure_migration_ledger(db)
+
+    @staticmethod
+    def _migration_checksum(version: int, name: str, contract: str) -> str:
+        payload = f"{version}:{name}:{contract}".encode()
+        return hashlib.sha256(payload).hexdigest()
+
+    @classmethod
+    def _expected_migration_rows(cls) -> list[tuple[int, str, str]]:
+        return [
+            (version, name, cls._migration_checksum(version, name, contract))
+            for version, name, contract in SCHEMA_MIGRATIONS
+        ]
+
+    @classmethod
+    def _ensure_migration_ledger(cls, db: sqlite3.Connection) -> None:
+        expected = cls._expected_migration_rows()
+        expected_versions = {version for version, _, _ in expected}
+        existing_versions = {row[0] for row in db.execute("SELECT version FROM schema_migrations")}
+        if existing_versions - expected_versions:
+            raise FolioError("schema migration ledger contains an unknown version")
+        for version, name, checksum in expected:
+            row = db.execute(
+                "SELECT name, checksum FROM schema_migrations WHERE version = ?", (version,)
+            ).fetchone()
+            if row is None:
+                db.execute(
+                    "INSERT INTO schema_migrations(version, name, checksum, applied_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (version, name, checksum, utc_now()),
+                )
+            elif row["name"] != name or row["checksum"] != checksum:
+                raise FolioError("schema migration ledger checksum mismatch")
+
+    @classmethod
+    def _migration_ledger_ready(cls, db: sqlite3.Connection) -> bool:
+        try:
+            rows = db.execute(
+                "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        except sqlite3.Error:
+            return False
+        return [tuple(row) for row in rows] == cls._expected_migration_rows()
 
     def _ensure_tenant(self, db: sqlite3.Connection, tenant_id: str) -> None:
         self._validate_text("tenant_id", tenant_id, MAX_NAME_LENGTH)
@@ -3027,6 +3089,7 @@ class FolioLattice:
         acl_ready = False
         external_mcp_ready = False
         audit_ready = False
+        migration_ledger_ready = False
         database_parent = self.db_path.parent
         if self.read_only:
             database_access = (
@@ -3060,12 +3123,14 @@ class FolioLattice:
                         required <= {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                         for table, required in REQUIRED_SCHEMA_COLUMNS.items()
                     )
+                    migration_ledger_ready = self._migration_ledger_ready(db)
                     quick_check = db.execute("PRAGMA quick_check").fetchone()
                     database_ready = quick_check is not None and quick_check[0] == "ok"
                     migration_ready = (
                         REQUIRED_SCHEMA_OBJECTS <= objects
                         and REQUIRED_SCHEMA_INDEXES <= indexes
                         and columns_ready
+                        and migration_ledger_ready
                     )
                     acl_ready = (
                         "acl_grants" in objects
