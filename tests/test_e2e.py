@@ -125,6 +125,63 @@ def create(base_url: str, name: str, content: bytes, media_type: str) -> dict[st
 
 
 class HttpE2ETests(unittest.TestCase):
+    def test_runtime_trace_span_and_readiness_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            port = free_port()
+            base_url = f"http://127.0.0.1:{port}"
+            environment = {
+                **os.environ,
+                "FOLIO_DB_PATH": str(root / "folio.db"),
+                "FOLIO_BLOB_ROOT": str(root / "blobs"),
+                "FOLIO_TENANT_ID": "runtime-observability",
+                "FOLIO_ACTOR": "runtime-auditor",
+                "FOLIO_CONTROL_ORIGIN": base_url,
+                "FOLIO_RENDER_ORIGIN": base_url,
+                "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            }
+            process = start_server(environment, "http", port)
+            try:
+                wait_ready(base_url, process)
+                logout = urllib.request.Request(
+                    f"{base_url}/auth/logout",
+                    data=b"",
+                    headers={"Origin": base_url, "X-Correlation-ID": "runtime-correlation"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(logout, timeout=5) as response:
+                    self.assertEqual(response.status, 204)
+
+                hidden_db = root / "folio.db.hidden"
+                (root / "folio.db").rename(hidden_db)
+                try:
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        urllib.request.urlopen(f"{base_url}/readyz", timeout=5).read()
+                    self.assertEqual(raised.exception.code, 503)
+                finally:
+                    hidden_db.rename(root / "folio.db")
+
+                with urllib.request.urlopen(f"{base_url}/readyz", timeout=5) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertTrue(json.loads(response.read())["ready"])
+                with urllib.request.urlopen(f"{base_url}/metrics", timeout=5) as response:
+                    metrics = json.loads(response.read())
+                self.assertEqual(metrics["readiness_failures_total"], 1)
+                self.assertEqual(metrics["readiness_recoveries_total"], 1)
+                export = mcp_call(base_url, "audit_export", {})
+                event = next(
+                    item for item in export["events"] if item["action"] == "logout_succeeded"
+                )
+                self.assertRegex(event["trace_id"], r"^[0-9a-f]{32}$")
+                self.assertRegex(event["span_id"], r"^[0-9a-f]{16}$")
+            finally:
+                logs = stop_server(process)
+            self.assertIn("readiness_transition", logs)
+            self.assertIn('"transition":"failed"', logs)
+            self.assertIn('"transition":"recovered"', logs)
+            self.assertIn(event["trace_id"], logs)
+            self.assertIn(event["span_id"], logs)
+
     def test_public_contract_quickstart_regression(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -26,6 +26,9 @@ from .audit import (
     expiry_for,
     export_line,
     integrity_hash,
+    legacy_span_id,
+    legacy_trace_id,
+    request_trace_context,
     safe_details,
     validate_token,
 )
@@ -72,6 +75,7 @@ SCHEMA_MIGRATIONS = (
     (4, "external_audit_reason", "reason on external MCP audit rows"),
     (5, "artifact_owner_and_current_version", "artifact owner and current version columns"),
     (6, "audit_lifecycle", "audit events, exports, retention, and legal holds"),
+    (7, "audit_trace_context", "explicit trace/span IDs and legacy audit hash backfill"),
 )
 _EXTERNAL_POLICY_KEYS = frozenset({"slack"})
 _EXTERNAL_POLICY_PUBLIC_KEYS = frozenset({"channels", "max_time_range_seconds"})
@@ -162,6 +166,8 @@ REQUIRED_SCHEMA_COLUMNS = {
             "actor_id",
             "request_id",
             "correlation_id",
+            "trace_id",
+            "span_id",
             "action",
             "outcome",
             "integrity_hash",
@@ -439,6 +445,8 @@ class FolioLattice:
                     actor_type TEXT NOT NULL,
                     request_id TEXT NOT NULL,
                     correlation_id TEXT NOT NULL,
+                    trace_id TEXT NOT NULL,
+                    span_id TEXT NOT NULL,
                     action TEXT NOT NULL,
                     resource_type TEXT NOT NULL,
                     resource_id TEXT,
@@ -510,6 +518,18 @@ class FolioLattice:
                 db.execute(
                     "ALTER TABLE external_mcp_audit ADD COLUMN reason TEXT NOT NULL DEFAULT 'unspecified'"
                 )
+            audit_event_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(audit_events)")
+            }
+            audit_trace_migration_pending = (
+                db.execute("SELECT 1 FROM schema_migrations WHERE version = 7").fetchone() is None
+            )
+            if "trace_id" not in audit_event_columns:
+                db.execute("ALTER TABLE audit_events ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''")
+            if "span_id" not in audit_event_columns:
+                db.execute("ALTER TABLE audit_events ADD COLUMN span_id TEXT NOT NULL DEFAULT ''")
+            if audit_trace_migration_pending:
+                self._migrate_audit_trace_context(db)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(artifacts)")}
             if "owner_actor_id" not in columns:
                 db.execute("ALTER TABLE artifacts ADD COLUMN owner_actor_id TEXT")
@@ -572,6 +592,48 @@ class FolioLattice:
                         ),
                     )
             self._ensure_migration_ledger(db)
+
+    @staticmethod
+    def _migrate_audit_trace_context(db: sqlite3.Connection) -> None:
+        rows = db.execute("SELECT * FROM audit_events ORDER BY occurred_at, id").fetchall()
+        for row in rows:
+            event = FolioLattice._audit_row(row)
+            details = dict(event["details"])
+
+            def valid_identifier(value: object, length: int) -> str | None:
+                return (
+                    value
+                    if isinstance(value, str) and re.fullmatch(rf"[0-9a-f]{{{length}}}", value)
+                    else None
+                )
+
+            trace_id = (
+                valid_identifier(event.get("trace_id"), 32)
+                or valid_identifier(details.pop("trace_id", None), 32)
+                or legacy_trace_id(event["id"])
+            )
+            span_id = (
+                valid_identifier(event.get("span_id"), 16)
+                or valid_identifier(details.pop("span_id", None), 16)
+                or legacy_span_id(event["id"])
+            )
+            event["details"] = details
+            event["trace_id"] = trace_id
+            event["span_id"] = span_id
+            event["integrity_hash"] = integrity_hash(
+                {key: value for key, value in event.items() if key != "integrity_hash"}
+            )
+            db.execute(
+                "UPDATE audit_events SET details_json = ?, trace_id = ?, span_id = ?, "
+                "integrity_hash = ? WHERE id = ?",
+                (
+                    json.dumps(details, sort_keys=True, separators=(",", ":")),
+                    trace_id,
+                    span_id,
+                    event["integrity_hash"],
+                    event["id"],
+                ),
+            )
 
     @staticmethod
     def _migration_checksum(version: int, name: str, contract: str) -> str:
@@ -2649,6 +2711,7 @@ class FolioLattice:
         details: Mapping[str, Any] | None,
         retention_class: str,
     ) -> dict[str, Any]:
+        event_id = new_id("audit")
         try:
             tenant_id = validate_token("tenant_id", tenant_id)
             actor_id = validate_token("actor_id", actor_id)
@@ -2663,18 +2726,25 @@ class FolioLattice:
             request_id = validate_token("request_id", request_id or new_id("req"))
             correlation_id = validate_token("correlation_id", correlation_id or request_id)
             safe = safe_details(details)
+            trace_context = request_trace_context()
+            trace_id, span_id = trace_context or (
+                legacy_trace_id(event_id),
+                legacy_span_id(event_id),
+            )
             expires_at = expiry_for(retention_class)
         except AuditValidationError as exc:
             raise FolioError(str(exc)) from exc
 
         event = {
-            "id": new_id("audit"),
+            "id": event_id,
             "occurred_at": utc_now(),
             "tenant_id": tenant_id,
             "actor_id": actor_id,
             "actor_type": "actor",
             "request_id": request_id,
             "correlation_id": correlation_id,
+            "trace_id": trace_id,
+            "span_id": span_id,
             "action": action,
             "resource_type": resource_type,
             "resource_id": resource_id,
@@ -2696,10 +2766,10 @@ class FolioLattice:
             """
             INSERT INTO audit_events(
                 id, occurred_at, tenant_id, actor_id, actor_type,
-                request_id, correlation_id, action, resource_type, resource_id,
+                request_id, correlation_id, trace_id, span_id, action, resource_type, resource_id,
                 outcome, reason, policy_version, source, details_json,
                 retention_class, expires_at, legal_hold, integrity_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event["id"],
@@ -2709,6 +2779,8 @@ class FolioLattice:
                 event["actor_type"],
                 event["request_id"],
                 event["correlation_id"],
+                event["trace_id"],
+                event["span_id"],
                 event["action"],
                 event["resource_type"],
                 event["resource_id"],
@@ -2837,7 +2909,7 @@ class FolioLattice:
         with self.connect() as db:
             rows = db.execute(
                 "SELECT id, occurred_at, tenant_id, actor_id, actor_type, request_id, "
-                "correlation_id, action, resource_type, resource_id, outcome, reason, "
+                "correlation_id, trace_id, span_id, action, resource_type, resource_id, outcome, reason, "
                 "policy_version, source, details_json, retention_class, expires_at, "
                 "legal_hold, integrity_hash FROM audit_events WHERE "
                 + " AND ".join(conditions)
@@ -2884,7 +2956,7 @@ class FolioLattice:
         params.append(requested_limit + 1)
         select = (
             "SELECT id, occurred_at, tenant_id, actor_id, actor_type, request_id, "
-            "correlation_id, action, resource_type, resource_id, outcome, reason, "
+            "correlation_id, trace_id, span_id, action, resource_type, resource_id, outcome, reason, "
             "policy_version, source, details_json, retention_class, expires_at, "
             "legal_hold, integrity_hash FROM audit_events WHERE "
             + " AND ".join(conditions)
@@ -3011,7 +3083,7 @@ class FolioLattice:
             self._ensure_tenant(db, tenant_id)
             rows = db.execute(
                 "SELECT id, occurred_at, tenant_id, actor_id, actor_type, request_id, "
-                "correlation_id, action, resource_type, resource_id, outcome, reason, "
+                "correlation_id, trace_id, span_id, action, resource_type, resource_id, outcome, reason, "
                 "policy_version, source, details_json, retention_class, expires_at, "
                 "legal_hold, integrity_hash FROM audit_events WHERE tenant_id = ? "
                 f"AND id IN ({placeholders})",

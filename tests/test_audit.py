@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import logging
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +12,12 @@ from unittest.mock import patch
 
 from mcp import Client
 
-from folio_lattice.audit import integrity_hash
+from folio_lattice.audit import (
+    AUDIT_SCHEMA_VERSION,
+    integrity_hash,
+    legacy_span_id,
+    legacy_trace_id,
+)
 from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.ops import main as ops_main
@@ -22,7 +29,13 @@ async def unused_app(scope: Any, receive: Any, send: Any) -> None:
     del scope, receive, send
 
 
-async def call_http(app: FolioHttpApp, path: str) -> tuple[int, dict[str, str], bytes]:
+async def call_http(
+    app: FolioHttpApp,
+    path: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, str], bytes]:
     messages = [
         {"type": "http.request", "body": b"", "more_body": False},
     ]
@@ -37,11 +50,14 @@ async def call_http(app: FolioHttpApp, path: str) -> tuple[int, dict[str, str], 
     await app(
         {
             "type": "http",
-            "method": "GET",
+            "method": method,
             "path": path,
             "raw_path": path.encode(),
             "query_string": b"",
-            "headers": [],
+            "headers": [
+                (key.lower().encode("ascii"), value.encode("ascii"))
+                for key, value in (headers or {}).items()
+            ],
             "scheme": "http",
             "client": ("127.0.0.1", 1234),
             "server": ("testserver", 80),
@@ -181,6 +197,131 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT COUNT(*) FROM audit_events WHERE tenant_id = 'tenant-b'"
             ).fetchone()[0]
         self.assertEqual(tenant_b_remaining, 1)
+
+    def test_fresh_audit_schema_persists_trace_fields_and_exports_them(self) -> None:
+        event = self.service.record_audit_event(
+            tenant_id="tenant-a", actor_id="auditor", action="fresh", outcome="allowed"
+        )
+        with self.service.connect() as db:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(audit_events)")}
+        self.assertIn("trace_id", columns)
+        self.assertIn("span_id", columns)
+        self.assertRegex(event["trace_id"], r"^[0-9a-f]{32}$")
+        self.assertRegex(event["span_id"], r"^[0-9a-f]{16}$")
+        export = self.service.export_audit_events("tenant-a", actor="auditor")
+        self.assertEqual(export["schema_version"], AUDIT_SCHEMA_VERSION)
+        exported = next(item for item in export["events"] if item["id"] == event["id"])
+        self.assertEqual(exported["trace_id"], event["trace_id"])
+        self.assertEqual(exported["span_id"], event["span_id"])
+
+    def test_trace_schema_migration_backfills_and_rehashes_legacy_rows(self) -> None:
+        legacy = self.service.record_audit_event(
+            tenant_id="tenant-a",
+            actor_id="auditor",
+            action="legacy",
+            outcome="allowed",
+            details={"status_code": 200},
+        )
+        with self.service.connect() as db:
+            row = dict(
+                db.execute("SELECT * FROM audit_events WHERE id = ?", (legacy["id"],)).fetchone()
+            )
+            row["details"] = json.loads(row.pop("details_json"))
+            row.pop("trace_id")
+            row.pop("span_id")
+            row["legal_hold"] = bool(row["legal_hold"])
+            row["integrity_hash"] = integrity_hash(row)
+            db.execute("ALTER TABLE audit_events DROP COLUMN trace_id")
+            db.execute("ALTER TABLE audit_events DROP COLUMN span_id")
+            db.execute(
+                "UPDATE audit_events SET integrity_hash = ? WHERE id = ?",
+                (row["integrity_hash"], legacy["id"]),
+            )
+            db.execute("DELETE FROM schema_migrations WHERE version = 7")
+
+        self.service.initialize()
+        migrated = next(
+            item
+            for item in self.service.list_audit_events("tenant-a", actor="auditor")
+            if item["id"] == legacy["id"]
+        )
+        self.assertEqual(migrated["trace_id"], legacy_trace_id(legacy["id"]))
+        self.assertEqual(migrated["span_id"], legacy_span_id(legacy["id"]))
+        self.assertNotIn("trace_id", migrated["details"])
+        self.assertNotIn("span_id", migrated["details"])
+        self.assertEqual(
+            migrated["integrity_hash"],
+            integrity_hash(
+                {key: value for key, value in migrated.items() if key != "integrity_hash"}
+            ),
+        )
+        export = self.service.export_audit_events("tenant-a", actor="auditor")
+        exported = next(item for item in export["events"] if item["id"] == legacy["id"])
+        self.assertEqual(exported["trace_id"], migrated["trace_id"])
+        self.assertEqual(exported["span_id"], migrated["span_id"])
+        with self.service.connect() as db:
+            ledger = db.execute(
+                "SELECT version, name FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        self.assertEqual(ledger[-1]["version"], 7)
+        self.assertEqual(ledger[-1]["name"], "audit_trace_context")
+        before_repeat = (migrated["trace_id"], migrated["span_id"], migrated["integrity_hash"])
+        self.service.initialize()
+        repeated = next(
+            item
+            for item in self.service.list_audit_events("tenant-a", actor="auditor")
+            if item["id"] == legacy["id"]
+        )
+        self.assertEqual(
+            (repeated["trace_id"], repeated["span_id"], repeated["integrity_hash"]),
+            before_repeat,
+        )
+        self.assertEqual(
+            self.service._expected_migration_rows()[-1][2],
+            FolioLattice._migration_checksum(
+                7, "audit_trace_context", "explicit trace/span IDs and legacy audit hash backfill"
+            ),
+        )
+
+    def test_trace_migration_rolls_back_when_interrupted(self) -> None:
+        legacy = self.service.record_audit_event(
+            tenant_id="tenant-a", actor_id="auditor", action="legacy", outcome="allowed"
+        )
+        with self.service.connect() as db:
+            db.execute("ALTER TABLE audit_events DROP COLUMN trace_id")
+            db.execute("ALTER TABLE audit_events DROP COLUMN span_id")
+            db.execute("DELETE FROM schema_migrations WHERE version = 7")
+
+        with patch.object(
+            FolioLattice,
+            "_migrate_audit_trace_context",
+            side_effect=RuntimeError("simulated interrupted migration"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                self.service.initialize()
+
+        with self.service.connect() as db:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(audit_events)")}
+            self.assertNotIn("trace_id", columns)
+            self.assertNotIn("span_id", columns)
+            self.assertIsNone(
+                db.execute("SELECT 1 FROM schema_migrations WHERE version = 7").fetchone()
+            )
+
+        self.service.initialize()
+        migrated = next(
+            item
+            for item in self.service.list_audit_events("tenant-a", actor="auditor")
+            if item["id"] == legacy["id"]
+        )
+        self.assertEqual(migrated["trace_id"], legacy_trace_id(legacy["id"]))
+        self.assertEqual(migrated["span_id"], legacy_span_id(legacy["id"]))
+        self.assertEqual(
+            migrated["integrity_hash"],
+            integrity_hash(
+                {key: value for key, value in migrated.items() if key != "integrity_hash"}
+            ),
+        )
 
     def test_integrity_windows_pagination_size_and_atomicity(self) -> None:
         first = self.service.record_audit_event(
@@ -448,6 +589,65 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
         metrics = json.loads(body)
         self.assertGreaterEqual(metrics["audit_events_total"], 2)
         self.assertGreaterEqual(metrics["audit_exports_total"], 1)
+
+    async def test_http_audit_correlates_trace_span_and_readiness_transitions(self) -> None:
+        log_stream = io.StringIO()
+        audit_logger = logging.Logger("audit-observability-test")
+        audit_logger.addHandler(logging.StreamHandler(log_stream))
+        app = FolioHttpApp(
+            unused_app,
+            self.service,
+            unused_app,
+            deployment_mode="local",
+            control_origin="http://testserver",
+            audit_logger=audit_logger,
+            local_tenant_id="acme",
+            local_actor_id="auditor",
+        )
+
+        with patch.object(
+            self.service,
+            "readiness",
+            side_effect=[
+                {"status": "ok", "ready": True, "dependencies": {"database": {"ready": True}}},
+                {
+                    "status": "not_ready",
+                    "ready": False,
+                    "dependencies": {"database": {"ready": False}},
+                },
+                {"status": "ok", "ready": True, "dependencies": {"database": {"ready": True}}},
+            ],
+        ):
+            self.assertEqual((await call_http(app, "/readyz"))[0], 200)
+            self.assertEqual((await call_http(app, "/readyz"))[0], 503)
+            self.assertEqual((await call_http(app, "/readyz"))[0], 200)
+
+        status, _, _ = await call_http(
+            app,
+            "/auth/logout",
+            method="POST",
+            headers={"Origin": "http://testserver", "X-Correlation-ID": "corr-http"},
+        )
+        self.assertEqual(status, 204)
+        status, _, body = await call_http(app, "/metrics")
+        self.assertEqual(status, 200)
+        metrics = json.loads(body)
+        self.assertEqual(metrics["readiness_failures_total"], 1)
+        self.assertEqual(metrics["readiness_recoveries_total"], 1)
+
+        event = next(
+            event
+            for event in self.service.list_audit_events("acme", actor="auditor")
+            if event["action"] == "logout_succeeded"
+        )
+        self.assertRegex(event["trace_id"], r"^[0-9a-f]{32}$")
+        self.assertRegex(event["span_id"], r"^[0-9a-f]{16}$")
+        logs = log_stream.getvalue()
+        self.assertIn('"event":"readiness_transition"', logs)
+        self.assertIn('"transition":"failed"', logs)
+        self.assertIn('"transition":"recovered"', logs)
+        self.assertIn(event["trace_id"], logs)
+        self.assertIn(event["span_id"], logs)
 
 
 if __name__ == "__main__":

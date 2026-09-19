@@ -699,7 +699,7 @@ def build_mcp_server(
     @server.tool(
         description=(
             "Export bounded, tenant-scoped security audit events as an integrity-checkable "
-            "audit-v1 result. Events contain opaque IDs and reason codes only; content, "
+            "audit-v2 result. Events contain opaque IDs and reason codes only; content, "
             "credentials, arguments, and raw URLs are excluded. Continue with next_cursor."
         )
     )

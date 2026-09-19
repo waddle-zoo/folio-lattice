@@ -27,6 +27,11 @@ from starlette.authentication import AuthCredentials
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .audit import (
+    request_trace_context,
+    reset_request_trace_context,
+    set_request_trace_context,
+)
 from .auth import (
     AuthenticationError,
     JwksClient,
@@ -679,6 +684,10 @@ class FolioHttpApp:
         self.principal_relay = principal_relay
         self.audit_logger = audit_logger or logging.getLogger("folio_lattice.audit")
         self.audit_logger.setLevel(logging.INFO)
+        self._readiness_state: bool | None = None
+        self._readiness_failed_dependencies: tuple[str, ...] = ()
+        self._readiness_failures_total = 0
+        self._readiness_recoveries_total = 0
         self._auth_rate_limiters = {
             "/auth/start": _BoundedRateLimiter(limit=AUTH_START_RATE_LIMIT),
             "/auth/callback": _BoundedRateLimiter(limit=AUTH_CALLBACK_RATE_LIMIT),
@@ -697,6 +706,16 @@ class FolioHttpApp:
             raise ValueError("hosted mode requires configured OIDC authentication")
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._handle_http(scope, receive, send)
+            return
+        trace_token = set_request_trace_context(uuid.uuid4().hex, uuid.uuid4().hex[:16])
+        try:
+            await self._handle_http(scope, receive, send)
+        finally:
+            reset_request_trace_context(trace_token)
+
+    async def _handle_http(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
             return
@@ -773,6 +792,12 @@ class FolioHttpApp:
             return
         if scope["method"] == "GET" and scope["path"] == "/metrics":
             metrics: dict[str, Any] = dict(self.service.audit_metrics())
+            metrics.update(
+                {
+                    "readiness_failures_total": self._readiness_failures_total,
+                    "readiness_recoveries_total": self._readiness_recoveries_total,
+                }
+            )
             if self.deployment_mode == "hosted":
                 metrics.update(
                     {
@@ -1120,7 +1145,49 @@ class FolioHttpApp:
                 ),
             }
         )
+        self._record_readiness_transition(readiness)
         return readiness
+
+    def _record_readiness_transition(self, readiness: dict[str, Any]) -> None:
+        ready = readiness["ready"] is True
+        failed_dependencies = tuple(
+            sorted(
+                name
+                for name, dependency in readiness["dependencies"].items()
+                if not isinstance(dependency, dict) or dependency.get("ready") is not True
+            )
+        )
+        previous = self._readiness_state
+        previous_failed = self._readiness_failed_dependencies
+        self._readiness_state = ready
+        self._readiness_failed_dependencies = failed_dependencies
+        if previous is None or previous == ready:
+            return
+        if ready:
+            self._readiness_recoveries_total += 1
+            transition = "recovered"
+            reason = "dependencies_recovered"
+        else:
+            self._readiness_failures_total += 1
+            transition = "failed"
+            reason = "dependency_not_ready"
+        trace_context = request_trace_context() or ("unknown", "unknown")
+        self.audit_logger.warning(
+            "readiness_transition %s",
+            json.dumps(
+                {
+                    "event": "readiness_transition",
+                    "failed_dependencies": list(failed_dependencies),
+                    "previous_failed_dependencies": list(previous_failed),
+                    "reason": reason,
+                    "span_id": trace_context[1],
+                    "trace_id": trace_context[0],
+                    "transition": transition,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
 
     def _identity_ready(self) -> bool:
         if (
@@ -1508,6 +1575,7 @@ class FolioHttpApp:
         actor_id = principal.actor_id if principal is not None else self.local_actor_id
         tenant_id = tenant_id or "unknown"
         actor_id = actor_id or "unknown"
+        trace_context = request_trace_context() or ("unknown", "unknown")
         record = {
             "event": event,
             "correlation_id": correlation_id,
@@ -1516,6 +1584,8 @@ class FolioHttpApp:
             "path": scope.get("path", ""),
             "request_id": request_id,
             "status": status,
+            "span_id": trace_context[1],
+            "trace_id": trace_context[0],
         }
         self.audit_logger.info(
             "auth_audit %s",

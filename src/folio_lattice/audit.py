@@ -4,10 +4,11 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-AUDIT_SCHEMA_VERSION = "audit-v1"
+AUDIT_SCHEMA_VERSION = "audit-v2"
 AUDIT_MAX_EVENTS_PER_EXPORT = 10_000
 AUDIT_MAX_EXPORT_BYTES = 1 * 1024 * 1024
 AUDIT_EXPORT_TTL_SECONDS = 24 * 60 * 60
@@ -32,10 +33,33 @@ AUDIT_DETAIL_KEYS = frozenset(
     }
 )
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:/-]{1,255}$")
+_REQUEST_TRACE_CONTEXT: ContextVar[tuple[str, str] | None] = ContextVar(
+    "folio_request_trace_context", default=None
+)
 
 
 class AuditValidationError(ValueError):
     """A client supplied audit field is outside the bounded safe contract."""
+
+
+def request_trace_context() -> tuple[str, str] | None:
+    return _REQUEST_TRACE_CONTEXT.get()
+
+
+def set_request_trace_context(trace_id: str, span_id: str) -> Any:
+    return _REQUEST_TRACE_CONTEXT.set((trace_id, span_id))
+
+
+def reset_request_trace_context(token: Any) -> None:
+    _REQUEST_TRACE_CONTEXT.reset(token)
+
+
+def legacy_trace_id(event_id: str) -> str:
+    return hashlib.sha256(f"folio-legacy-trace:{event_id}".encode()).hexdigest()[:32]
+
+
+def legacy_span_id(event_id: str) -> str:
+    return hashlib.sha256(f"folio-legacy-span:{event_id}".encode()).hexdigest()[:16]
 
 
 def validate_token(field: str, value: object, *, allow_empty: bool = False) -> str:
