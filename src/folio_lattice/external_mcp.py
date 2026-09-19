@@ -25,6 +25,7 @@ MAX_CREDENTIAL_SCAN_DEPTH = 32
 MAX_CREDENTIAL_SCAN_NODES = 4_096
 MAX_CREDENTIAL_SCAN_STRING_BYTES = 64 * 1024
 MAX_CREDENTIAL_DECODE_PASSES = 2
+MAX_EXCEPTION_SCAN_NODES = 256
 EXTERNAL_RATE_LIMIT = 600
 EXTERNAL_RATE_WINDOW_SECONDS = 60.0
 EXTERNAL_RATE_MAX_KEYS = 4096
@@ -309,6 +310,8 @@ class HttpExternalMcpTransport:
         pending = [error]
         seen: set[int] = set()
         while pending:
+            if len(seen) >= MAX_EXCEPTION_SCAN_NODES:
+                return False
             current = pending.pop()
             identity = id(current)
             if identity in seen:

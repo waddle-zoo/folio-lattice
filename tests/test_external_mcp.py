@@ -22,6 +22,7 @@ except ImportError:
 from folio_lattice.auth import Principal, reset_request_principal, set_request_principal
 from folio_lattice.external_mcp import (
     MAX_CREDENTIAL_DECODE_PASSES,
+    MAX_EXCEPTION_SCAN_NODES,
     CredentialResolver,
     ExternalMcpBroker,
     ExternalMcpError,
@@ -1255,6 +1256,26 @@ class ExternalMcpHttpTransportTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ExternalMcpError, "external MCP transport timed out"):
             WrappedTimeoutTransport().health(ENDPOINT, credential=None)
+
+    def test_transport_exception_scan_budget_fails_closed(self) -> None:
+        class DeepExceptionTransport(HttpExternalMcpTransport):
+            async def _timed_request(
+                self,
+                endpoint: str,
+                credential: str | None,
+                operation: str,
+                value: Any,
+            ) -> Any:
+                del endpoint, credential, operation, value
+                error: BaseException = TimeoutError()
+                for _ in range(MAX_EXCEPTION_SCAN_NODES + 1):
+                    wrapper = RuntimeError("wrapped upstream failure")
+                    wrapper.__context__ = error
+                    error = wrapper
+                raise error
+
+        with self.assertRaisesRegex(ExternalMcpError, "external MCP transport unavailable"):
+            DeepExceptionTransport().health(ENDPOINT, credential=None)
 
 
 class ExternalMcpPublicContractTests(unittest.IsolatedAsyncioTestCase):
