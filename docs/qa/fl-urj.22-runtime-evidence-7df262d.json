@@ -1,0 +1,73 @@
+{
+  "gate": "fl-urj.22",
+  "reviewed_at": "2026-09-19T21:32:39Z",
+  "protected_head": "7df262df039c15e6f6c0c10584d429924df029d1",
+  "executable_product_tree": "0f852ac16b3ff8333e991f9d5e66c5b0494b2345",
+  "product_tree_diff": "none for src Dockerfile docker-compose.yml",
+  "source_tests": {
+    "command": "uv run pytest -q tests/test_audit.py tests/test_deployment.py",
+    "result": "18 passed, 9 subtests passed",
+    "audit_py_sha256": "ff41a4c2fe618e66e453e51a3f24c067f14ed22dbeab73b4c77d3d2518a14bed",
+    "service_py_sha256": "04c9e04f40523efdd8ea2a80cdb6e61b704a4aafac0aa681bcba0b06723e0d7c",
+    "test_audit_py_sha256": "daf7eed2810b9485937953dbc2a919a4e5232c8708f7332ab2abf047e47db93c"
+  },
+  "full_make_check": {
+    "command": "make check",
+    "result": "exit 0; 248 passed, 8 skipped; coverage 81.08%; Ruff, format, and mypy passed"
+  },
+  "migration_ledger": {
+    "versions": [1, 2, 3, 4, 5, 6],
+    "runtime_ready": true,
+    "checksums_64_hex": true
+  },
+  "runtime_probe": {
+    "command": "uv run python docs/qa/fl-urj.22_audit_runtime_probe.py",
+    "probe_id": "fl22-9e710f065e9c",
+    "script_sha256": "f8970e4dda948850dc9194223ed1761661249bf9c31778f6116a13dd012ee767",
+    "transport": "real TCP local-mode subprocess",
+    "state": "unique temporary DB/blob root; cleanup verified",
+    "audit": {
+      "required_fields": true,
+      "total_ordering": true,
+      "event_count": 5,
+      "authorized_export": true,
+      "checksum": true,
+      "cross_tenant_denial": true,
+      "content_token_credential_exclusion": true,
+      "rejected_secret_input": true,
+      "retention_purged_unheld": true,
+      "legal_hold_retained": true
+    },
+    "readiness": {
+      "initial_ready": true,
+      "liveness_initial": true,
+      "missing_db_fails_ready": true,
+      "missing_db_stays_live": true,
+      "restored_db_recovers_ready": true,
+      "second_process_ready": true,
+      "second_process_live": true
+    },
+    "metrics": {
+      "status": 200,
+      "audit_keys_present": true,
+      "tenant_free": true
+    },
+    "observability": {
+      "request_correlation_persisted": true,
+      "structured_log_correlation": true,
+      "trace_id_or_span_id": {
+        "status": "OPEN",
+        "reason": "No trace_id/span_id or tracing backend exists in checked product tree."
+      },
+      "alert_delivery": {
+        "status": "OPEN",
+        "signal": "readyz returned HTTP 503 with missing DB and HTTP 200 after restore",
+        "reason": "No alert sink or notification delivery exists in checked runtime."
+      }
+    }
+  },
+  "closure": {
+    "status": "OPEN",
+    "reason": "Trace correlation and explicit alert delivery remain unmapped/open; readiness failure and recovery are proven."
+  }
+}
