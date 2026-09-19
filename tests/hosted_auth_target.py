@@ -38,6 +38,7 @@ APPROVED_UPSTREAM_ENDPOINT = "https://approved-upstream.test/mcp"
 PRIVATE_SEED = bytes(range(32))
 RESTART_READY_TIMEOUT_SECONDS = 10.0
 RESTART_POLL_INTERVAL_SECONDS = 0.05
+HOSTED_UPSTREAM_TIMEOUT_SECONDS = 1.0
 _BOOT_ID = os.urandom(16).hex()
 
 PROFILES = {
@@ -250,7 +251,7 @@ class _LoopbackExternalTransport:
                 return "127.0.0.1", ("127.0.0.1",)
 
         self.local_endpoint = local_endpoint
-        self.transport = TestOnlyLoopbackHttpTransport(timeout_seconds=0.25)
+        self.transport = TestOnlyLoopbackHttpTransport(timeout_seconds=HOSTED_UPSTREAM_TIMEOUT_SECONDS)
 
     def validate_registration(self, endpoint: str) -> None:
         self._endpoint(endpoint)
