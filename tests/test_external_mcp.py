@@ -455,6 +455,34 @@ class ExternalMcpServiceTests(unittest.TestCase):
                 reason="approved",
             )
 
+    def test_broker_rejects_malformed_registration_with_stable_error(self) -> None:
+        broker = ExternalMcpBroker(self.service, transport=FakeTransport())
+        cases = (
+            {"approved_tools": None},
+            {"approved_tools": [object()]},
+            {"name": None},
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                values: dict[str, Any] = {
+                    "tenant_id": "acme",
+                    "actor": "admin",
+                    "name": "malformed",
+                    "endpoint": ENDPOINT,
+                    "approved_tools": [TOOL],
+                    "approved_resources": [],
+                    "allowed_origins": [ORIGIN],
+                    "credential_ref": None,
+                    "reason": "approved",
+                }
+                values.update(overrides)
+                with self.assertRaisesRegex(
+                    ExternalMcpError, "external MCP registration is invalid"
+                ) as raised:
+                    broker.register(**values)
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertIsNone(raised.exception.__context__)
+
     def test_broker_sanitizes_transport_registration_error(self) -> None:
         secret = "registration-transport-secret"
         transport = FakeTransport()

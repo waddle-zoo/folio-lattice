@@ -612,7 +612,14 @@ class ExternalMcpBroker:
         allowed_origins: list[str],
         policy: object,
     ) -> None:
-        if not isinstance(policy, Mapping):
+        lists = (approved_tools, approved_resources, allowed_origins)
+        if (
+            not isinstance(name, str)
+            or not isinstance(endpoint, str)
+            or any(not isinstance(items, list) for items in lists)
+            or any(not isinstance(value, str) for items in lists for value in items)
+            or not isinstance(policy, Mapping)
+        ):
             raise ExternalMcpError("external MCP registration is invalid")
         if len(name) > 255 or len(endpoint) > 4_096:
             raise ExternalMcpError("external MCP registration value is too large")
