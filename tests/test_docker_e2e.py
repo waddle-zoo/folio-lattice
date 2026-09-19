@@ -6,10 +6,12 @@ import asyncio
 import base64
 import json
 import os
+import socket
 import subprocess
 import time
 from typing import Any
 from urllib.error import HTTPError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from hyperset_consumer import exercise
@@ -66,20 +68,37 @@ def wait_ready(base_url: str) -> dict[str, Any]:
 
 
 def assert_oversized_human_gateway_recovers(base_url: str) -> None:
-    request = Request(
-        f"{base_url}/api/mcp",
-        data=b"x" * (13 * 1024 * 1024 + 1),
-        headers={"Content-Type": "application/json", "Origin": base_url},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=10):
-            raise AssertionError("human gateway accepted oversized request")
-    except HTTPError as error:
-        assert error.code == 413
-        assert error.headers["Retry-After"] == "0"
-        assert error.headers["Cache-Control"] == "no-store"
-        response = json.loads(error.read())
+    parsed = urlsplit(base_url)
+    assert parsed.hostname is not None
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    maximum = 13 * 1024 * 1024
+    with socket.create_connection((parsed.hostname, port), timeout=10) as connection:
+        connection.settimeout(10)
+        connection.sendall(
+            (
+                f"POST /api/mcp HTTP/1.1\r\n"
+                f"Host: {parsed.netloc}\r\n"
+                "Content-Type: application/json\r\n"
+                f"Origin: {base_url}\r\n"
+                f"Content-Length: {maximum + 1}\r\n\r\n"
+            ).encode()
+            + b"{"
+        )
+        raw = bytearray()
+        while chunk := connection.recv(65536):
+            raw.extend(chunk)
+    header_bytes, body = bytes(raw).split(b"\r\n\r\n", 1)
+    lines = header_bytes.splitlines()
+    assert lines[0].startswith(b"HTTP/1.1 413 "), lines[0]
+    headers = {
+        line.split(b": ", 1)[0].lower(): line.split(b": ", 1)[1]
+        for line in lines[1:]
+        if b": " in line
+    }
+    assert headers[b"retry-after"] == b"0"
+    assert headers[b"cache-control"] == b"no-store"
+    assert len(body) < 512
+    response = json.loads(body)
     assert response["code"] == "request_too_large"
     assert response["error"] == "request body too large"
     assert response["request_id"]
