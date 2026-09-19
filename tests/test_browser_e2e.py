@@ -652,6 +652,19 @@ class BrowserSandboxE2ETests(unittest.TestCase):
                 ):
                     self.assertIn(expected_name, names)
 
+                # The settings surface must remain usable at the narrow mobile
+                # width used by the acceptance gate before keyboard interaction.
+                chrome.command(
+                    "Emulation.setDeviceMetricsOverride",
+                    {"width": 360, "height": 900, "deviceScaleFactor": 1, "mobile": False},
+                )
+                self.assertTrue(
+                    chrome.evaluate(
+                        "document.documentElement.scrollWidth <= window.innerWidth && "
+                        "document.body.scrollWidth <= window.innerWidth"
+                    )
+                )
+
                 # Pointer path: register a real connection through the public UI.
                 chrome.evaluate(
                     "document.querySelector('#connection-name').value='Browser calendar'; "
