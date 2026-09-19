@@ -251,7 +251,9 @@ class _LoopbackExternalTransport:
                 return "127.0.0.1", ("127.0.0.1",)
 
         self.local_endpoint = local_endpoint
-        self.transport = TestOnlyLoopbackHttpTransport(timeout_seconds=HOSTED_UPSTREAM_TIMEOUT_SECONDS)
+        self.transport = TestOnlyLoopbackHttpTransport(
+            timeout_seconds=HOSTED_UPSTREAM_TIMEOUT_SECONDS
+        )
 
     def validate_registration(self, endpoint: str) -> None:
         self._endpoint(endpoint)
