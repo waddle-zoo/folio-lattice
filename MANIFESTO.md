@@ -107,6 +107,17 @@ tests as well as successful examples. A local prototype without verified
 identity must fail closed in hosted mode and must not be described as
 enterprise-ready, even when its storage and sandbox boundaries are sound.
 
+### Current enterprise release decision
+
+As of 2026-09-19, the release decision is **OPEN / BLOCKED**. Candidate
+`8183d6603c4584673070bc29e9f4a6f823de114f`, directly descended from canonical
+`eae08dd75f93bfa3b38215c495cd5e7ef481be`, passed independent integration review
+for its narrow malformed-registration fix and landed on `main`. That fix is not
+evidence for the remaining hosted, operational, supply-chain, accessibility,
+backup, and repeated fresh-state gates. No enterprise-readiness claim is
+authorized until those public-path gates are complete and independently
+reviewed.
+
 ## Boundaries for the first phase
 
 The first phase deliberately excludes:

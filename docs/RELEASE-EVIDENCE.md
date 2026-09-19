@@ -8,6 +8,21 @@
 - Claim: bounded local public-contract UI and renderer security slice
 - Enterprise-ready: **no**
 
+## Current integration decision
+
+- Reviewed: 2026-09-19
+- Candidate: `8183d6603c4584673070bc29e9f4a6f823de114f`
+- Required ancestry: exact parent `eae08dd75f93bfa3b38215c495cd5e7ef481be`
+- Integration review: **PASS**; focused `tests/test_external_mcp.py` rerun passed
+  31 tests and 30 subtests from a separate checkout.
+- Decision: **OPEN / BLOCKED** — candidate landed on `origin/main`, but enterprise
+  promotion remains blocked until all required release gates have exact,
+  repeated, independently reviewed evidence.
+
+The candidate closes malformed external-MCP registration handling only. It does
+not close the independent pentest, accessibility, backup/restore, hosted
+operations, supply-chain, or repeated fresh-state evidence blockers below.
+
 ## Required evidence
 
 Results are recorded only after the exact command completes. A passing private

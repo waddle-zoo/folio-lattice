@@ -3,6 +3,16 @@
 - Status: Accepted; implementation gated
 - Date: 2026-09-07
 
+## Current release decision
+
+As of 2026-09-19, enterprise promotion is **OPEN / BLOCKED**. Candidate
+`8183d6603c4584673070bc29e9f4a6f823de114f` is a clean descendant of canonical
+`eae08dd75f93bfa3b38215c495cd5e7ef481be` and passed independent focused review
+for malformed external-MCP registration handling. It is landed on `main`, but
+this narrow fix does not satisfy the ADR's full observability, supply-chain,
+security-assurance, or independent-review gates. Promotion stays blocked until
+the required exact-commit evidence and residual-risk decisions are recorded.
+
 ## Context
 
 Security controls fail silently when authentication, tenant policy, sandbox
