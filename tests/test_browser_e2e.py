@@ -867,7 +867,10 @@ parent.postMessage({{type: 'folio-linked-assets', value: linked ? 'linked-assets
                     root / "chrome-hostile",
                     download_directory=root / "chrome-hostile" / "downloads",
                 )
-                chrome.wait("document.querySelector('#result')?.textContent !== 'waiting'")
+                chrome.wait(
+                    "document.querySelector('#result')?.textContent && "
+                    "document.querySelector('#result').textContent !== 'waiting'"
+                )
                 hostile_dom = chrome.evaluate("document.documentElement.outerHTML")
                 match = re.search(r'<pre id="result">(.*?)</pre>', hostile_dom, re.DOTALL)
                 self.assertIsNotNone(match, hostile_dom)
