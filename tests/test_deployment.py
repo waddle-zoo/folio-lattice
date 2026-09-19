@@ -205,6 +205,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn(audience, renderer)
         self.assertNotIn("FOLIO_MCP_URL:", folio)
         self.assertIn("FOLIO_MCP_URL: https://folio:8000/mcp", renderer)
+        self.assertIn(
+            "FOLIO_RENDER_ORIGIN: ${FOLIO_RENDER_ORIGIN:?set the hosted renderer origin}",
+            renderer,
+        )
 
         hosted_env = {
             "FOLIO_DEPLOYMENT_MODE": "hosted",

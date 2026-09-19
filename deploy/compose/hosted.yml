@@ -69,6 +69,7 @@ services:
       FOLIO_TENANT_ID: ${FOLIO_RENDERER_TENANT_ID:?set renderer service tenant}
       FOLIO_ACTOR: ${FOLIO_RENDERER_ACTOR:?set renderer service actor}
       FOLIO_CONTROL_ORIGIN: ${FOLIO_CONTROL_ORIGIN:?set the hosted control origin}
+      FOLIO_RENDER_ORIGIN: ${FOLIO_RENDER_ORIGIN:?set the hosted renderer origin}
       FOLIO_RENDERER_CAPABILITY_SECRET: ${FOLIO_RENDERER_CAPABILITY_SECRET:?set renderer capability secret}
       FOLIO_TLS_CERTFILE: /run/secrets/tls_cert
       FOLIO_TLS_KEYFILE: /run/secrets/tls_key
