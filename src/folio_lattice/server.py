@@ -198,6 +198,7 @@ class Settings:
     control_origin: str
     render_origin: str
     mcp_url: str | None
+    renderer_relay_audience: str | None
     renderer_capability_secret: str | None
     deployment_mode: str
     bridge_timeout_seconds: float
@@ -309,6 +310,7 @@ class Settings:
             control_origin=_origin_env("FOLIO_CONTROL_ORIGIN", "http://127.0.0.1:8000"),
             render_origin=_origin_env("FOLIO_RENDER_ORIGIN", "http://127.0.0.1:8001"),
             mcp_url=_optional_mcp_url_env("FOLIO_MCP_URL"),
+            renderer_relay_audience=_optional_relay_audience_env("FOLIO_RENDERER_RELAY_AUDIENCE"),
             renderer_capability_secret=os.environ.get("FOLIO_RENDERER_CAPABILITY_SECRET"),
             deployment_mode=deployment_mode,
             bridge_timeout_seconds=_positive_float_env("FOLIO_BRIDGE_TIMEOUT_SECONDS", 5),
@@ -602,6 +604,19 @@ def _optional_mcp_url_env(name: str) -> str | None:
         raise ValueError(f"{name} must be an HTTP URL ending in /mcp without credentials")
     bracketed_host = f"[{host}]" if ":" in host else host
     return f"{parsed.scheme}://{bracketed_host}{f':{port}' if port is not None else ''}/mcp"
+
+
+def _optional_relay_audience_env(name: str) -> str | None:
+    value = _optional_mcp_url_env(name)
+    if value is not None and not value.startswith("https://"):
+        raise ValueError(f"{name} must be an exact HTTPS /mcp URL")
+    return value
+
+
+def _renderer_relay_audience(settings: Settings, mcp_endpoint: str) -> str:
+    if settings.deployment_mode == "hosted" and settings.renderer_relay_audience is None:
+        raise ValueError("hosted mode requires FOLIO_RENDERER_RELAY_AUDIENCE")
+    return settings.renderer_relay_audience or mcp_endpoint
 
 
 class FolioHttpApp:
@@ -1798,6 +1813,15 @@ def build_runtime(settings: Settings) -> tuple[FolioLattice, Any, OidcAuthentica
 
 def run_http(host: str, port: int) -> None:
     settings = Settings.from_env()
+    connect_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    scheme = "https" if settings.tls_certfile else "http"
+    local_mcp_endpoint = f"{scheme}://{connect_host}:{port}/mcp"
+    mcp_endpoint = settings.mcp_url or local_mcp_endpoint
+    if settings.deployment_mode == "hosted" and mcp_endpoint != local_mcp_endpoint:
+        raise ValueError(
+            "hosted mode requires FOLIO_MCP_URL to resolve to this server's local /mcp endpoint"
+        )
+    relay_audience = _renderer_relay_audience(settings, mcp_endpoint)
     service, mcp, authenticator = build_runtime(settings)
     backup_operations = build_backup_operations() if settings.deployment_mode == "hosted" else None
     tls_certificate = (
@@ -1838,17 +1862,13 @@ def run_http(host: str, port: int) -> None:
         max_request_body_size=settings.max_request_bytes,
         host=host,
     )
-    connect_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
-    scheme = "https" if settings.tls_certfile else "http"
-    local_mcp_endpoint = f"{scheme}://{connect_host}:{port}/mcp"
-    mcp_endpoint = settings.mcp_url or local_mcp_endpoint
-    if settings.deployment_mode == "hosted" and mcp_endpoint != local_mcp_endpoint:
-        raise ValueError(
-            "hosted mode requires FOLIO_MCP_URL to resolve to this server's local /mcp endpoint"
-        )
     principal_relay: SignedPrincipalRelay | TrustedPrincipalRelay | None
     if settings.renderer_capability_secret is not None:
-        principal_relay = SignedPrincipalRelay(mcp_endpoint, settings.renderer_capability_secret)
+        principal_relay = SignedPrincipalRelay(
+            mcp_endpoint,
+            settings.renderer_capability_secret,
+            audience=relay_audience,
+        )
     elif settings.deployment_mode == "hosted" and mcp_endpoint == local_mcp_endpoint:
         principal_relay = TrustedPrincipalRelay(mcp_endpoint)
     else:
@@ -1915,10 +1935,15 @@ def run_renderer(host: str, port: int) -> None:
         raise ValueError("renderer requires FOLIO_RENDERER_CAPABILITY_SECRET")
     scheme = "https" if settings.tls_certfile else "http"
     mcp_endpoint = settings.mcp_url or f"{scheme}://127.0.0.1:8000/mcp"
+    relay_audience = _renderer_relay_audience(settings, mcp_endpoint)
     caller = HttpMcpClient(
         mcp_endpoint,
         max_result_bytes=settings.max_request_bytes,
-        principal_relay=SignedPrincipalRelay(mcp_endpoint, settings.renderer_capability_secret),
+        principal_relay=SignedPrincipalRelay(
+            mcp_endpoint,
+            settings.renderer_capability_secret,
+            audience=relay_audience,
+        ),
         principal=Principal(
             tenant_id=settings.tenant_id,
             actor_id=settings.actor,

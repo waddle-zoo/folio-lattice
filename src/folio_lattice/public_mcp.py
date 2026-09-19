@@ -170,7 +170,14 @@ class SignedPrincipalRelay:
     immediate even while a captured token remains inside its short TTL.
     """
 
-    def __init__(self, endpoint: str, secret: str, *, ttl_seconds: float = 15.0) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        secret: str,
+        *,
+        audience: str | None = None,
+        ttl_seconds: float = 15.0,
+    ) -> None:
         parsed = urlsplit(endpoint)
         if (
             parsed.scheme not in {"http", "https"}
@@ -182,11 +189,31 @@ class SignedPrincipalRelay:
             or parsed.password is not None
         ):
             raise ValueError("signed principal relay endpoint must be an HTTP /mcp URL")
+        if audience is not None:
+            try:
+                audience_parsed = urlsplit(audience)
+                _ = audience_parsed.port
+            except (UnicodeError, ValueError) as exc:
+                raise ValueError(
+                    "signed principal relay audience must be an exact HTTPS /mcp URL"
+                ) from exc
+            if (
+                audience_parsed.scheme != "https"
+                or not audience_parsed.netloc
+                or not audience_parsed.hostname
+                or audience_parsed.path != "/mcp"
+                or audience_parsed.query
+                or audience_parsed.fragment
+                or audience_parsed.username is not None
+                or audience_parsed.password is not None
+            ):
+                raise ValueError("signed principal relay audience must be an exact HTTPS /mcp URL")
         if not isinstance(secret, str) or len(secret) < 32:
             raise ValueError("signed principal relay secret must be at least 32 characters")
         if ttl_seconds <= 0 or ttl_seconds > 60:
             raise ValueError("signed principal relay TTL is outside the allowed bound")
         self.endpoint = endpoint
+        self.audience = endpoint if audience is None else audience
         self._signing_key = hmac.new(
             secret.encode("utf-8"), CAPABILITY_KEY_LABEL, hashlib.sha256
         ).digest()
@@ -215,7 +242,7 @@ class SignedPrincipalRelay:
         payload = {
             "protocol": CAPABILITY_PROTOCOL,
             "v": 1,
-            "aud": self.endpoint,
+            "aud": self.audience,
             "iat": now,
             "exp": now + int(self.ttl_seconds),
             "jti": secrets.token_urlsafe(16),
@@ -263,7 +290,7 @@ class SignedPrincipalRelay:
         if (
             payload.get("protocol") != CAPABILITY_PROTOCOL
             or payload.get("v") != 1
-            or payload.get("aud") != self.endpoint
+            or payload.get("aud") != self.audience
             or not isinstance(payload.get("iat"), int)
             or not isinstance(payload.get("exp"), int)
             or payload["iat"] > now + 2

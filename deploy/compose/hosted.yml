@@ -11,6 +11,7 @@ services:
       FOLIO_DB_PATH: /data/folio.db
       FOLIO_BLOB_ROOT: /data/blobs
       FOLIO_DEPLOYMENT_MODE: hosted
+      FOLIO_RENDERER_RELAY_AUDIENCE: https://folio:8000/mcp
       FOLIO_CONTROL_ORIGIN: ${FOLIO_CONTROL_ORIGIN:?set the hosted control origin}
       FOLIO_RENDER_ORIGIN: ${FOLIO_RENDER_ORIGIN:?set the hosted renderer origin}
       FOLIO_TLS_CERTFILE: /run/secrets/tls_cert
@@ -64,6 +65,7 @@ services:
     environment:
       FOLIO_DEPLOYMENT_MODE: local
       FOLIO_MCP_URL: https://folio:8000/mcp
+      FOLIO_RENDERER_RELAY_AUDIENCE: https://folio:8000/mcp
       FOLIO_TENANT_ID: ${FOLIO_RENDERER_TENANT_ID:?set renderer service tenant}
       FOLIO_ACTOR: ${FOLIO_RENDERER_ACTOR:?set renderer service actor}
       FOLIO_CONTROL_ORIGIN: ${FOLIO_CONTROL_ORIGIN:?set the hosted control origin}

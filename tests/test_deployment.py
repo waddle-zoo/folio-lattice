@@ -38,7 +38,7 @@ from folio_lattice.deployment import (
     transactional_upgrade,
 )
 from folio_lattice.renderer import RendererApp
-from folio_lattice.server import FolioHttpApp, Settings
+from folio_lattice.server import FolioHttpApp, Settings, _renderer_relay_audience
 from folio_lattice.service import FolioLattice
 from folio_lattice.tls import TlsCertificateMonitor
 
@@ -194,6 +194,40 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("\n    ports:", renderer)
         self.assertIn("\n      - control\n      - renderer\n", folio)
         self.assertIn("  renderer:\n    internal: true", compose)
+
+    def test_hosted_profile_shares_one_renderer_relay_audience(self) -> None:
+        compose = (Path(__file__).parents[1] / "deploy/compose/hosted.yml").read_text()
+        renderer = compose.split("  renderer:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+        folio = compose.split("  folio:\n", 1)[1].split("\n  renderer:\n", 1)[0]
+        audience = "FOLIO_RENDERER_RELAY_AUDIENCE: https://folio:8000/mcp"
+        self.assertEqual(compose.count(audience), 2)
+        self.assertIn(audience, folio)
+        self.assertIn(audience, renderer)
+        self.assertNotIn("FOLIO_MCP_URL:", folio)
+        self.assertIn("FOLIO_MCP_URL: https://folio:8000/mcp", renderer)
+
+        hosted_env = {
+            "FOLIO_DEPLOYMENT_MODE": "hosted",
+            "FOLIO_OIDC_ISSUER": "https://issuer.example",
+            "FOLIO_OIDC_AUDIENCE": "folio-api",
+            "FOLIO_OIDC_JWKS_URL": "https://issuer.example/jwks.json",
+            "FOLIO_RENDERER_RELAY_AUDIENCE": "https://folio:8000/mcp",
+        }
+        with patch.dict(os.environ, hosted_env, clear=True):
+            settings = Settings.from_env()
+        self.assertEqual(settings.renderer_relay_audience, "https://folio:8000/mcp")
+        with patch.dict(
+            os.environ,
+            {
+                key: value
+                for key, value in hosted_env.items()
+                if key != "FOLIO_RENDERER_RELAY_AUDIENCE"
+            },
+            clear=True,
+        ):
+            settings = Settings.from_env()
+            with self.assertRaisesRegex(ValueError, "FOLIO_RENDERER_RELAY_AUDIENCE"):
+                _renderer_relay_audience(settings, "https://127.0.0.1:8000/mcp")
 
     def test_hostile_configuration_fails_closed(self) -> None:
         cases = (

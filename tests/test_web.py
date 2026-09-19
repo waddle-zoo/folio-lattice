@@ -1056,6 +1056,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         relay = SignedPrincipalRelay(
             "http://folio.internal:8000/mcp",
             "renderer-capability-secret-012345678901234567890123456789",
+            audience="https://folio:8000/mcp",
             ttl_seconds=1,
         )
         principal = Principal(
@@ -1096,12 +1097,21 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             "renderer-capability-secret-012345678901234567890123456789",
         )
         self.assertIsNone(relay.resolve_capability(other_audience.issue_identity(principal)))
+        wrong_audience = SignedPrincipalRelay(
+            "http://folio.internal:8000/mcp",
+            "renderer-capability-secret-012345678901234567890123456789",
+            audience="https://other:8000/mcp",
+        )
+        self.assertIsNone(relay.resolve_capability(wrong_audience.issue_identity(principal)))
+        with self.assertRaisesRegex(ValueError, "bound to another MCP endpoint"):
+            HttpMcpClient("http://127.0.0.1:8000/mcp", principal_relay=relay)
         wrong_key = SignedPrincipalRelay(
             "http://folio.internal:8000/mcp",
             "different-renderer-secret-012345678901234567890123456789",
         )
         self.assertIsNone(relay.resolve_capability(wrong_key.issue_identity(principal)))
         payload = json.loads(relay._decode(encoded))
+        self.assertEqual(payload["aud"], "https://folio:8000/mcp")
         payload["v"] = 2
         wrong_version_encoded = relay._encode(payload)
         wrong_version_signature = relay._b64(
@@ -1121,6 +1131,18 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                 SignedPrincipalRelay(
                     invalid_endpoint,
                     "renderer-capability-secret-012345678901234567890123456789",
+                )
+        for invalid_audience in (
+            "http://folio:8000/mcp",
+            "https://folio:8000/other",
+            "https://folio:8000/mcp?token=secret",
+            "https://user:password@folio:8000/mcp",
+        ):
+            with self.assertRaisesRegex(ValueError, "audience"):
+                SignedPrincipalRelay(
+                    "http://127.0.0.1:8000/mcp",
+                    "renderer-capability-secret-012345678901234567890123456789",
+                    audience=invalid_audience,
                 )
         relay.revoke(token)
         self.assertIsNone(relay.resolve_capability(token))
