@@ -23,6 +23,7 @@ async def _tool(client: Client, name: str, arguments: dict[str, Any]) -> Any:
 
 
 async def exercise(base_url: str) -> dict[str, Any]:
+    expected_actor = os.environ.get("FOLIO_ACTOR", "hyperset")
     marker = f"hypersetmarker{uuid.uuid4().hex}"
     source_text = f"Hyperset evidence source graph {marker}"
     updated_text = f"Hyperset revised evidence source graph {marker}"
@@ -82,7 +83,7 @@ async def exercise(base_url: str) -> dict[str, Any]:
         grep = await _tool(client, "artifact_grep", {"pattern": marker})
 
         assert updated["parent_version_id"] == first_version_id
-        assert updated["actor"] == "hyperset"
+        assert updated["actor"] == expected_actor
         assert edge["target_artifact_id"] == target["artifact"]["id"]
         assert traversal[0]["target_artifact_id"] == target["artifact"]["id"]
         assert len(versions) == 2
@@ -94,6 +95,7 @@ async def exercise(base_url: str) -> dict[str, Any]:
             "version_id": updated["id"],
             "blob_hash": updated["blob_hash"],
             "tenant_id": source["artifact"]["tenant_id"],
+            "actor": updated["actor"],
             "marker": marker,
         }
 
