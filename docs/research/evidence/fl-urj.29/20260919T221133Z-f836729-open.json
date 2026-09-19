@@ -1,0 +1,147 @@
+{
+  "schema": "fl-urj.29",
+  "run_id": "20260919T221133Z-f836729-open",
+  "status": "OPEN_BLOCKED",
+  "decision": "Do not close .29. Exact-current executable and Docker evidence passes, but this package is not an independently accepted hosted release review.",
+  "source": {
+    "sha": "f8367297cfdb832163badafa336b387cbdc873bd",
+    "parent": "bd3a1f463ae22710933016b3832ad1016b52e7a6",
+    "ref": "refs/review/fl-urj-29-final",
+    "subject": "test(docker): assert bounded oversized response",
+    "ancestry": [
+      {"sha": "9a5aac36dd2ec5c1cc01851bcf597d6a8fde5a2a", "subject": "docs(ux): add manual G7 witness protocol"},
+      {"sha": "52b0c1ae2526c1a624aa8556261211bd58004d16", "subject": "fix(bounds): wire resource controls into compose"},
+      {"sha": "0bcacef1a5d993a6157365c01f8c6def29a6d24e", "subject": "test(bounds): bound oversized request regression"},
+      {"sha": "eb631b7359e5847233d72fbf0c363faa59d2c8a7", "subject": "fix(bounds): reject oversized declared bodies"},
+      {"sha": "bd3a1f463ae22710933016b3832ad1016b52e7a6", "subject": "fix(bounds): classify request body timeouts"},
+      {"sha": "f8367297cfdb832163badafa336b387cbdc873bd", "subject": "test(docker): assert bounded oversized response"}
+    ],
+    "changed_files": [
+      "docker-compose.yml",
+      "src/folio_lattice/inspection.py",
+      "tests/test_docker_e2e.py",
+      "tests/test_resource_controls.py",
+      "tests/test_supply_chain_policy.py"
+    ]
+  },
+  "environment": {
+    "host": "macOS arm64; Docker Desktop",
+    "python": "3.12.10",
+    "native_mac_voiceover": "not used",
+    "docker_project": "fl29-f836729-20260919",
+    "ports": {"folio": 19801, "renderer": 19901},
+    "actors": {"folio": "fl29-f836-folio", "renderer": "fl29-f836-folio"},
+    "secret_handling": "fixture secret redacted from all durable artifacts; raw temporary compose removed"
+  },
+  "image": {
+    "ref": "folio-lattice/fl-urj29:sha-f8367297cfdb832163badafa336b387cbdc873bd",
+    "id": "sha256:76fef59552988bc641ea0a0b8b7ee670d02e16aa68625add20d8e0247c9b75c2",
+    "revision_label": "f8367297cfdb832163badafa336b387cbdc873bd",
+    "revision_matches_source": true,
+    "source_label": "https://github.com/waddle-zoo/folio-lattice",
+    "inspect_sha256": "0632fe6cc6f52d538a994794c3d273c2d6f64089b32f66bc0b2374d821e6ef1c",
+    "build": {
+      "command": "docker build --progress=plain --build-arg VCS_REF=f8367297cfdb832163badafa336b387cbdc873bd -t folio-lattice/fl-urj29:sha-f8367297cfdb832163badafa336b387cbdc873bd .",
+      "exit_code": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "ff486a4fb37b1e572fb13f45147eb584e359ae840c2d49fe972604b05e4cf735"
+    }
+  },
+  "compose": {
+    "redacted_config_sha256": "72a598ae7da1411c83a82c3578b0533d0f3ec425b66469623112bf35d9048776",
+    "services": ["folio", "renderer"],
+    "same_image_id_both_services": true,
+    "settings_in_both_services": {
+      "FOLIO_RESOURCE_TIMEOUT_SECONDS": "0.2",
+      "FOLIO_RESOURCE_CONCURRENCY_LIMIT": "1",
+      "FOLIO_RESOURCE_CONCURRENCY_PER_KEY": "1",
+      "FOLIO_RESOURCE_MAX_RESPONSE_BYTES": "1048576",
+      "FOLIO_MAX_REQUEST_BYTES": "13631488",
+      "rate_limits": "600 per 60 seconds"
+    },
+    "container_inspect_redacted_sha256": "4fb3714e88f8c785d155513081bdcb10edb87845c39f5f915a35d79b7c42e129",
+    "container_assertions": [
+      "both containers use image id sha256:76fef59552988bc641ea0a0b8b7ee670d02e16aa68625add20d8e0247c9b75c2",
+      "user 10001:10001",
+      "read_only true",
+      "CapDrop ALL",
+      "no-new-privileges:true",
+      "renderer has no storage mount"
+    ]
+  },
+  "checks": {
+    "make_check": {
+      "command": "make check",
+      "exit_code": 0,
+      "summary": "251 passed, 8 skipped in 81.94s; coverage 81.11%",
+      "ruff_check": "pass",
+      "ruff_format": "63 files already formatted",
+      "mypy": "pass; 23 source files",
+      "stdout_sha256": "880dfa174f52e87364b74991ca98beb3bb29ae1e379c3848188a7d0ea6d0e981",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "skips": "8 hosted-auth negative cases; hosted seam absent by fixture contract"
+    },
+    "docker_e2e_corrected_fixture": {
+      "command": "FOLIO_BASE_URL=http://127.0.0.1:19801 FOLIO_RENDER_URL=http://127.0.0.1:19901 FOLIO_COMPOSE_PROJECT=fl29-f836729-20260919 FOLIO_ACTOR=fl29-f836-folio PYTHONPATH=src:tests uv run python tests/test_docker_e2e.py",
+      "exit_code": 0,
+      "summary": "attached bridge, persistence, public UI gateway, readiness before/after restart, renderer isolation, CSP, and bounded oversized response all verified",
+      "stdout_sha256": "cd33a4e24c5ae2827835968e636e0406d83867c76981b7d087e69c70d0e0af46",
+      "stderr_sha256": "f96608bf55ffac204f3160434926d732f4f9abf50db06cf5f3d1ad0444fecee7",
+      "fresh_volume": true,
+      "restart_health": "pass"
+    },
+    "superseded_fixture_failures": [
+      {"reason": "harness expected default actor hyperset while isolated service used fl29-f836-folio", "exit_code": 1, "stderr_sha256": "49f628ad29da046beb1172b6d52a1e3da52ce5921435b0982d6572f15c391215"},
+      {"reason": "renderer actor intentionally differed from folio, so renderer could not read the artifact after restart (404)", "exit_code": 1, "stderr_sha256": "fb230ce5249a1bf0257d59c6dd878e7ecdce74e6017a089f96d00e93f4472537"}
+    ]
+  },
+  "live_matrix": {
+    "docker_http": {
+      "artifact_sha256": "a07c58a89948398dd13ac42f9b67bb9dc20e328cfcb6a3c9ce30bc53351a7c66",
+      "413_declared_prefix": {"status": 413, "code": "request_too_large", "retry_after": "0", "first_byte_ms": 44.961, "sent_bytes": 1},
+      "413_declared_complete": {"status": 413, "code": "request_too_large", "retry_after": "0", "first_byte_ms": 899.993, "sent_bytes": 13631489},
+      "408_small_incomplete": {"status": 408, "code": "request_body_timeout", "retry_after": "1", "first_byte_ms": 207.71},
+      "422_arguments": {"status": 422, "code": "arguments_too_large"},
+      "429_rate_limit": {"status": 429, "code": "resource_rate_limited", "retry_after": "39", "first_429_request_index": 597},
+      "recovery_after_bounds": "ordinary request returned 200 in the preceding exact-image run"
+    },
+    "application_runtime": {
+      "artifact_sha256": "785ef6b1350f6efd8c87fdeb538510e6ca1a442bf16a5971d033f03b2923efa6",
+      "504_upstream_timeout": {"status": 504, "code": "resource_timeout", "retry_after": "1"},
+      "429_concurrency": {"status": 429, "code": "resource_concurrency_limited", "retry_after": "1"},
+      "502_response_bound": {"status": 502, "code": "response_too_large"},
+      "slot_reuse": {"status": 200, "downstream_calls": 2, "limiter_total": 0},
+      "rate_identity_recovery": "rate-limited identity returned 200 after the test clock window in focused regression coverage"
+    },
+    "regression_coverage": {
+      "tests": [
+        "tests/test_public_mcp_bounds.py",
+        "tests/test_resource_controls.py",
+        "tests/test_docker_e2e.py"
+      ],
+      "covered": ["delimiter collision separation", "identity fairness", "concurrency fairness", "rate recovery", "timeout slot release", "response bound", "renderer settings injection"]
+    }
+  },
+  "artifacts": {
+    "docker_logs_sha256": "233e23a8b47d6819a05e232ddaccabb874c548769a696c925850de308523aeb3",
+    "docker_ps_sha256": "09ca5b91dd2c63d62ec2597f2c014e26dc369ee6a970e0df0d9a97d616e7e431",
+    "scoped_cleanup_sha256": "551b075eb23fd55678916a783b6e8f54a316925eed934c54e8b9bcc212f140fa",
+    "cleanup_exit_code": 0,
+    "remaining_project_containers": 0,
+    "remaining_project_volumes": 0
+  },
+  "open_blockers": [
+    "Mayor/independent QA acceptance and reviewer separation are still pending; this worker package is not a closure signature.",
+    "504 and 502 are proven by exact-source live application runtime probes; the stock Docker E2E does not inject a slow upstream or oversized upstream response.",
+    "Local Docker rate/fairness evidence is not hosted-registry or hosted multi-tenant fairness evidence; authenticated-principal separation across rotated source IPs and rotated source-IP fairness remain unverified in the hosted seam.",
+    "No native Mac or VoiceOver evidence was attempted by directive."
+  ],
+  "review": {
+    "reviewer": "Codex QA execution",
+    "independent": false,
+    "approved_independent_reviewer": "pending",
+    "signed": false,
+    "secrets_committed": false,
+    "closure_eligible": false
+  }
+}
