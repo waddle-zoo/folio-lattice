@@ -190,8 +190,16 @@ def _replace_live(db_path: Path, blob_root: Path, staged_db: Path, staged_blobs:
     old_db.unlink()
     old_blobs = Path(tempfile.mkdtemp(prefix=".folio-old-", dir=blob_root.parent))
     old_blobs.rmdir()
+    old_sidecars: dict[Path, Path] = {}
     moved_db = moved_blobs = new_db = new_blobs = False
     try:
+        for suffix in ("-wal", "-shm"):
+            sidecar = db_path.with_name(db_path.name + suffix)
+            if sidecar.exists():
+                old_sidecar = Path(tempfile.mkstemp(prefix=".folio-old-", dir=db_path.parent)[1])
+                old_sidecar.unlink()
+                os.replace(sidecar, old_sidecar)
+                old_sidecars[sidecar] = old_sidecar
         os.replace(db_path, old_db)
         moved_db = True
         os.replace(staged_db, db_path)
@@ -209,12 +217,19 @@ def _replace_live(db_path: Path, blob_root: Path, staged_db: Path, staged_blobs:
             db_path.unlink(missing_ok=True)
         if moved_db and old_db.exists():
             os.replace(old_db, db_path)
+        for sidecar, old_sidecar in old_sidecars.items():
+            if sidecar.exists():
+                sidecar.unlink(missing_ok=True)
+            if old_sidecar.exists():
+                os.replace(old_sidecar, sidecar)
         raise DeploymentError("state switch failed and was rolled back") from exc
     finally:
         old_db.unlink(missing_ok=True)
         shutil.rmtree(old_blobs, ignore_errors=True)
         staged_db.unlink(missing_ok=True)
         shutil.rmtree(staged_blobs, ignore_errors=True)
+        for old_sidecar in old_sidecars.values():
+            old_sidecar.unlink(missing_ok=True)
 
 
 def initialize_deployment_state(

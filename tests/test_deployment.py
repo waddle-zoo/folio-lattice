@@ -347,6 +347,17 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(json.loads(state_path.read_text())["active_version"], "v2")
             snapshot_manifest.write_text(json.dumps(manifest), encoding="utf-8")
 
+            FolioLattice(database, blobs).write_version(
+                tenant_id="upgrade",
+                artifact_id=created["artifact"]["id"],
+                data=b"post-upgrade content",
+                media_type="text/plain",
+                actor="dev",
+                reason="post-upgrade write",
+                source_context={},
+                parent_version_id=created["version"]["id"],
+            )
+
             rolled_back = rollback_deployment(
                 database,
                 blobs,
@@ -356,6 +367,8 @@ class DeploymentTests(unittest.TestCase):
             )
             self.assertEqual(rolled_back["to_version"], "v1")
             self.assertEqual(json.loads(state_path.read_text())["active_version"], "v1")
+            self.assertFalse(database.with_name(f"{database.name}-wal").exists())
+            self.assertFalse(database.with_name(f"{database.name}-shm").exists())
             self.assertEqual(
                 FolioLattice(database, blobs).read_artifact("upgrade", created["artifact"]["id"])[
                     "text"
