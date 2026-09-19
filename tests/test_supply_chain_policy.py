@@ -73,6 +73,13 @@ class SupplyChainPolicyTests(unittest.TestCase):
         self.assertEqual(report["status"], "pass")
         self.assertEqual(report["violations"], [])
 
+    def test_supply_chain_pr_gate_verifies_immutable_release_inputs(self) -> None:
+        workflow = (ROOT / ".github/workflows/supply-chain.yml").read_text()
+        pr_gate = workflow.split("\n  release:", 1)[0]
+        self.assertIn("name: Verify immutable release inputs", pr_gate)
+        self.assertIn("SOURCE_SHA: ${{ github.sha }}", pr_gate)
+        self.assertIn("bash scripts/verify-release-inputs.sh", pr_gate)
+
     def test_workflows_and_base_images_are_immutable(self) -> None:
         workflow_text = "\n".join(
             path.read_text() for path in (ROOT / ".github/workflows").glob("*.yml")

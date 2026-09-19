@@ -37,6 +37,11 @@ jobs:
           uv lock --check
           python scripts/verify_dependency_policy.py
 
+      - name: Verify immutable release inputs
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: bash scripts/verify-release-inputs.sh
+
       - name: Validate workflow YAML
         run: >-
           ruby -e 'require "yaml"; Dir[".github/workflows/*.yml"].each {
