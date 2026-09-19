@@ -1867,7 +1867,7 @@ def run_http(host: str, port: int) -> None:
         principal_relay = SignedPrincipalRelay(
             mcp_endpoint,
             settings.renderer_capability_secret,
-            audience=relay_audience,
+            audience=relay_audience if settings.renderer_relay_audience is not None else None,
         )
     elif settings.deployment_mode == "hosted" and mcp_endpoint == local_mcp_endpoint:
         principal_relay = TrustedPrincipalRelay(mcp_endpoint)
@@ -1942,7 +1942,7 @@ def run_renderer(host: str, port: int) -> None:
         principal_relay=SignedPrincipalRelay(
             mcp_endpoint,
             settings.renderer_capability_secret,
-            audience=relay_audience,
+            audience=relay_audience if settings.renderer_relay_audience is not None else None,
         ),
         principal=Principal(
             tenant_id=settings.tenant_id,
