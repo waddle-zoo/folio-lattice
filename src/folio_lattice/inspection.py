@@ -3620,7 +3620,11 @@ class InspectionApp:
             )
             return
         dimensions = self._resource_dimensions(scope)
-        concurrency_key = "\x1f".join((dimensions["tenant"], dimensions["actor"], dimensions["ip"]))
+        concurrency_key = json.dumps(
+            (dimensions["tenant"], dimensions["actor"], dimensions["ip"]),
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
         if not self._concurrency_limiter.try_acquire(concurrency_key):
             await self._api_error(
                 scope,

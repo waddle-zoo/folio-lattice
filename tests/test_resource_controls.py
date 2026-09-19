@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -317,6 +318,42 @@ class HumanGatewayResourceTests(unittest.IsolatedAsyncioTestCase):
             )[0],
             200,
         )
+
+    async def test_concurrency_key_separates_control_character_tuples(self) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def call(_tool: str, _arguments: dict[str, Any]) -> dict[str, bool]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                started.set()
+                await release.wait()
+            return {"ok": True}
+
+        app = self.make_app(
+            SimpleNamespace(call=call),
+            rate_limits={"tenant": 100, "actor": 100, "ip": 100},
+            concurrency_limit=2,
+            concurrency_per_key=1,
+        )
+        principal_a = Principal("a", "b\x1fc", "issuer", "subject-a")
+        principal_b = Principal("a\x1fb", "c", "issuer", "subject-b")
+
+        async def invoke_as(principal: Principal) -> tuple[int, dict[str, str], bytes]:
+            token = set_request_principal(principal)
+            try:
+                return await invoke(app, "/api/mcp", body=gateway_request({}))
+            finally:
+                reset_request_principal(token)
+
+        first = asyncio.create_task(invoke_as(principal_a))
+        await started.wait()
+        second = await invoke_as(principal_b)
+        self.assertEqual(second[0], 200)
+        release.set()
+        self.assertEqual((await first)[0], 200)
 
 
 class RendererResourceTests(unittest.IsolatedAsyncioTestCase):

@@ -12,6 +12,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SupplyChainPolicyTests(unittest.TestCase):
+    def test_local_compose_passes_resource_controls_to_both_processes(self) -> None:
+        compose = (ROOT / "docker-compose.yml").read_text()
+        folio = compose.split("  folio:\n", 1)[1].split("\n  renderer:\n", 1)[0]
+        renderer = compose.split("  renderer:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+        expected = (
+            ("FOLIO_TENANT_RATE_LIMIT", "600"),
+            ("FOLIO_ACTOR_RATE_LIMIT", "600"),
+            ("FOLIO_IP_RATE_LIMIT", "600"),
+            ("FOLIO_RATE_LIMIT_WINDOW_SECONDS", "60"),
+            ("FOLIO_RESOURCE_CONCURRENCY_LIMIT", "32"),
+            ("FOLIO_RESOURCE_CONCURRENCY_PER_KEY", "8"),
+            ("FOLIO_RESOURCE_TIMEOUT_SECONDS", "30"),
+            ("FOLIO_RESOURCE_MAX_RESPONSE_BYTES", "1048576"),
+        )
+        for service in (folio, renderer):
+            for key, default in expected:
+                self.assertIn(f"      {key}: ${{{key}:-{default}}}", service)
+
     def test_release_input_verifier_rejects_untracked_source(self) -> None:
         verifier_source = ROOT / "scripts/verify-release-inputs.sh"
         with tempfile.TemporaryDirectory() as directory:
