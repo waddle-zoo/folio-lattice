@@ -1,0 +1,119 @@
+{
+  "schema": "fl-urj.28-evidence-v2",
+  "status": "OPEN_BLOCKED",
+  "captured_at": "2026-09-19T21:25:54Z",
+  "source": {
+    "sha": "7df262df039c15e6f6c0c10584d429924df029d1",
+    "tracked_tree_at_head": true,
+    "capture_overlay": [
+      "docker-compose.fl28-pinned.yml",
+      "capture-fl28-evidence.sh"
+    ],
+    "overlay_excluded_by_dockerfile_copy_rules": true
+  },
+  "image": {
+    "ref": "folio-lattice/fl-urj28:sha-7df262df039c15e6f6c0c10584d429924df029d1",
+    "content_id": "sha256:9294b733221575ff2822787cc59d74820b516a8f5460c1476331315c88ecabb2",
+    "source_label": "https://github.com/waddle-zoo/folio-lattice",
+    "revision": "7df262df039c15e6f6c0c10584d429924df029d1",
+    "build_exit": 0,
+    "build_started_at": "2026-09-19T21:23:13Z",
+    "build_finished_at": "2026-09-19T21:23:34Z",
+    "build_stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "build_stderr_sha256": "9c7f98f83e6cbb41e0f09dd7bd82fc22ea6a03a200c3f76ed1960dacf940f2af",
+    "inspect_sha256": "7d3bea20a18d0d3e6385584fec0a2b2ba8bfdd2f945f1d89320a789402658a44"
+  },
+  "compose": {
+    "file_sha256": "f9dfbfb098075f59a9570831413fd86fad1af678e6d86b9803d7281bb150e1e8",
+    "services_pinned_to_same_image": true,
+    "config_mode": "redacted per-run config; renderer secret replaced with [REDACTED]"
+  },
+  "commands": {
+    "build": "DOCKER_BUILDKIT=1 docker build --progress=plain --build-arg VCS_REF=7df262df039c15e6f6c0c10584d429924df029d1 -t folio-lattice/fl-urj28:sha-7df262df039c15e6f6c0c10584d429924df029d1 .",
+    "gate": "COMPOSE_FILE=docker-compose.fl28-pinned.yml FOLIO_COMPOSE_PROJECT=<unique-project> FOLIO_TENANT_ID=<unique-tenant> FOLIO_ACTOR=<unique-actor> FOLIO_HOST_PORT=<unique-control-port> FOLIO_RENDER_HOST_PORT=<unique-renderer-port> FOLIO_BASE_URL=http://127.0.0.1:<control-port> FOLIO_RENDER_URL=http://127.0.0.1:<renderer-port> FOLIO_RENDERER_CAPABILITY_SECRET=[REDACTED] uv run python tests/test_docker_e2e.py",
+    "cleanup": "COMPOSE_FILE=docker-compose.fl28-pinned.yml docker compose -p <unique-project> down -v --remove-orphans"
+  },
+  "runs": [
+    {
+      "run": 1,
+      "project": "fl-urj28-7df262df039c-1-20260919",
+      "volume": "fl-urj28-7df262df039c-1-20260919_folio_data",
+      "tenant": "fresh-7df262df039c-1-20260919",
+      "actor": "fresh-runner-7df262df039c-1-20260919",
+      "control_port": 19201,
+      "renderer_port": 19301,
+      "started_at": "2026-09-19T21:25:05Z",
+      "finished_at": "2026-09-19T21:25:28Z",
+      "source_sha": "7df262df039c15e6f6c0c10584d429924df029d1",
+      "image_id": "sha256:9294b733221575ff2822787cc59d74820b516a8f5460c1476331315c88ecabb2",
+      "compose_config_sha256": "8e5bf6941524464d12f4d2066c2ee529aa7f2e038ef8d944b95e6340a632b078",
+      "command_sha256": "17361bf81454bff6bf960b5e53517ed80560bb9e7102d1f48331e2dcdf444b42",
+      "stdout_sha256": "cd33a4e24c5ae2827835968e636e0406d83867c76981b7d087e69c70d0e0af46",
+      "stderr_sha256": "b8af32c46681bed2be7538125098224c53edf3a9f1e8becd66691d8a0a23d7b1",
+      "cleanup_log_sha256": "ad57d16ed419dbafebc16ea517ac4145c272de8384582b25721e8937a5220d15",
+      "compose_up_exit": 0,
+      "gate_exit": 0,
+      "cleanup": "pass",
+      "logs_redacted": true,
+      "failures": []
+    },
+    {
+      "run": 2,
+      "project": "fl-urj28-7df262df039c-2-20260919",
+      "volume": "fl-urj28-7df262df039c-2-20260919_folio_data",
+      "tenant": "fresh-7df262df039c-2-20260919",
+      "actor": "fresh-runner-7df262df039c-2-20260919",
+      "control_port": 19202,
+      "renderer_port": 19302,
+      "started_at": "2026-09-19T21:25:29Z",
+      "finished_at": "2026-09-19T21:25:54Z",
+      "source_sha": "7df262df039c15e6f6c0c10584d429924df029d1",
+      "image_id": "sha256:9294b733221575ff2822787cc59d74820b516a8f5460c1476331315c88ecabb2",
+      "compose_config_sha256": "0a6b52ff3ab7331cc8f6d9206fd78c85dddc7dbe322ad29aa06a7f16a5b9d9a5",
+      "command_sha256": "45647d50b8ff75e77d7bb17e8d59180e6b5b9c753292952e64257a9ba8daed36",
+      "stdout_sha256": "cd33a4e24c5ae2827835968e636e0406d83867c76981b7d087e69c70d0e0af46",
+      "stderr_sha256": "db490f96012a87bdf51839430e6e8b663d435d754f226e2b49e89e248edd5692",
+      "cleanup_log_sha256": "b2510a4ffe361f8a66dd5033f70a48ebe3fd9d062a56c0d8528065195cc4fd02",
+      "compose_up_exit": 0,
+      "gate_exit": 0,
+      "cleanup": "pass",
+      "logs_redacted": true,
+      "failures": []
+    }
+  ],
+  "g0_g9": {
+    "G0": {"status": "observed_pass", "evidence": "exact source SHA and tracked tree recorded"},
+    "G1": {"status": "observed_pass", "evidence": "Docker public MCP persistence gate"},
+    "G2": {"status": "open_blocked", "evidence": "full tenant privacy matrix not established by this package"},
+    "G3": {"status": "observed_pass", "evidence": "public MCP exercised by Docker gate"},
+    "G4": {"status": "observed_pass", "evidence": "renderer isolation and CSP assertions"},
+    "G5": {"status": "observed_pass", "evidence": "public bridge assertions"},
+    "G6": {"status": "observed_pass", "evidence": "Hyperset consumer path exercised"},
+    "G7": {"status": "open_blocked", "evidence": "independent UX witness package not present"},
+    "G8": {"status": "observed_pass", "evidence": "two fresh Docker start/restart/cleanup runs"},
+    "G9": {"status": "open_blocked", "evidence": ".25 hosted supply chain, .26 signing, and deferred .27 remain open"}
+  },
+  "blocker_matrix": {
+    ".23": {"status": "OPEN", "reason": "not independently cleared in this run"},
+    ".25": {"status": "OPEN", "reason": "no exact hosted immutable digest, SBOM, signature, or provenance"},
+    ".26": {"status": "OPEN", "reason": "no approved independent signature over exact report and manifest"},
+    ".27": {
+      "status": "DEFERRED",
+      "disposition": "UNMET BY USER DIRECTIVE",
+      "reason": "UNMET BY USER DIRECTIVE: make no native VoiceOver/screen-reader attempt. Native manual screen-reader and nontechnical witness remain required, but no approved reviewer, consent record, unlocked Accessibility-permitted session, hosted image digest/URL, or scheduled participant exists; automation cannot satisfy acceptance."
+    },
+    ".28": {"status": "OPEN_BLOCKED", "reason": "same-image pair passes, but prerequisite release gates remain open"},
+    ".29": {"status": "OPEN", "reason": "not independently cleared in this run"}
+  },
+  "review": {
+    "reviewer": "Codex QA (control author; not independent reviewer)",
+    "reviewed_at": "2026-09-19T21:25:54Z",
+    "independent": false,
+    "closure_decision": "not eligible for .28 closure"
+  },
+  "artifact_retention": {
+    "raw_bundle": "operator-retained outside Git; redacted output/config hashes above",
+    "sanitized": true,
+    "secrets_committed": false
+  }
+}
