@@ -1,10 +1,12 @@
 # fl-urj.27 manual accessibility and usability evidence
 
-Status: **OPEN / BLOCKED**
+Status: **DEFERRED / UNMET BY USER DIRECTIVE**
 
-This register is a ready-to-run protocol, not a completed witness result.
-No approved human VoiceOver/screen-reader reviewer or nontechnical participant
-session is available in this workspace. Automation cannot satisfy this gate;
+This register preserves automated evidence and a future manual-session
+protocol, not a completed witness result. Native VoiceOver/screen-reader
+review is explicitly deferred and unmet by user directive. No further
+VoiceOver/screen-reader attempts, Mac unlocks, or Accessibility permission
+changes are authorized in this workspace. Automation cannot satisfy this gate;
 do not fill the result fields from browser automation or self-review.
 
 ## Retained historical automated evidence
@@ -93,6 +95,10 @@ redaction_review: REQUIRED reviewer/date
 
 ## VoiceOver / screen-reader traversal
 
+Execution is deferred and must not be attempted from this workspace. It
+requires a separately approved human witness and an authorized environment;
+the checklist below is retained only as the future protocol.
+
 Use a real unlocked macOS session with Accessibility permission. Start
 VoiceOver with `Command-F5` (or `Fn-Command-F5`), use `Control-Option` as the
 VoiceOver modifier, and do not use DevTools accessibility output as a
@@ -146,9 +152,12 @@ claim that this register has passed them.
 
 ## Blocker and handoff
 
-Current blocker: no approved witness identity, consent record, unlocked
-macOS/Accessibility-permitted session, or scheduled nontechnical participant
-is supplied to this agent. Therefore `.27` must remain open. A human owner must
+Current state: deferred/unmet by user directive. No further native
+VoiceOver/screen-reader, Mac unlock, or Accessibility permission attempts are
+authorized. Existing automated Chrome, keyboard, responsive, recovery, and
+nontechnical-flow evidence is preserved; it does not satisfy the manual
+witness gate. Therefore `.27` cannot close from this workspace, and no
+enterprise-ready claim may rely on it. A separately authorized human owner may
 schedule/approve both sessions, run this protocol on the exact source/image,
 redact the results, and commit the run folder. Do not close the gate from this
 checklist or from the existing automated Chrome 6/6 evidence.
