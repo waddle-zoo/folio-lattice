@@ -170,6 +170,7 @@ class HostedAuthProductionTests(unittest.TestCase):
                         "FOLIO_OIDC_ALGORITHM": "RS256",
                         "FOLIO_OIDC_JWKS_URL": f"{issuer_server.issuer}/jwks.json",
                         "FOLIO_OIDC_MEMBERSHIPS_FILE": str(memberships_path),
+                        "FOLIO_RENDERER_RELAY_AUDIENCE": "https://folio:8000/mcp",
                         "FOLIO_CONTROL_ORIGIN": "https://control.example",
                         "FOLIO_RENDER_ORIGIN": "https://render.example",
                         "SSL_CERT_FILE": str(issuer_server.cert_path),
