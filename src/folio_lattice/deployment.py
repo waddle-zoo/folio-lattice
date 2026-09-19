@@ -165,12 +165,13 @@ def _stage_snapshot(snapshot_path: Path, db_path: Path, blob_root: Path) -> tupl
             raise DeploymentError("rollback snapshot state is invalid")
         staged_db = Path(tempfile.mkstemp(prefix=".folio-stage-", dir=db_path.parent)[1])
         staged_blobs = Path(tempfile.mkdtemp(prefix=".folio-stage-", dir=blob_root.parent))
+        staged_blobs.rmdir()
         shutil.copyfile(snapshot_path / "folio.db", staged_db)
-        shutil.copytree(snapshot_path / "blobs", staged_blobs / "blobs")
-        actual = _inspect(staged_db, staged_blobs / "blobs")
+        shutil.copytree(snapshot_path / "blobs", staged_blobs)
+        actual = _inspect(staged_db, staged_blobs)
         if actual != expected:
             raise DeploymentError("rollback snapshot verification failed")
-        return staged_db, staged_blobs / "blobs"
+        return staged_db, staged_blobs
     except DeploymentError:
         if "staged_db" in locals():
             staged_db.unlink(missing_ok=True)

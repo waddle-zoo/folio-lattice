@@ -407,6 +407,8 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(json.loads(state_path.read_text())["active_version"], "v1")
             self.assertFalse(database.with_name(f"{database.name}-wal").exists())
             self.assertFalse(database.with_name(f"{database.name}-shm").exists())
+            self.assertEqual(list(root.glob(".folio-stage-*")), [])
+            self.assertEqual(list(root.glob(".folio-old-*")), [])
             self.assertEqual(
                 FolioLattice(database, blobs).read_artifact("upgrade", created["artifact"]["id"])[
                     "text"
