@@ -1,25 +1,66 @@
-# Folio Lattice
+<div align="center">
+  <img src="docs/assets/folio-lattice-mark.svg" alt="Folio Lattice" width="96" />
+  <h1>Folio Lattice</h1>
+  <p><strong>A small, provider-neutral home for agent-built artifacts and knowledge graphs.</strong></p>
+  <p>
+    <a href="https://github.com/waddle-zoo/folio-lattice/actions/workflows/ci.yml"><img src="https://github.com/waddle-zoo/folio-lattice/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+    <a href="https://github.com/waddle-zoo/folio-lattice/actions/workflows/supply-chain.yml"><img src="https://github.com/waddle-zoo/folio-lattice/actions/workflows/supply-chain.yml/badge.svg" alt="Supply-chain workflow status" /></a>
+    <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12 or newer" /></a>
+    <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/docker-first-2496ED?logo=docker&logoColor=white" alt="Docker first" /></a>
+    <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-first-111827" alt="MCP first" /></a>
+  </p>
+  <p>
+    <a href="MANIFESTO.md">Manifesto</a> ·
+    <a href="docs/MCP-QUICKSTART.md">MCP quickstart</a> ·
+    <a href="docs/AGENT-RECIPE.md">Agent recipe</a> ·
+    <a href="CONTRIBUTING.md">Contributing</a> ·
+    <a href="SECURITY.md">Security</a>
+  </p>
+</div>
 
-Folio Lattice is a company-hosted, platform-agnostic system for creating safe artifacts and connected knowledge graphs.
+Folio Lattice is a company-hosted, platform-agnostic system for creating safe
+artifacts and connected knowledge graphs. It gives agents a durable place to
+search, grep, read, chunk, write, version, and connect documents and arbitrary
+files—and gives people a simple workspace for opening those artifacts.
 
-The initial product is MCP-first: agents and tools can search, grep, read, chunk, write, version, and connect documents and arbitrary files. HTML, JavaScript, and CSS artifacts are hosted in a restricted sandbox and may call only MCPs attached to the platform.
+HTML, JavaScript, and CSS artifacts render in an isolated sandbox. A rendered
+artifact has no general network access and may call only the MCP capabilities
+attached to its Folio Lattice environment.
 
-The system is developed with Docker, designed to be self-hostable, and intended to evolve into an enterprise product that is private by default. Sharing with selected teammates or broader audiences is a later feature, not an excuse to weaken the core security model.
+> **Status: public development preview.** The local Docker/MCP loop is working
+> and intentionally useful now. Hosted authentication, private tenancy,
+> sharing, and final supply-chain evidence remain tracked release gates; see
+> [`docs/RELEASE-EVIDENCE.md`](docs/RELEASE-EVIDENCE.md) before treating this as
+> production-ready enterprise software.
 
-The [manifesto](MANIFESTO.md) and [ADR index](docs/adr/README.md) are the
-canonical product documentation. The original [product brief](docs/PRODUCT-BRIEF.md)
-is retained as source context.
+## What it is
 
-The current research checkpoint and implementation sequence are in
+| For agents | For people | For operators |
+| --- | --- | --- |
+| MCP tools for create, read, grep, search, link, version, and render | A graph workspace with a familiar file view and artifact previews | Docker-first deployment, explicit trust boundaries, and inspectable evidence |
+| Provider-neutral over HTTP or stdio | Markdown rendered as a document; web artifacts rendered as pages | Hosted OIDC posture designed to fail closed when incomplete |
+| A public contract that Hyperset and other clients can consume | Private-by-default product direction | CI, locked dependencies, linting, type checks, coverage, and Docker smoke tests |
+
+## The product boundary
+
+```text
+Agent / client
+      │ MCP over HTTP or stdio
+      ▼
+Folio Lattice control plane ─── graph links, versions, search, audit events
+      │
+      ├── artifact store
+      └── isolated renderer ─── HTML / CSS / JS, no database or blob mount
+```
+
+The [manifesto](MANIFESTO.md), [ADR index](docs/adr/README.md), and
+[product brief](docs/PRODUCT-BRIEF.md) are the canonical product documents.
+The research checkpoint and implementation sequence live in
 [docs/research](docs/research/) and [docs/V0-PLAN.md](docs/V0-PLAN.md).
 
-## Enterprise adoption posture
+## Start locally
 
-Folio Lattice uses the official, version-pinned MCP Python SDK and keeps the
-development toolchain reproducible. The repository uses a `src/` package
-layout, a locked `uv` environment, Ruff linting and formatting, pytest with
-coverage, pre-commit hooks, GitHub Actions, Dependabot, and a Docker smoke test.
-Start with:
+Folio Lattice is developed and tested with Docker. For the Python toolchain:
 
 ```bash
 make install
@@ -27,79 +68,79 @@ make check
 make docker-build
 ```
 
-## Local inspection and rendering
-
-Bootstrap local-only configuration, then start both loopback-bound processes:
+For the local product loop:
 
 ```bash
 cp .env.example .env
 make docker-up
 ```
 
-`.env` contains a known development-only renderer capability secret and a
-deterministic Compose project name. Keep it local; hosted deployments must use
-their own secret and the hosted configuration path.
+Then open `http://127.0.0.1:8000`. The local workspace and external clients
+reach the same MCP contract. The renderer listens separately on
+`http://127.0.0.1:8001`; it is an iframe target, not an authoring API, and it
+receives no database or blob mount.
 
-Open `http://127.0.0.1:8000` to create or upload an artifact, search or literally
-grep indexed content, read complete versions and chunks, create and navigate
-outgoing graph links, inspect history, edit text with an optimistic parent, and
-open isolated HTML/JavaScript/CSS previews. The page and renderer reach state
-through the same public MCP tools as external clients. The renderer listens
-separately on `http://127.0.0.1:8001`; it is an iframe target, not a public
-authoring API, and it receives no database or blob mount.
+`.env` contains a known development-only renderer capability secret. Keep it
+local. Hosted deployments must provide their own secret and use the hosted
+configuration path; local mode is deliberately unauthenticated and loopback
+bound.
 
-`FOLIO_RENDER_ORIGIN` tells the control process where browsers reach the
-renderer. `FOLIO_CONTROL_ORIGIN` tells the renderer which exact origin may frame
-artifacts. Render responses enforce an opaque sandbox and deny direct network
-connections. Keep both defaults on loopback: v0 still has no product auth or
-sharing layer.
+## Agent quickstart
+
+Read [the MCP artifact quickstart](docs/MCP-QUICKSTART.md) for the smallest
+create → link → discover → search/grep → read → render flow. Body search and
+metadata discovery are separate by design:
+
+- use `artifact_search` or `artifact_grep` for indexed content;
+- use bounded `artifact_list` filters for an exact filename or media type;
+- use version reads and chunks when a complete document is not needed.
+
+For a version-pinned HTML/CSS/JavaScript graph bundle, use the
+[agent asset bundle recipe](docs/AGENT-RECIPE.md).
+
+## Security posture
 
 Sandboxed artifacts may request only the default attached Folio read, indexed
 search, and outgoing-traversal tools. The control page and server independently
-validate the message source/origin, schema, attachment, tool, size, and timeout;
-decisions are audit logged without arguments or content. This is not a generic
-MCP proxy and carries no artifact credential.
-
-Local HTTP and stdio derive `FOLIO_TENANT_ID` and `FOLIO_ACTOR` from process
-configuration. Clients cannot override either value through tool arguments.
-The Docker deployment is a local development loop bound to loopback; local
-mode remains explicitly unauthenticated.
+validate origin, schema, attachment, tool, size, and timeout. Decisions are
+audit logged without arguments or content. This is not a generic MCP proxy and
+does not carry an artifact credential.
 
 Hosted HTTP mode requires `FOLIO_OIDC_ISSUER`, `FOLIO_OIDC_AUDIENCE`, and
 `FOLIO_OIDC_JWKS_URL`. It accepts only RS256 bearer tokens with exact issuer,
 audience, signature, and time validation, then maps `(issuer, subject)` through
-the server-owned membership table. `FOLIO_OIDC_MEMBERSHIPS_FILE` may seed
-immutable mappings; status changes are limited to `active`, `disabled`, and
-`revoked`. Hosted startup warms the configured JWKS and fails closed if
-configuration or keys are unusable. Health and readiness return posture only,
-never token or membership data. See
-[`docs/RELEASE-EVIDENCE.md`](docs/RELEASE-EVIDENCE.md) before making any
-readiness claim.
-
-The [contribution guide](CONTRIBUTING.md), [security policy](SECURITY.md), and
-[enterprise adoption notes](docs/enterprise-adoption.md) describe the evidence
-expected before integrating the service into a corporate system.
+the server-owned membership table. See the
+[security policy](SECURITY.md), [threat model](docs/threat-model.md), and
+[enterprise adoption notes](docs/enterprise-adoption.md) before integrating
+the service into a corporate system.
 
 ## First consumer: Hyperset
 
-[Hyperset](https://github.com/waddle-zoo/hyperset) will be the first Folio
-Lattice consumer. The integration is intentionally client-level: Hyperset will
-use Folio Lattice through its public MCP/HTTP contract and will not share
-Folio's database, import private implementation modules, or receive a special
-authorization path. This keeps Folio Lattice useful to Claude Code, Codex,
-Cursor, and other clients while giving the Hyperset knowledge flywheel a
-durable artifact and graph substrate.
+[Hyperset](https://github.com/waddle-zoo/hyperset) is the first intended Folio
+Lattice consumer. The integration is client-level: Hyperset uses the public
+MCP/HTTP contract and does not share Folio's database, import private modules,
+or receive a special authorization path. The executable fixture at
+`tests/hyperset_consumer.py` proves that seam using only the public MCP SDK and
+HTTP endpoint.
 
-The executable fixture at `tests/hyperset_consumer.py` proves that seam using
-only the public MCP SDK and HTTP endpoint.
+## Documentation map
 
-## Agent quickstart
+- [Manifesto](MANIFESTO.md) — product boundary and principles.
+- [MCP quickstart](docs/MCP-QUICKSTART.md) — build against the public contract.
+- [Agent recipe](docs/AGENT-RECIPE.md) — create a linked HTML/CSS/JS bundle.
+- [V0 plan](docs/V0-PLAN.md) — current scope and sequencing.
+- [Enterprise adoption](docs/enterprise-adoption.md) — deployment expectations.
+- [Release evidence](docs/RELEASE-EVIDENCE.md) — what is and is not proven.
+- [ADR index](docs/adr/README.md) — durable architectural decisions.
+- [Contributing](CONTRIBUTING.md) — local checks and design rules.
+- [Security](SECURITY.md) — responsible disclosure and deployment warnings.
 
-See [the MCP artifact quickstart](docs/MCP-QUICKSTART.md) for the smallest
-create, link, discover, search/grep, read, and render flow. Artifact body search
-and metadata discovery are deliberately separate: use `artifact_search` or
-`artifact_grep` for indexed content, and bounded `artifact_list` filters for an
-exact filename or media type.
+## Public repository policy
 
-For a version-pinned HTML/CSS/JavaScript graph bundle, see the
-[agent asset bundle quickstart](docs/AGENT-RECIPE.md).
+`main` is protected. Changes should arrive through reviewed pull requests and
+passing automation; repository administrators retain the ability to merge when
+operationally necessary. The public repository is source-visible, but no open
+source license has been selected yet—treat the code as unlicensed until a
+license is added.
+
+Folio Lattice is maintained by [waddle-zoo](https://github.com/waddle-zoo).
