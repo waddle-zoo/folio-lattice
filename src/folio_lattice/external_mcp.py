@@ -4,6 +4,8 @@ import asyncio
 import ipaddress
 import json
 import math
+import os
+import re
 import socket
 from collections.abc import Mapping
 from datetime import timedelta
@@ -28,6 +30,10 @@ EXTERNAL_RATE_WINDOW_SECONDS = 60.0
 EXTERNAL_RATE_MAX_KEYS = 4096
 EXTERNAL_CONCURRENCY_LIMIT = 32
 EXTERNAL_CONCURRENCY_PER_KEY = 4
+_FACTORY_REFERENCE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_]*)*$"
+)
 _SAFE_EXTERNAL_ERRORS = frozenset(
     {
         "credential broker unavailable",
@@ -164,6 +170,26 @@ class UnavailableCredentialBroker:
     ) -> str:
         del tenant_id, connection_id, credential_ref, audience
         raise ExternalMcpError("credential broker unavailable")
+
+
+def build_credential_broker(
+    environ: Mapping[str, str] | None = None,
+) -> CredentialBroker:
+    """Load an explicitly injected provider-neutral credential broker."""
+
+    env = os.environ if environ is None else environ
+    reference = env.get("FOLIO_EXTERNAL_MCP_CREDENTIAL_BROKER_FACTORY")
+    if reference is None or _FACTORY_REFERENCE.fullmatch(reference.strip()) is None:
+        return UnavailableCredentialBroker()
+    module_name, attribute_name = reference.strip().split(":", 1)
+    try:
+        factory = getattr(import_module(module_name), attribute_name)
+        broker = factory()
+    except Exception:
+        return UnavailableCredentialBroker()
+    if not callable(getattr(broker, "issue", None)):
+        return UnavailableCredentialBroker()
+    return broker
 
 
 class UnavailableExternalMcpTransport:
@@ -532,7 +558,7 @@ class ExternalMcpBroker:
         concurrency_per_key: int = EXTERNAL_CONCURRENCY_PER_KEY,
     ):
         self.service = service
-        self.credentials = credentials or UnavailableCredentialBroker()
+        self.credentials = credentials if credentials is not None else build_credential_broker()
         self.transport = transport or HttpExternalMcpTransport()
         self._rate_limiter = DimensionRateLimiter(
             limits=rate_limits

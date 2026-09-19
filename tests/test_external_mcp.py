@@ -1,11 +1,13 @@
 import asyncio
 import json
+import os
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 from urllib.parse import quote
@@ -24,6 +26,8 @@ from folio_lattice.external_mcp import (
     ExternalMcpBroker,
     ExternalMcpError,
     HttpExternalMcpTransport,
+    UnavailableCredentialBroker,
+    build_credential_broker,
 )
 from folio_lattice.mcp_protocol import build_mcp_server
 from folio_lattice.service import FolioError, FolioLattice
@@ -218,6 +222,41 @@ class ExternalMcpServiceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_runtime_credential_factory_is_explicit_and_fail_closed(self) -> None:
+        self.assertIsInstance(build_credential_broker({}), UnavailableCredentialBroker)
+        module = ModuleType("test_external_credential_factory")
+        module.factory = lambda: FakeCredentials()  # type: ignore[attr-defined]
+        env = {"FOLIO_EXTERNAL_MCP_CREDENTIAL_BROKER_FACTORY": f"{module.__name__}:factory"}
+        with patch.dict(sys.modules, {module.__name__: module}):
+            self.assertIsInstance(build_credential_broker(env), FakeCredentials)
+            with patch.dict(os.environ, env):
+                transport = FakeTransport()
+                broker = ExternalMcpBroker(self.service, transport=transport)
+                record = broker.register(
+                    tenant_id="acme",
+                    actor="admin",
+                    name="calendar",
+                    endpoint=ENDPOINT,
+                    approved_tools=[TOOL],
+                    approved_resources=[RESOURCE],
+                    allowed_origins=[ORIGIN],
+                    credential_ref=SECRET_REF,
+                )
+                broker.call_tool(
+                    tenant_id="acme",
+                    actor="admin",
+                    connection_id=record["id"],
+                    tool_name=TOOL,
+                    arguments={},
+                )
+                self.assertEqual(transport.last_credential, UPSTREAM_SECRET)
+        self.assertIsInstance(
+            build_credential_broker(
+                {"FOLIO_EXTERNAL_MCP_CREDENTIAL_BROKER_FACTORY": "invalid reference"}
+            ),
+            UnavailableCredentialBroker,
+        )
 
     def register(self, tenant_id: str = "acme") -> dict[str, Any]:
         return self.service.register_external_connection(
