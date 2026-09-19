@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -40,8 +39,8 @@ def app() -> Any:
         }
 
     @server.tool(name="calendar.events.slow", description="Sleep past the broker timeout.")
-    def events_slow() -> dict[str, str]:
-        time.sleep(2)
+    async def events_slow() -> dict[str, str]:
+        await asyncio.sleep(2)
         return {"upstream": "approved-conformance", "status": "late"}
 
     @server.tool(name="calendar.events.oversize", description="Return an oversized result.")

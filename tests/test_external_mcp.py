@@ -1239,6 +1239,23 @@ class ExternalMcpHttpTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(ExternalMcpError, "exceeds the allowed size"):
             oversized_transport.health(ENDPOINT, credential=None)
 
+    def test_transport_classifies_timeout_nested_in_task_group(self) -> None:
+        class WrappedTimeoutTransport(HttpExternalMcpTransport):
+            async def _timed_request(
+                self,
+                endpoint: str,
+                credential: str | None,
+                operation: str,
+                value: Any,
+            ) -> Any:
+                del endpoint, credential, operation, value
+                wrapped = RuntimeError("read failed")
+                wrapped.__cause__ = TimeoutError()
+                raise ExceptionGroup("task group", [wrapped])
+
+        with self.assertRaisesRegex(ExternalMcpError, "external MCP transport timed out"):
+            WrappedTimeoutTransport().health(ENDPOINT, credential=None)
+
 
 class ExternalMcpPublicContractTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:

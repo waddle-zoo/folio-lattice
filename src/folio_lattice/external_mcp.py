@@ -306,12 +306,22 @@ class HttpExternalMcpTransport:
 
     @staticmethod
     def _contains(error: BaseException, target: type[BaseException]) -> bool:
-        if isinstance(error, target):
-            return True
-        if isinstance(error, BaseExceptionGroup):
-            return any(
-                HttpExternalMcpTransport._contains(item, target) for item in error.exceptions
-            )
+        pending = [error]
+        seen: set[int] = set()
+        while pending:
+            current = pending.pop()
+            identity = id(current)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if isinstance(current, target):
+                return True
+            if isinstance(current, BaseExceptionGroup):
+                pending.extend(current.exceptions)
+            if current.__cause__ is not None:
+                pending.append(current.__cause__)
+            if current.__context__ is not None:
+                pending.append(current.__context__)
         return False
 
     async def _timed_request(
