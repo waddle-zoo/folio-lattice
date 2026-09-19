@@ -115,6 +115,10 @@ class SupplyChainPolicyTests(unittest.TestCase):
             "expected exactly one non-empty attestation payload",
         ):
             self.assertIn(required, supply_chain)
+        signed_gate = supply_chain.split("\n      - name: Verify signed release inputs", 1)[1]
+        self.assertIn('REQUIRE_SIGNATURE: "1"', signed_gate)
+        self.assertIn("SIGNATURE_PATH: evidence/signature-verification.json", signed_gate)
+        self.assertIn("ATTESTATION_PATH: evidence/attestation-verification.json", signed_gate)
 
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertIn('org.opencontainers.image.revision="$VCS_REF"', dockerfile)

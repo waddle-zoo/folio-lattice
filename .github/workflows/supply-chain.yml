@@ -259,6 +259,7 @@ jobs:
 
       - name: Verify signed release inputs
         env:
+          REQUIRE_SIGNATURE: "1"
           SBOM_PATH: evidence/sbom.cdx.json
           LICENSE_PATH: evidence/licenses.json
           VULNERABILITY_PATH: evidence/vulnerability.sarif
