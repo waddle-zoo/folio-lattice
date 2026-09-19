@@ -3714,6 +3714,13 @@ class InspectionApp:
                 if bridge
                 else self.max_request_bytes
             )
+            declared_length = headers.get(b"content-length")
+            if declared_length is not None:
+                try:
+                    if int(declared_length) > maximum:
+                        raise OverflowError
+                except ValueError as exc:
+                    raise PublicMcpError("Content-Length must be an integer") from exc
             raw = await _body(receive, maximum)
             try:
                 payload = json.loads(raw)

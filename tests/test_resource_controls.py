@@ -36,6 +36,7 @@ async def invoke(
     origin: str | None = CONTROL_ORIGIN,
     client: tuple[str, int] = ("127.0.0.1", 1),
     fetch_dest: str | None = None,
+    content_length: int | None = None,
 ) -> tuple[int, dict[str, str], bytes]:
     sent: list[dict[str, Any]] = []
     request = {"type": "http.request", "body": body, "more_body": False}
@@ -53,6 +54,8 @@ async def invoke(
         headers.append((b"origin", origin.encode()))
     if fetch_dest is not None:
         headers.append((b"sec-fetch-dest", fetch_dest.encode()))
+    if content_length is not None:
+        headers.append((b"content-length", str(content_length).encode()))
     scope = {
         "type": "http",
         "asgi": {"version": "3.0"},
@@ -176,7 +179,8 @@ class HumanGatewayResourceTests(unittest.IsolatedAsyncioTestCase):
             invoke(
                 app,
                 "/api/mcp",
-                body=b"x" * 101,
+                body=b"{",
+                content_length=101,
             ),
             timeout=1,
         )
