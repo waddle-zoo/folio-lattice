@@ -16,7 +16,7 @@ dev = [
     "pytest>=9.1,<10",
     "pytest-cov>=7,<8",
     "ruff>=0.16,<0.17",
-    "websockets>=15,<16",
+    "websockets>=15,<18",
 ]
 
 [tool.setuptools.packages.find]
